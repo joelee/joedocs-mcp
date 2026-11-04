@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use toml::Value;
 
+use crate::auth::Grant;
 use crate::config::{CliValue, LogLevel};
 
 /// Command-line arguments.
@@ -32,6 +33,67 @@ pub enum Command {
         /// What to show.
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    /// Create the vault, state directory, database and history (safe to
+    /// rerun).
+    Init,
+    /// Register and list projects.
+    Project {
+        /// What to do.
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    /// Create, list, grant and revoke API keys.
+    Key {
+        /// What to do.
+        #[command(subcommand)]
+        command: KeyCommand,
+    },
+}
+
+/// `project` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum ProjectCommand {
+    /// Register a project.
+    Add {
+        /// Project name: lower-case letters, digits and '-' (the vault folder).
+        name: String,
+        /// Document ID prefix, e.g. JD for JD-42. Cannot be changed later.
+        #[arg(long)]
+        key: String,
+        /// Human-readable title (defaults to the name).
+        #[arg(long)]
+        title: Option<String>,
+    },
+    /// List projects.
+    List,
+}
+
+/// `key` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum KeyCommand {
+    /// Create a key and print its token once.
+    Create {
+        /// Key name, recorded as the author of every change made with it.
+        name: String,
+        /// Grant, e.g. `joedocs:write` or `other:read` (repeatable).
+        #[arg(long = "grant", value_name = "PROJECT:PERMISSION")]
+        grants: Vec<Grant>,
+    },
+    /// List keys and their grants (never the tokens).
+    List,
+    /// Add or change grants on a key.
+    Grant {
+        /// Key name.
+        name: String,
+        /// Grants, e.g. `joedocs:write`.
+        #[arg(required = true, value_name = "PROJECT:PERMISSION")]
+        grants: Vec<Grant>,
+    },
+    /// Revoke a key immediately.
+    Revoke {
+        /// Key name.
+        name: String,
     },
 }
 
@@ -93,6 +155,33 @@ mod tests {
         assert_eq!(values[0].key, "log.level");
         assert_eq!(values[0].flag, "--log-level");
         assert_eq!(values[0].value, Value::String("debug".into()));
+    }
+
+    #[test]
+    fn admin_commands_parse_grants() {
+        let cli = Cli::try_parse_from([
+            "app", "key", "create", "laptop", "--grant", "a:read", "--grant", "b:write",
+        ])
+        .unwrap();
+        assert!(matches!(
+            &cli.command,
+            Command::Key { command: KeyCommand::Create { name, grants } }
+                if name == "laptop" && grants.len() == 2
+        ));
+        let err = Cli::try_parse_from(["app", "key", "grant", "laptop", "a:admin"]).unwrap_err();
+        assert!(err.to_string().contains("read or write"), "{err}");
+        assert!(Cli::try_parse_from(["app", "key", "grant", "laptop"]).is_err());
+        let cli = Cli::try_parse_from(["app", "project", "add", "p", "--key", "P"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Command::Project {
+                command: ProjectCommand::Add {
+                    name: "p".into(),
+                    key: "P".into(),
+                    title: None
+                }
+            }
+        );
     }
 
     #[test]

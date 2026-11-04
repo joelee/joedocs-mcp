@@ -33,17 +33,34 @@
 │   │   ├── resolve.rs      File selection, layering, override parsing
 │   │   ├── show.rs         config show / config paths output
 │   │   └── validate.rs     Rule checks beyond types (slugs, membership, paths)
-│   ├── admin.rs            (skeleton) Admin CLI: init, project, key, archive, reindex
-│   ├── auth.rs             (skeleton) API keys and project grants
-│   ├── db/                 (skeleton) SQLite connection, migrations, queries
-│   ├── document/           Domain rules (slug so far); later types, front matter, file names
-│   ├── history/            (skeleton) History trait, git implementation
+│   ├── admin.rs            Reports for init, project and key commands
+│   ├── auth.rs             API key format, hashing, grants, RandomSource
+│   ├── clock.rs            Clock trait, SystemClock, FixedClock
+│   ├── db/
+│   │   ├── mod.rs          Connection setup, migrations, history head
+│   │   ├── projects.rs     Project queries
+│   │   ├── keys.rs         API key and grant queries
+│   │   ├── documents.rs    Document, listing and revision queries
+│   │   └── migrations/     Embedded .sql files (0001_core.sql)
+│   ├── document/
+│   │   ├── mod.rs          Slugs and re-exports
+│   │   ├── id.rs           Project keys and DocumentId (JD-42)
+│   │   ├── title.rs        Title rules and file stems
+│   │   └── front_matter.rs Key classes, parse, render, change rules
+│   ├── history/mod.rs      History trait and GitCli
 │   ├── mcp/                (skeleton) MCP tools, HTTP transport, auth middleware
 │   ├── search/             (skeleton) Query grammar, FTS5, filters
-│   └── store/              (skeleton) Document use cases, single writer
+│   └── store/
+│       ├── mod.rs          Store, Paths, Settings, Actor, Error, write lock
+│       ├── documents.rs    Document use cases and the write path
+│       ├── registry.rs     Projects and API keys
+│       ├── journal.rs      Undoable vault file writes
+│       └── tests.rs        Store unit tests (temp vault, real git)
 └── tests/
+    ├── admin.rs            init, project and key through the binary
     ├── cli.rs              End-to-end tests of the binary
-    └── config_example.rs   config.example.toml matches the schema
+    ├── config_example.rs   config.example.toml matches the schema
+    └── store.rs            A document's lifecycle across files, git and index
 ```
 
-Unit tests live next to the code in `#[cfg(test)] mod tests`. Integration tests in `tests/` run the compiled binary with a cleared environment in a temporary directory.
+Unit tests live next to the code in `#[cfg(test)] mod tests`. Integration tests in `tests/` run the compiled binary with a cleared environment in a temporary directory, or drive the library's store against a temporary vault. Tests that touch history need `git` on `PATH`.

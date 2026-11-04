@@ -1,6 +1,6 @@
 # JoeDocs: initial plan
 
-Status: **draft, first review done**. Nothing below is implemented yet except the module skeleton listed in [directory-structure.md](directory-structure.md). Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
+Status: **phases 0 and 1 done**. The configuration, the document store, git history, the SQLite index and the admin `init`/`project`/`key` commands are implemented; the MCP server (phase 2) and later phases are not. Choices made while building phase 1 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
 
 ## 1. Goal
 
@@ -293,7 +293,13 @@ CREATE VIRTUAL TABLE doc_fts USING fts5 (document_id UNINDEXED, title, body, tok
 CREATE TABLE audit_log (at TEXT NOT NULL, api_key_id TEXT, tool TEXT NOT NULL, document_id TEXT, outcome TEXT NOT NULL);
 ```
 
-Migrations will be plain `.sql` files embedded with `include_str!`, versioned with `PRAGMA user_version`. No migration crate is needed.
+Migrations are plain `.sql` files embedded with `include_str!`, versioned with `PRAGMA user_version`; no migration crate is needed. Phase 1 created [`src/db/migrations/0001_core.sql`](../src/db/migrations/0001_core.sql), which differs from this draft as follows:
+
+- Tables are `STRICT`.
+- `documents` gains `seq` (for ordering and per-project uniqueness) and `client` (the last writer's client, written to front matter). The unique path constraint is a partial index over live documents, compared without ASCII case, so archiving frees a path.
+- `revisions.commit_sha` is named `commit_id`.
+- A `meta` table holds `history_head`, the history commit the index reflects.
+- `doc_fields` and `doc_fts` arrive with search (phase 3), and `audit_log` with the MCP server (phase 2).
 
 ## 11. Write path (example: `update_document`)
 
@@ -342,8 +348,9 @@ Audited with `cargo deny` against the current `deny.toml` (RustSec DB of 2026-11
 | `tokio` | ≥ 1.54.1 | `rt-multi-thread`, `macros`, `net`, `signal`, `sync`, `time` | MIT | Runtime; 1.54.1 fixes RUSTSEC-2026-0384/0386 |
 | `axum` | 0.8.9 | no defaults; `http1`, `tokio`, `json` | MIT | HTTP routing, auth middleware, graceful shutdown (option A, chosen) |
 | `hyper` + `hyper-util` | 1.12.0 / 0.1.21 | `server`, `http1` / `tokio`, `server`, `service`, `server-graceful` | MIT | Instead of axum (option B, not chosen); bearer auth becomes a hand-written tower wrapper |
-| `rusqlite` | 0.41.1 | no defaults; `bundled` (SQLite 3.54.1) | MIT | `libsqlite3-sys` build.rs sets `-DSQLITE_ENABLE_FTS5`. Defaults stay off: `cache` pulls `foldhash` (Zlib) |
-| `serde_json` | 1.0.154 | default (+ `preserve_order` if used as the front matter model) | MIT OR Apache-2.0 | Tool arguments and results |
+| `rusqlite` | 0.41.1 | no defaults; `bundled` (SQLite 3.54.1), `fallible_uint` (no extra crates) | MIT | `libsqlite3-sys` build.rs sets `-DSQLITE_ENABLE_FTS5`. Defaults stay off: `cache` pulls `foldhash` (Zlib) |
+| `serde_json` | 1.0.154 | default | MIT OR Apache-2.0 | Tool arguments and results. `preserve_order` is not used: it now pulls `foldhash` (Zlib), which the allow-list does not include |
+| `indexmap` | 2.14.2 | no defaults; `std`, `serde` | Apache-2.0 OR MIT | Front matter in key order (added in phase 1 instead of `preserve_order`) |
 | `sha2` | 0.11.1 | no defaults | MIT OR Apache-2.0 | API key hashing |
 | `getrandom` | 0.4.3 | default | MIT OR Apache-2.0 | API key generation |
 | `jiff` | 0.2.39 | no defaults; `std` | Unlicense OR MIT | Timestamps (2 crates, against 5 for `time`) |
@@ -357,12 +364,12 @@ Audited with `cargo deny` against the current `deny.toml` (RustSec DB of 2026-11
 | --- | --- | --- |
 | Maintenance | Most active (about 12M recent downloads) | The YAML organisation's continuation of serde_yaml |
 | Safety | `#![forbid(unsafe_code)]` | Built on `libyaml-rs`: libyaml translated by c2rust, contains `unsafe`, quiet repo |
-| Key order | Through the target type (e.g. `serde_json::Value` with `preserve_order`) | Its own `Mapping` is an `IndexMap` |
+| Key order | Through the target type (JoeDocs uses `IndexMap<String, serde_json::Value>`) | Its own `Mapping` is an `IndexMap` |
 | Licence impact | Needs `BSD-3-Clause` (via `encoding_rs`) | None |
 
 **Options:**
 
-- **A (chosen 2026-11-04): allow `BSD-3-Clause`, and use axum and `serde-saphyr`.** That is one widely used permissive licence. It buys less hand-written HTTP code and a YAML parser with no unsafe code. Front matter is modelled as an ordered `serde_json::Map`, which is also what MCP tools send and receive.
+- **A (chosen 2026-11-04): allow `BSD-3-Clause`, and use axum and `serde-saphyr`.** That is one widely used permissive licence. It buys less hand-written HTTP code and a YAML parser with no unsafe code. Front matter is modelled as an `IndexMap<String, serde_json::Value>`, which keeps key order and is what MCP tools send and receive.
 - **B (not chosen): no `deny.toml` change, and use hyper and `yaml_serde`.** The cost is a hand-written bearer-auth tower wrapper and a YAML stack that contains unsafe code and has little visible maintenance.
 
 **Other findings:**
@@ -393,7 +400,7 @@ Time and randomness will be injected (`Clock` and key-generator traits) like `En
 | Phase | Deliverable | Done when |
 | --- | --- | --- |
 | 0. Foundations | Remove the `greet` example; add the `server`, `storage` and `documents` config; approve dependencies and `deny.toml` | `just ci` is green with the real config schema (done); dependencies approved (done) |
-| 1. Core store (no network) | `Clock` trait (moved from phase 0, so it lands with its first user and the chosen time crate); `document` types and front matter; `db` schema and migrations; `history` via git; `store` create, get, update, rename, front matter (set and remove), archive and list; the integrity guard; `admin init/project/key` | Integration tests drive the store against a temp vault and real git, including a file edited behind the store's back |
+| 1. Core store (no network) | `Clock` trait (moved from phase 0, so it lands with its first user and the chosen time crate); `document` types and front matter; `db` schema and migrations; `history` via git; `store` create, get, update, rename, front matter (set and remove), archive and list; the integrity guard; `admin init/project/key` | Integration tests drive the store against a temp vault and real git, including a file edited behind the store's back (done) |
 | 2. MCP over HTTP | `serve`, bearer auth, Origin check, the section 3 tools, structured errors | An rmcp client in tests round-trips every tool, and Claude Code connects for real |
 | 3. Search | FTS5 index, query grammar, filters, snippets, `reindex` | Search tests over a fixture vault |
 | 4. History and editing tools | `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, `list_projects`, `archive list/restore`, `check` | |
@@ -424,3 +431,19 @@ First review, 2026-11-04:
 Second review, 2026-11-04: Q2 was revised (one-way rsync) and Q5 was deferred, as recorded above. Phase 0 approved to start.
 
 Third review, 2026-11-04: option A in section 13 was chosen (axum and `serde-saphyr`; `BSD-3-Clause` allowed in `deny.toml`), which completes phase 0. The project is licensed Apache-2.0 (`LICENSE`).
+
+Phase 1 implementation choices, 2026-11-04 (open to revision):
+
+| Topic | Choice |
+| --- | --- |
+| Project keys | 1 to 10 upper-case letters and digits, starting with a letter. IDs are accepted case-insensitively (`jd-42`). |
+| API keys | `jd_<12 hex id>_<64 hex secret>`; key names are slugs. `key create` prints the token alone on its last line. |
+| Custom front matter | Key names are up to 64 ASCII letters, digits, `_` or `-`. Values are strings, numbers, booleans or lists of those; `null` (use `remove`) and nested objects are rejected. Removing a key that is not set is an error. |
+| `tags`, `aliases` | Lists of strings. A tag is letters, digits, `_`, `-` or `/`, not only digits; an alias follows the title rules. Rename appends the old title to `aliases` and drops the new one from it. Renaming to the current title is an error. |
+| `new_document` front matter | `status` there is rejected, because it has its own parameter. |
+| File names | Stems are cut to 100 bytes; a title with nothing left becomes `Untitled`. The `(JD-42)` suffix is also used when an unknown file already occupies the path, so foreign files are never overwritten. Archiving removes the emptied type and project folders. |
+| Writes | Files are written atomically (temporary file, then rename). A failure before the history commit restores the files and rolls the database back. |
+| Reads | If a document's file no longer matches the index, `get` logs a warning and serves the committed revision from git; writes still refuse with `integrity`. |
+| Index drift | Before each write the index's `history_head` is compared with git `HEAD`. On a mismatch writes are refused (`OutOfSync`) until `reindex` exists (phase 3); the replay of section 6.6 arrives with it. |
+| Git | Commits run with the user's and system's git config ignored and literal pathspecs. The author and committer are the key name with e-mail `<name>@joedocs.invalid`, and the time comes from the injected clock. The history repository is bare apart from the `--work-tree` passed on every call. |
+| Exit codes | `65` (`EX_DATAERR`) for requests the user can fix, `70` (`EX_SOFTWARE`) for database, history or vault faults, alongside the existing `78` and `74`. |

@@ -5,6 +5,8 @@ use std::process::ExitCode;
 
 use clap::Parser as _;
 
+use joedocs::auth::OsRandom;
+use joedocs::clock::SystemClock;
 use joedocs::env::ProcessEnv;
 use joedocs::fs::RealFs;
 use joedocs::{AppId, Cli, Context, EXIT_CONFIG, Error};
@@ -23,6 +25,8 @@ fn main() -> ExitCode {
         app: AppId::current(),
         env: &env,
         fs: &RealFs,
+        clock: std::sync::Arc::new(SystemClock),
+        random: &OsRandom,
     };
 
     let loaded = match joedocs::load(&cli, &ctx) {

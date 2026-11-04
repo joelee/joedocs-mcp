@@ -1,17 +1,23 @@
-//! Document domain types: project names, document types, document IDs,
-//! statuses and revisions; front matter parsing and serialisation with the
-//! reserved-key rules; title to file name sanitising.
+//! Document domain types: project names and keys, document IDs, titles and
+//! file names, and front matter with the reserved-key rules.
 //!
-//! Pure code with no I/O. Only the slug rule exists so far; see
-//! `docs/plan.md` sections 4 and 5 for the rest.
+//! Pure code with no I/O. See `docs/plan.md` sections 4 and 5.
+
+pub mod front_matter;
+mod id;
+mod title;
+
+pub use front_matter::{FrontMatterError, Header};
+pub use id::{DocumentId, InvalidId, MAX_KEY_LEN, is_project_key};
+pub use title::{MAX_STEM_BYTES, MAX_TITLE_CHARS, check_title, file_stem};
 
 /// Longest accepted slug, in bytes.
 pub const MAX_SLUG_LEN: usize = 64;
 
 /// Whether `value` is a slug: 1 to [`MAX_SLUG_LEN`] lower-case ASCII
 /// letters, digits and `-`, starting with a letter or digit. Project names,
-/// document types and statuses are slugs because they become directory names
-/// and front matter values.
+/// API key names, document types and statuses are slugs because they become
+/// directory names, git authors and front matter values.
 ///
 /// # Examples
 ///

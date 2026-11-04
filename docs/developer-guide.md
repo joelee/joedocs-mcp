@@ -2,13 +2,13 @@
 
 ## Setup
 
-Install `rustup`, `just`, `gitleaks` and `pre-commit` with your package manager (on macOS: `brew install rustup just gitleaks pre-commit`), then run:
+Install `rustup`, `just`, `git`, `gitleaks` and `pre-commit` with your package manager (on macOS: `brew install rustup just git gitleaks pre-commit`), then run:
 
 ```bash
 just setup
 ```
 
-This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Cargo.lock`, and installs the git hooks. `rustup` installs the toolchain pinned in `rust-toolchain.toml` on first use. Commit `Cargo.lock` if `just setup` changed it.
+This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Cargo.lock`, and installs the git hooks. The history tests run the real `git` from `PATH`, isolated from your own git configuration. `rustup` installs the toolchain pinned in `rust-toolchain.toml` on first use. Commit `Cargo.lock` if `just setup` changed it.
 
 ## Workflow
 

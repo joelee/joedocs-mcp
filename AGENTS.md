@@ -25,7 +25,7 @@ This Rust project targets Linux and macOS and was generated from the team's carg
 - The toolchain is pinned in `rust-toolchain.toml` (channel, plus `rustfmt`, `clippy`, `llvm-tools`). Do not change it unless the task is a toolchain bump.
 - Edition: Rust 2024. Resolver 3 is implied by the edition; do not set an older resolver.
 - `Cargo.lock` is committed. All CI commands use `--locked`.
-- Required external tools: `just`, `cargo-nextest`, `cargo-llvm-cov`, `cargo-deny`, `gitleaks`, `pre-commit`.
+- Required external tools: `just`, `cargo-nextest`, `cargo-llvm-cov`, `cargo-deny`, `gitleaks`, `pre-commit`, and `git` (the history store runs it, and so do the tests).
 - Optional per project: `cargo-hack` (if the crate has Cargo features, to check the feature powerset), `cargo-semver-checks` (for published libraries), `insta` (snapshot tests for CLI output).
 
 ### MSRV policy

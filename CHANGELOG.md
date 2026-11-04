@@ -10,6 +10,12 @@ All notable changes to this project are documented here. The format follows [Kee
 - JoeDocs design plan (`docs/plan.md`) and empty module skeleton for the server.
 - Configuration sections `[server]` (`bind`, `allowed_origins`, `max_document_bytes`), `[storage]` (`home`, `state_dir`) and `[documents]` (`types`, `statuses`, `default_type`, `default_status`), with rule checks that name the offending key and the layer that set it.
 - `LICENSE` file with the Apache License 2.0 text, matching the `license` field in `Cargo.toml`.
+- Document store (phase 1): create, get (latest or any revision), update with `expected_revision`, rename (old title kept in `aliases`), change front matter (set and remove, with reserved-key rules), archive and list, over Markdown files with YAML front matter.
+- Git history with one commit per revision and `JoeDocs-*` trailers, kept in a git directory outside the vault, and a SQLite index of projects, API keys, documents and revisions.
+- Integrity guard: a document whose file was changed outside JoeDocs is never overwritten; reads fall back to the committed revision.
+- Commands `init`, `project add|list` and `key create|list|grant|revoke`. API keys are `jd_<id>_<secret>` and only a hash of the secret is stored.
+- Exit codes `65` (invalid request) and `70` (store fault).
+- Dependencies: `rusqlite` (bundled SQLite), `serde-saphyr` (YAML), `serde_json`, `indexmap` (ordered front matter), `jiff` (timestamps), `sha2` and `getrandom` (API keys).
 
 ### Changed
 

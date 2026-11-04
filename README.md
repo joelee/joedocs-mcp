@@ -2,17 +2,21 @@
 
 JoeDocs: a central MCP server for multi-project documentation, stored as an Obsidian vault with git history and a SQLite index.
 
-**Status:** scaffold only. The design and phased plan are in [docs/plan.md](docs/plan.md); phase 0 (configuration schema) is done, and the binary has only the `config` commands so far.
+**Status:** phases 0 and 1 of [docs/plan.md](docs/plan.md) are done: configuration, the document store with git history and a SQLite index, and the admin commands. The MCP server (`serve`) is phase 2, so documents cannot yet be reached over the network.
 
 ## Quick start
 
 ```bash
 just setup          # once: cargo tools, Cargo.lock, git hooks
-cargo run -- config show
 just ci             # full quality gate, same as CI
+
+export JOEDOCS__STORAGE__HOME=/srv/joedocs/vault
+cargo run -- init
+cargo run -- project add joedocs --key JD --title JoeDocs
+cargo run -- key create laptop --grant joedocs:write   # prints the token once
 ```
 
-Requires Linux or macOS with `rustup`, `just`, `gitleaks` and `pre-commit`. The toolchain version is pinned in `rust-toolchain.toml` and installed automatically by `rustup`.
+Requires Linux or macOS with `rustup`, `just`, `git`, `gitleaks` and `pre-commit`. The toolchain version is pinned in `rust-toolchain.toml` and installed automatically by `rustup`.
 
 ## Usage
 
@@ -20,9 +24,18 @@ Requires Linux or macOS with `rustup`, `just`, `gitleaks` and `pre-commit`. The 
 joedocs [--config PATH] [--log-level LEVEL] [COMMAND]
 
 Commands:
-  config show    Show the effective configuration and where each value came from
-  config paths   List the config file search order
+  config show                         Show the effective configuration and where each value came from
+  config paths                        List the config file search order
+  init                                Create the vault, state directory, database and history
+  project add NAME --key KEY [--title TITLE]
+  project list
+  key create NAME [--grant PROJECT:PERMISSION]...
+  key list
+  key grant NAME PROJECT:PERMISSION...
+  key revoke NAME
 ```
+
+Exit codes: `0` success, `2` usage error, `65` invalid request (bad name, unknown project, not initialised), `70` database, history or vault fault, `74` output error, `78` configuration error.
 
 Configuration comes from CLI flags, `JOEDOCS__SECTION__KEY` environment variables, a TOML config file, and built-in defaults, in that order of precedence. See [docs/configuration.md](docs/configuration.md).
 
