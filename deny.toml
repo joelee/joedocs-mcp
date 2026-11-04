@@ -1,0 +1,41 @@
+# cargo-deny configuration: https://embarkstudios.github.io/cargo-deny/
+# The licence allow-list, bans and sources are decided per project. Changing
+# this file requires approval (see AGENTS.md).
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec advisories fail the build; yanked crates too.
+yanked = "deny"
+# Ignore an advisory only with a reason and a review date, e.g.
+# { id = "RUSTSEC-0000-0000", reason = "not reachable from our code; review 2027-01" }
+ignore = []
+
+[licenses]
+# Starter allow-list: permissive licences used by the template's
+# dependencies. Review for each project and its organisation's policy.
+allow = [
+    "Apache-2.0",
+    # Approved 2026-11-04 (docs/plan.md section 13, option A): needed by
+    # matchit (via axum) and encoding_rs (via serde-saphyr).
+    "BSD-3-Clause",
+    "MIT",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+
+# This crate's own licence is not checked while it is unpublished.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,18 @@
+/target
+
+# Secrets: only the example file is committed.
+.env
+.env.*
+!.env.example
+
+# Coverage output
+*.profraw
+*.profdata
+lcov.info
+/coverage
+
+# OS and editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

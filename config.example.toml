@@ -1,0 +1,34 @@
+# Example configuration listing every key with its default value.
+# Copy to one of the lookup locations (see docs/configuration.md) and edit.
+# This file is checked by tests/config_example.rs: keep it in sync with the
+# schema in src/config/mod.rs.
+
+[log]
+# Minimum level written to stderr: error, warn, info, debug or trace.
+level = "info"
+
+[server]
+# Address and port the MCP server listens on. Keep it on localhost and put a
+# TLS reverse proxy (or Tailscale) in front for remote clients.
+bind = "127.0.0.1:8750"
+# Extra Origin header values to accept, e.g. ["https://docs.example.net"].
+allowed_origins = []
+# Largest accepted document (front matter and body), in bytes.
+max_document_bytes = 1048576
+
+[storage]
+# Content directory ($JOEDOCS_HOME): <project>/<type>/*.md. Absolute path.
+# Empty means not set; commands that need it fail until it is.
+home = ""
+# Database and history directory. Absolute path. Empty means
+# $XDG_DATA_HOME/joedocs, or ~/.local/share/joedocs.
+state_dir = ""
+
+[documents]
+# Document types; each is a folder under every project. "all" is reserved.
+types = ["home", "plans", "ideas", "issues", "reviews", "research", "specs", "notes"]
+# Allowed values of the status front matter key.
+statuses = ["draft", "review", "approved", "rejected", "superseded", "done"]
+# Type and status used when a new document names none.
+default_type = "home"
+default_status = "draft"

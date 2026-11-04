@@ -1,0 +1,217 @@
+//! Rules a typed configuration must satisfy beyond its types.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use super::Config;
+use crate::document::is_slug;
+
+/// One broken rule, naming the dotted key at fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Violation {
+    /// Dotted key, e.g. `documents.default_type`.
+    pub key: &'static str,
+    /// What is wrong with its value.
+    pub message: String,
+}
+
+impl Violation {
+    fn new(key: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            key,
+            message: message.into(),
+        }
+    }
+}
+
+impl Config {
+    /// Checks the rules that types alone cannot express. The first broken
+    /// rule is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Violation`] for the first key that breaks a rule.
+    pub fn validate(&self) -> Result<(), Violation> {
+        for origin in &self.server.allowed_origins {
+            if !is_origin(origin) {
+                return Err(Violation::new(
+                    "server.allowed_origins",
+                    format!("\"{origin}\" is not an origin like https://docs.example.net"),
+                ));
+            }
+        }
+        if self.server.max_document_bytes == 0 {
+            return Err(Violation::new(
+                "server.max_document_bytes",
+                "must be greater than 0",
+            ));
+        }
+        absolute_or_empty("storage.home", &self.storage.home)?;
+        absolute_or_empty("storage.state_dir", &self.storage.state_dir)?;
+
+        let docs = &self.documents;
+        slug_list("documents.types", &docs.types)?;
+        if docs.types.iter().any(|t| t == "all") {
+            return Err(Violation::new(
+                "documents.types",
+                "\"all\" is reserved for listing every type",
+            ));
+        }
+        slug_list("documents.statuses", &docs.statuses)?;
+        member(
+            "documents.default_type",
+            &docs.default_type,
+            "documents.types",
+            &docs.types,
+        )?;
+        member(
+            "documents.default_status",
+            &docs.default_status,
+            "documents.statuses",
+            &docs.statuses,
+        )?;
+        Ok(())
+    }
+}
+
+/// `scheme://host[:port]` with an http(s) scheme and no path.
+fn is_origin(value: &str) -> bool {
+    let rest = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"));
+    rest.is_some_and(|host| !host.is_empty() && !host.contains(['/', '?', '#', ' ']))
+}
+
+fn absolute_or_empty(key: &'static str, path: &Path) -> Result<(), Violation> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        Ok(())
+    } else {
+        Err(Violation::new(
+            key,
+            format!("\"{}\" must be an absolute path", path.display()),
+        ))
+    }
+}
+
+fn slug_list(key: &'static str, values: &[String]) -> Result<(), Violation> {
+    if values.is_empty() {
+        return Err(Violation::new(key, "must not be empty"));
+    }
+    let mut seen = BTreeSet::new();
+    for value in values {
+        if !is_slug(value) {
+            return Err(Violation::new(
+                key,
+                format!(
+                    "\"{value}\" must be lower-case letters, digits and '-', starting with a letter or digit"
+                ),
+            ));
+        }
+        if !seen.insert(value) {
+            return Err(Violation::new(key, format!("\"{value}\" is listed twice")));
+        }
+    }
+    Ok(())
+}
+
+fn member(
+    key: &'static str,
+    value: &str,
+    list_key: &str,
+    list: &[String],
+) -> Result<(), Violation> {
+    if list.iter().any(|item| item == value) {
+        Ok(())
+    } else {
+        Err(Violation::new(
+            key,
+            format!("\"{value}\" is not one of {list_key}"),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn violation(edit: impl FnOnce(&mut Config)) -> Violation {
+        let mut config = Config::default();
+        edit(&mut config);
+        config.validate().unwrap_err()
+    }
+
+    #[test]
+    fn origins_must_be_scheme_and_host_only() {
+        let mut config = Config::default();
+        config.server.allowed_origins = vec![
+            "https://docs.example.net".into(),
+            "http://localhost:8750".into(),
+        ];
+        assert_eq!(config.validate(), Ok(()));
+
+        for bad in [
+            "docs.example.net",
+            "https://",
+            "https://a/b",
+            "ftp://a",
+            "https://a b",
+        ] {
+            let v = violation(|c| c.server.allowed_origins = vec![bad.into()]);
+            assert_eq!(v.key, "server.allowed_origins", "{bad}");
+        }
+    }
+
+    #[test]
+    fn max_document_bytes_must_be_positive() {
+        let v = violation(|c| c.server.max_document_bytes = 0);
+        assert_eq!(
+            v,
+            Violation::new("server.max_document_bytes", "must be greater than 0")
+        );
+    }
+
+    #[test]
+    fn storage_paths_must_be_absolute_when_set() {
+        let v = violation(|c| c.storage.home = PathBuf::from("docs"));
+        assert_eq!(v.key, "storage.home");
+        assert_eq!(v.message, "\"docs\" must be an absolute path");
+        let v = violation(|c| c.storage.state_dir = PathBuf::from("./state"));
+        assert_eq!(v.key, "storage.state_dir");
+
+        let mut config = Config::default();
+        config.storage.home = PathBuf::from("/srv/joedocs");
+        config.storage.state_dir = PathBuf::from("/var/lib/joedocs");
+        assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn types_and_statuses_must_be_unique_non_empty_slugs() {
+        let v = violation(|c| c.documents.types.clear());
+        assert_eq!(v, Violation::new("documents.types", "must not be empty"));
+        let v = violation(|c| c.documents.types.push("Plans".into()));
+        assert_eq!(v.key, "documents.types");
+        assert!(v.message.contains("\"Plans\""), "{}", v.message);
+        let v = violation(|c| c.documents.types.push("home".into()));
+        assert_eq!(v.message, "\"home\" is listed twice");
+        let v = violation(|c| c.documents.types.push("all".into()));
+        assert!(v.message.contains("reserved"), "{}", v.message);
+        let v = violation(|c| c.documents.statuses = vec!["in review".into()]);
+        assert_eq!(v.key, "documents.statuses");
+    }
+
+    #[test]
+    fn defaults_must_be_listed() {
+        let v = violation(|c| c.documents.default_type = "memo".into());
+        assert_eq!(
+            v,
+            Violation::new(
+                "documents.default_type",
+                "\"memo\" is not one of documents.types"
+            )
+        );
+        let v = violation(|c| c.documents.default_status = "open".into());
+        assert_eq!(v.key, "documents.default_status");
+    }
+}

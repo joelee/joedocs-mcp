@@ -1,0 +1,11 @@
+# gitleaks configuration: the built-in rules plus project allowlists.
+# Changing this file requires approval (see AGENTS.md).
+
+[extend]
+useDefault = true
+
+# Allowlist a known false positive only with a reason, for example:
+#
+# [[allowlists]]
+# description = "Test fixture with a fake key"
+# paths = ['''tests/fixtures/fake_key\.pem''']
