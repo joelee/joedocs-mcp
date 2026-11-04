@@ -128,7 +128,7 @@ async fn the_key_can_write_its_project() {
     let t = target().unwrap();
     let client = t.client().await.unwrap();
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 15);
     let projects = ok(&client, "list_projects", json!({})).await.unwrap();
     let project = projects["projects"]
         .as_array()
@@ -139,6 +139,39 @@ async fn the_key_can_write_its_project() {
         .unwrap_or(Value::Null);
     assert_eq!(project["permission"], "write", "{projects}");
     client.cancel().await.unwrap();
+}
+
+/// Edits the lifecycle document, checks the diff, and finds it by search.
+async fn edit_diff_and_search(
+    client: &Client,
+    project: &str,
+    id: &str,
+    title: &str,
+) -> TestResult<()> {
+    let edited = ok(
+        client,
+        "edit_document",
+        json!({"document_id": id, "edits": [{"old": "# Notes v2", "new": "# Notes v3"}]}),
+    )
+    .await?;
+    assert_eq!(edited["revision"], 5);
+    let diff = ok(
+        client,
+        "diff_document",
+        json!({"document_id": id, "from": 4, "context": 0}),
+    )
+    .await?;
+    let text = diff["diff"].as_str().ok_or("no diff")?;
+    assert!(text.contains("-# Notes v2\n+# Notes v3\n"), "{diff}");
+
+    let found = ok(
+        client,
+        "search_documents",
+        json!({"project": project, "query": format!("\"{title}\""), "filters": {"owner": "itest"}}),
+    )
+    .await?;
+    assert_eq!(found["items"][0]["id"], id, "{found}");
+    Ok(())
 }
 
 #[tokio::test]
@@ -218,14 +251,9 @@ async fn a_document_lifecycle_works() {
         "{listed}"
     );
 
-    let found = ok(
-        &client,
-        "search_documents",
-        json!({"project": t.project, "query": format!("\"{title}\""), "filters": {"owner": "itest"}}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(found["items"][0]["id"], id.as_str(), "{found}");
+    edit_diff_and_search(&client, &t.project, &id, &title)
+        .await
+        .unwrap();
 
     let first = ok(
         &client,

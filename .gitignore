@@ -5,6 +5,9 @@
 .env.*
 !.env.example
 
+# Local Docker Compose data (vault, database, history)
+/.local/
+
 # Coverage output
 *.profraw
 *.profdata

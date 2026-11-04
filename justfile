@@ -73,12 +73,25 @@ msrv:
 # Full gate, identical locally and in CI
 ci: fetch fmt-check lint coverage doctest doc deny secrets build
 
+# Start the local Docker Compose stack as you, with its data in .local/data (or $JOEDOCS_DATA)
+docker-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    data="${JOEDOCS_DATA:-./.local/data}"
+    mkdir -p "$data/vault" "$data/state"
+    export JOEDOCS_UID="$(id -u)" JOEDOCS_GID="$(id -g)"
+    docker compose up --detach --build --wait
+    echo "JoeDocs MCP endpoint: http://127.0.0.1:${JOEDOCS_PORT:-8750}/mcp (data in $data)"
+
 # Build a throwaway Docker Compose stack, run the deployment tests against it before and after a restart, then remove it
 docker-test port="18750":
     #!/usr/bin/env bash
     set -euo pipefail
-    export COMPOSE_PROJECT_NAME=joedocs-test JOEDOCS_PORT={{port}}
-    trap 'docker compose down --volumes --remove-orphans >/dev/null 2>&1' EXIT
+    data="$(mktemp -d)"
+    mkdir -p "$data/vault" "$data/state"
+    export COMPOSE_PROJECT_NAME=joedocs-test JOEDOCS_PORT={{port}} JOEDOCS_DATA="$data" \
+        JOEDOCS_UID="$(id -u)" JOEDOCS_GID="$(id -g)"
+    trap 'docker compose down --remove-orphans >/dev/null 2>&1; rm -rf "$data"' EXIT
     docker compose up --detach --build --wait
     docker compose exec -T joedocs joedocs project add itest --key IT --title "Integration tests"
     token="$(docker compose exec -T joedocs joedocs key create itest --grant itest:write | tail -n 1)"

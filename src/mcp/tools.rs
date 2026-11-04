@@ -21,8 +21,8 @@ use super::{Caller, Shared, ToolError};
 use crate::auth::Permission;
 use crate::document::front_matter::Fields;
 use crate::store::{
-    self, Actor, Changed, DocumentInfo, ListRequest, NewDocument, RevisionInfo, SearchHit,
-    SearchRequest, Sort, Store, Update,
+    self, Actor, Changed, DocumentInfo, ListRequest, NewDocument, Replacement, RevisionInfo,
+    SearchHit, SearchRequest, Sort, Store, Update,
 };
 
 /// A tool's result. Tool signatures spell this out, because rmcp's macro
@@ -43,6 +43,11 @@ fenced code blocks are kept as written.
 (filters); use project \"*\" to search every project you can read. Read a hit with get_document.
 - update_document needs the revision you last read (expected_revision). On a `conflict` error, \
 get_document again, merge, and retry.
+- For small changes prefer edit_document (exact old/new replacements) or append_to_document \
+over resending the whole body with update_document.
+- get_document_history lists revisions; diff_document shows what changed between two, e.g. \
+since the revision you last read. restore_document_version brings back an earlier revision as \
+a new one.
 - Front matter: id, title, project, type, revision, created*, updated*, client are set by the \
 server; status, tags and aliases are validated; other keys are yours. Values are strings, \
 numbers, booleans or lists of those.";
@@ -108,6 +113,12 @@ fn one() -> u64 {
 fn default_search_limit() -> u64 {
     20
 }
+fn default_history_limit() -> u64 {
+    50
+}
+fn three() -> u32 {
+    3
+}
 
 /// Arguments of `list_documents`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -161,6 +172,110 @@ pub struct SearchDocumentsParams {
     /// 1-based position of the first result; use `next_start` from the previous page.
     #[serde(default = "one")]
     pub start: u64,
+}
+
+/// Arguments of `get_document_history`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Most revisions to return (1 to 1000), newest first.
+    #[serde(default = "default_history_limit")]
+    pub limit: u64,
+    /// 1-based position of the first revision, newest first; use `next_start` from the previous page.
+    #[serde(default = "one")]
+    pub start: u64,
+}
+
+/// Arguments of `diff_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiffParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// The older revision, e.g. the one you last read.
+    pub from: u64,
+    /// The newer revision; omit for the latest.
+    #[serde(default)]
+    pub to: Option<u64>,
+    /// Unchanged lines to show around each change (0 to 100).
+    #[serde(default = "three")]
+    pub context: u32,
+}
+
+/// Arguments of `restore_document_version`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// The revision to bring back.
+    pub version: u64,
+    /// If given, the restore is refused unless this is the current revision.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    /// One-line description of the change, for the history.
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Arguments of `move_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MoveParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// The new document type (folder), from `list_projects`.
+    #[serde(rename = "type")]
+    pub doc_type: String,
+    /// If given, the move is refused unless this is the current revision.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+}
+
+/// One exact replacement.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditParam {
+    /// Text to replace. It must occur exactly once in the body, matching
+    /// exactly, including whitespace and line breaks.
+    pub old: String,
+    /// The replacement; empty to delete.
+    pub new: String,
+}
+
+/// Arguments of `edit_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditDocumentParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Replacements in the body (not the front matter), applied in order;
+    /// 1 to 64. If any fails, nothing changes.
+    pub edits: Vec<EditParam>,
+    /// If given, the edit is refused unless this is the current revision.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    /// One-line description of the change, for the history.
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Arguments of `append_to_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AppendParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Markdown to add at the end of the body, after a blank line.
+    pub content: String,
+    /// If given, the append is refused unless this is the current revision.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    /// One-line description of the change, for the history.
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 /// Arguments of `get_document`.
@@ -345,7 +460,8 @@ impl From<DocumentInfo> for DocumentOut {
 pub struct RevisionOut {
     /// Revision number.
     pub revision: u64,
-    /// What happened: `create`, `update`, `rename`, `front_matter` or `archive`.
+    /// What happened: `create`, `update`, `edit`, `append`, `rename`, `move`,
+    /// `front_matter`, `restore`, `archive` or `unarchive`.
     pub action: String,
     /// Key that made it.
     pub author: String,
@@ -379,6 +495,35 @@ pub struct GetDocumentOut {
     pub document: DocumentOut,
     /// The revision returned.
     pub revision: RevisionOut,
+}
+
+/// Result of `get_document_history`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct HistoryOut {
+    /// Current metadata.
+    pub document: DocumentOut,
+    /// One page of revisions, newest first.
+    pub revisions: Vec<RevisionOut>,
+    /// How many revisions there are.
+    pub total: u64,
+    /// `start` for the next page, if any.
+    pub next_start: Option<u64>,
+}
+
+/// Result of `diff_document`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct DiffOut {
+    /// Document ID.
+    pub document_id: String,
+    /// The older revision.
+    pub from: u64,
+    /// The newer revision.
+    pub to: u64,
+    /// Whether anything differs.
+    pub changed: bool,
+    /// Unified diff of the whole file, front matter included; empty when
+    /// nothing differs.
+    pub diff: String,
 }
 
 /// Result of `list_documents`.
@@ -706,6 +851,51 @@ impl JoeDocsServer {
     }
 
     #[tool(
+        description = "List a document's revisions, newest first: revision number, action, author key, client, summary and time.",
+        annotations(read_only_hint = true)
+    )]
+    async fn get_document_history(
+        &self,
+        Parameters(params): Parameters<HistoryParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<HistoryOut>, CallToolResult> {
+        self.read(&ctx, move |store, caller| {
+            require_document(store, caller, &params.document_id, Permission::Read)?;
+            let page = store.history(&params.document_id, params.start, params.limit)?;
+            Ok(HistoryOut {
+                document: page.document.into(),
+                revisions: page.revisions.into_iter().map(RevisionOut::from).collect(),
+                total: page.total,
+                next_start: page.next_start,
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Show what changed in a document between two revisions as a unified diff of the whole file (front matter included). Omit `to` to compare with the latest, e.g. to see what changed since you last read it.",
+        annotations(read_only_hint = true)
+    )]
+    async fn diff_document(
+        &self,
+        Parameters(params): Parameters<DiffParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<DiffOut>, CallToolResult> {
+        self.read(&ctx, move |store, caller| {
+            require_document(store, caller, &params.document_id, Permission::Read)?;
+            let diff = store.diff(&params.document_id, params.from, params.to, params.context)?;
+            Ok(DiffOut {
+                document_id: diff.id,
+                from: diff.from,
+                to: diff.to,
+                changed: !diff.diff.is_empty(),
+                diff: diff.diff,
+            })
+        })
+        .await
+    }
+
+    #[tool(
         description = "Create a document at revision 1. Give the Markdown body in content; the server writes the front matter. Returns the new document ID.",
         annotations(
             read_only_hint = false,
@@ -831,6 +1021,145 @@ impl JoeDocsServer {
                     &params.set.unwrap_or_default(),
                     &params.remove.unwrap_or_default(),
                     params.expected_revision,
+                )?;
+                Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Change a document's body with exact replacements, without resending it: each `old` must occur exactly once in the body (not the front matter). Edits apply in order; if any fails, nothing changes and the error names it.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn edit_document(
+        &self,
+        Parameters(params): Parameters<EditDocumentParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "edit_document",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let edits: Vec<Replacement> = params
+                    .edits
+                    .into_iter()
+                    .map(|e| Replacement {
+                        old: e.old,
+                        new: e.new,
+                    })
+                    .collect();
+                let changed = store.edit(
+                    actor,
+                    &params.document_id,
+                    &edits,
+                    params.expected_revision,
+                    params.summary.as_deref(),
+                )?;
+                Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Add Markdown to the end of a document's body, after a blank line, e.g. a comment on an issue or a log entry.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    async fn append_to_document(
+        &self,
+        Parameters(params): Parameters<AppendParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "append_to_document",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let changed = store.append(
+                    actor,
+                    &params.document_id,
+                    &params.content,
+                    params.expected_revision,
+                    params.summary.as_deref(),
+                )?;
+                Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Change a document's type (its folder), e.g. from ideas to plans. The ID, title and content stay the same.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    async fn move_document(
+        &self,
+        Parameters(params): Parameters<MoveParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "move_document",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let changed = store.move_document(
+                    actor,
+                    &params.document_id,
+                    &params.doc_type,
+                    params.expected_revision,
+                )?;
+                Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Bring back an earlier revision's body, status, tags and custom front matter as a new revision. The title, type and aliases stay as they are, and the history keeps every revision.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn restore_document_version(
+        &self,
+        Parameters(params): Parameters<RestoreParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "restore_document_version",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let changed = store.restore_version(
+                    actor,
+                    &params.document_id,
+                    params.version,
+                    params.expected_revision,
+                    params.summary.as_deref(),
                 )?;
                 Ok(changed.into())
             },

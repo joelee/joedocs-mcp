@@ -5,7 +5,7 @@
 ├── AGENTS.md               Instructions for coding agents
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code
 ├── Dockerfile              Two-stage image: build, then debian-slim with git
-├── compose.yaml            Local server with vault and state volumes
+├── compose.yaml            Local server; data bind-mounted from .local/data (git-ignored)
 ├── .dockerignore           Sends only Cargo.toml, Cargo.lock and src/ to the build
 ├── CHANGELOG.md            Keep a Changelog
 ├── Cargo.toml              Manifest, MSRV, lint levels
@@ -36,7 +36,7 @@
 │   │   ├── resolve.rs      File selection, layering, override parsing
 │   │   ├── show.rs         config show / config paths output
 │   │   └── validate.rs     Rule checks beyond types (slugs, membership, paths)
-│   ├── admin.rs            Reports for init, project, key and reindex commands
+│   ├── admin.rs            Reports for init, project, key, reindex, archive and check
 │   ├── auth.rs             API key format, hashing, grants, RandomSource
 │   ├── clock.rs            Clock trait, SystemClock, FixedClock
 │   ├── db/
@@ -51,7 +51,7 @@
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
 │   │   ├── title.rs        Title rules and file stems
 │   │   └── front_matter.rs Key classes, parse, render, change rules
-│   ├── history/mod.rs      History trait and GitCli (commit, show, log)
+│   ├── history/mod.rs      History trait and GitCli (commit, show, log, diff)
 │   ├── mcp/
 │   │   ├── mod.rs          Router, ServerOptions, serve, run, shutdown signal
 │   │   ├── auth.rs         Bearer key middleware and Caller
@@ -64,17 +64,22 @@
 │   └── store/
 │       ├── mod.rs          Store, Paths, Settings, Actor, Error, write lock
 │       ├── documents.rs    Document use cases and the write path
+│       ├── editing.rs      Move, exact edits, append, restore a revision
+│       ├── revisions.rs    History pages and diffs
+│       ├── archive.rs      Archive list and restore
+│       ├── check.rs        Drift report for joedocs check
 │       ├── registry.rs     Projects and API keys
 │       ├── search.rs       Store::search
 │       ├── reindex.rs      Rebuilding the index from the history
 │       ├── journal.rs      Undoable vault file writes
 │       └── tests.rs        Store unit tests (temp vault, real git)
 └── tests/
-    ├── admin.rs            init, project, key and reindex through the binary
+    ├── admin.rs            Admin commands through the binary
     ├── common/mod.rs       Shared MCP client and raw HTTP helpers
     ├── deployment.rs       Ignored black-box suite for a running server (just docker-test)
     ├── cli.rs              End-to-end tests of the binary
     ├── config_example.rs   config.example.toml matches the schema
+    ├── history.rs          History, diff, restore, move, edit, append, archive, check
     ├── mcp.rs              Every tool over HTTP, grants, Host/Origin, serve
     ├── reindex.rs          Rebuilds: identical, after a lost write or database
     ├── search.rs           Search over a fixture vault

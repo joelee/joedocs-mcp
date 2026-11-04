@@ -1,5 +1,5 @@
-//! Administrator commands run on the server host: `init`, `project`, `key`
-//! and `reindex`. Phase 4 adds `archive` and `check`.
+//! Administrator commands run on the server host: `init`, `project`, `key`,
+//! `reindex`, `archive` and `check`.
 //!
 //! Each command calls the [`Store`] and writes a plain-text report.
 
@@ -9,9 +9,15 @@ use secrecy::ExposeSecret as _;
 
 use crate::Error;
 use crate::auth::{Grant, RandomSource};
-use crate::cli::{KeyCommand, ProjectCommand};
+use crate::cli::{ArchiveCommand, KeyCommand, ProjectCommand};
 use crate::db::KeyRow;
-use crate::store::{InitOutcome, Paths, Reindexed, Store};
+use crate::store::{Actor, CheckReport, InitOutcome, Paths, Reindexed, Store};
+
+/// The author recorded for changes made with admin commands.
+pub const ADMIN_AUTHOR: &str = "admin";
+
+/// The client recorded for changes made with admin commands.
+pub const ADMIN_CLIENT: &str = "joedocs-cli";
 
 /// Reports what `joedocs init` did.
 ///
@@ -80,6 +86,110 @@ pub fn report_reindex(report: &Reindexed, out: &mut dyn Write) -> Result<(), Err
         for (id, path) in &report.drifted {
             writeln!(out, "  {id}  {path}")?;
         }
+    }
+    Ok(())
+}
+
+/// Runs an `archive` subcommand.
+///
+/// # Errors
+///
+/// Returns store errors and [`Error::Output`].
+pub fn archive(
+    store: &mut Store,
+    command: &ArchiveCommand,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    match command {
+        ArchiveCommand::List { project } => {
+            let archived = store.archived(project.as_deref())?;
+            if archived.is_empty() {
+                writeln!(out, "No archived documents.")?;
+                return Ok(());
+            }
+            let rows: Vec<Vec<String>> = archived
+                .into_iter()
+                .map(|a| {
+                    vec![
+                        a.document.id,
+                        a.document.project,
+                        a.document.doc_type,
+                        a.document.title,
+                        a.archived_at,
+                        a.archived_by,
+                        a.reason,
+                    ]
+                })
+                .collect();
+            write_table(
+                out,
+                &["ID", "PROJECT", "TYPE", "TITLE", "ARCHIVED", "BY", "REASON"],
+                &rows,
+            )?;
+        }
+        ArchiveCommand::Restore { document_id } => {
+            let actor = Actor::new(ADMIN_AUTHOR, ADMIN_CLIENT);
+            let restored = store.unarchive(&actor, document_id)?;
+            writeln!(
+                out,
+                "Restored {} at revision {}: {}",
+                restored.id, restored.revision, restored.path
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Runs `joedocs check` and writes its report.
+///
+/// # Errors
+///
+/// Returns [`Error::Problems`] when it finds any, store errors, and
+/// [`Error::Output`].
+pub fn check(store: &Store, out: &mut dyn Write) -> Result<(), Error> {
+    let report = store.check()?;
+    report_check(&report, store.paths(), out)?;
+    match report.problems() {
+        0 => Ok(()),
+        count => Err(Error::Problems(count)),
+    }
+}
+
+fn report_check(report: &CheckReport, paths: &Paths, out: &mut dyn Write) -> Result<(), Error> {
+    if report.index_behind {
+        writeln!(
+            out,
+            "The index is behind the history: run `joedocs reindex` (serve also rebuilds it on start)."
+        )?;
+    }
+    if !report.drifted.is_empty() {
+        writeln!(
+            out,
+            "Vault files that are missing or differ from the history (writes to them are refused):"
+        )?;
+        for (id, path) in &report.drifted {
+            writeln!(out, "  {id}  {path}")?;
+        }
+        writeln!(
+            out,
+            "  To discard the change, restore the committed file:\n    \
+             git --git-dir '{}' --work-tree '{}' restore --source=HEAD -- '<path>'\n  \
+             To keep it, copy the file aside, restore it, then send the content with update_document.",
+            paths.git_dir().display(),
+            paths.home.display()
+        )?;
+    }
+    if !report.unknown_files.is_empty() {
+        writeln!(
+            out,
+            "Vault files that belong to no document (move them out of the vault):"
+        )?;
+        for path in &report.unknown_files {
+            writeln!(out, "  {path}")?;
+        }
+    }
+    if report.problems() == 0 {
+        writeln!(out, "No problems found.")?;
     }
     Ok(())
 }

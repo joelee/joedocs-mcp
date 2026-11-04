@@ -17,6 +17,7 @@ This Rust project targets Linux and macOS and was generated from the team's carg
 | Coverage (fails under 80% lines) | `just coverage` |
 | Secret scan of staged changes | `just secrets-staged` |
 | Check the MSRV builds (library profile) | `just msrv` |
+| Start the local Docker Compose stack (data in `.local/data`) | `just docker-up` |
 | Deployment tests against Docker Compose (needs Docker) | `just docker-test` |
 
 `just ci` runs, in order: `fetch` → `fmt-check` → `lint` → `coverage` → `doctest` → `doc` → `deny` → `secrets` → `build`. Never weaken a gate (threshold, lint level, `--locked`) to make it pass.

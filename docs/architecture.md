@@ -16,7 +16,7 @@ flowchart LR
     exec --> show[config::render_show / render_paths]
     exec -->|serve| mcp[mcp: axum + rmcp]
     mcp -->|bearer key| store
-    exec -->|init, project, key, reindex| admin[admin: reports]
+    exec -->|init, project, key, reindex, archive, check| admin[admin: reports]
     admin --> store[store::Store]
     store --> db[(db: SQLite)]
     store --> history[history::GitCli]
@@ -39,12 +39,12 @@ flowchart LR
 | `app_id` | Application name and the environment prefix derived from it. |
 | `clock` | `Clock` trait, `SystemClock`, `FixedClock` (tests), RFC 3339 formatting. |
 | `document` | Pure domain rules: slugs, project keys, `DocumentId`, titles and file stems, front matter classes, parsing, serialising and change rules. |
-| `store` | Document use cases (create, get, update, rename, change front matter, archive, list, search), projects and API keys, the write lock, the integrity guard, the undo journal for vault files, the file → history → database ordering, and `reindex`. |
+| `store` | Document use cases (create, get, update, edit, append, rename, move, change front matter, restore a revision, archive and unarchive, list, search, history, diff), projects and API keys, the write lock, the integrity guard, the undo journal for vault files, the file → history → database ordering, `reindex` and `check`. |
 | `db` | SQLite connection setup, embedded migrations, and queries as free functions over a connection, including the search index (`doc_fields`, `doc_fts`). |
-| `history` | `History` trait and `GitCli`, with the git directory outside the vault: commit, show and log. |
+| `history` | `History` trait and `GitCli`, with the git directory outside the vault: commit, show, log and diff. |
 | `auth` | API key generation, parsing, hashing and verification; `Permission` and `Grant`; `RandomSource`. |
-| `admin` | Text reports for `init`, `project`, `key` and `reindex`. |
-| `mcp` | `joedocs serve`: the axum app (`/mcp` behind bearer authentication, `/health`), rmcp's Streamable HTTP service with `Host`/`Origin` checks, the nine tools with JSON schemas, grant checks, audit logging, and error mapping. |
+| `admin` | Text reports for `init`, `project`, `key`, `reindex`, `archive` and `check`. |
+| `mcp` | `joedocs serve`: the axum app (`/mcp` behind bearer authentication, `/health`), rmcp's Streamable HTTP service with `Host`/`Origin` checks, the fifteen tools with JSON schemas, grant checks, audit logging, and error mapping. |
 | `search` | Pure: the forgiving query grammar and its FTS5 translation (`query.rs`), and front matter filters, their SQL translation and value flattening (`filter.rs`). |
 
 ## Request path
@@ -54,6 +54,8 @@ An MCP request first passes the bearer-key middleware, which looks the token up 
 ## Write path
 
 Every document change takes the write lock (a file lock in the state directory), checks the index's recorded history head against git `HEAD`, and then runs inside one database transaction: validate, check the file on disk still has the hash the index recorded, write the vault file (undoably), commit to git, record the revision and new head, commit the transaction. Any failure before the git commit undoes the file writes and rolls the transaction back. The same transaction replaces the document's search entries: every front matter value in `doc_fields`, and the title, aliases and body in the FTS5 table `doc_fts`. See [plan.md section 11](plan.md#11-write-path-example-update_document).
+
+Every change other than create and archive goes through one path (`Store::revise`): it reads the verified file, lets the operation change a draft of the title, type, status, other front matter and body, then writes the result, moving the file if the title or type changed. Rename, move, update, edit, append, front matter changes and restore differ only in how they change the draft.
 
 ## Search
 
@@ -84,6 +86,6 @@ flowchart TD
 - **In-house config resolution.** Precedence, override parsing and provenance are explicit and testable without mutating the process environment, which is `unsafe` in Rust 2024.
 - **Every config key has a default.** Defaults define each key's type, which is how environment override strings are parsed.
 - **Secrets are separate from config.** They never appear in `config.toml`, overrides or `config show` output.
-- **Exit codes follow `sysexits.h`.** `65` for requests the user can fix, `69` when the server cannot listen, `70` for store faults, `74` for output errors, `78` for configuration errors.
+- **Exit codes follow `sysexits.h`.** `1` when `check` finds problems, `65` for requests the user can fix, `69` when the server cannot listen, `70` for store faults, `74` for output errors, `78` for configuration errors.
 - **Git through its command line.** No new crates, and administrators can inspect the history with normal git. The user's git configuration is ignored so hooks and signing cannot interfere.
 - **The history is the source of truth.** The database index can always be rebuilt from it; only projects and API keys need a database backup.

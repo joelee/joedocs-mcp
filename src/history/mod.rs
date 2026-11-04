@@ -124,6 +124,20 @@ pub trait History: Send {
     ///
     /// Returns an error when the history cannot be read.
     fn log(&self) -> Result<Vec<Logged>, HistoryError>;
+
+    /// The unified diff hunks (from the first `@@` line on) between two
+    /// files, each given as `(commit, path)`, with `context` lines around
+    /// each change. Empty when they are the same.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HistoryError::Missing`] when either file does not exist.
+    fn diff(
+        &self,
+        from: (&str, &str),
+        to: (&str, &str),
+        context: u32,
+    ) -> Result<String, HistoryError>;
 }
 
 /// [`History`] over the `git` command line, with the git directory outside
@@ -347,6 +361,58 @@ impl History for GitCli {
             None,
         )?;
         parse_log(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    fn diff(
+        &self,
+        from: (&str, &str),
+        to: (&str, &str),
+        context: u32,
+    ) -> Result<String, HistoryError> {
+        let objects = [from, to].map(|(id, path)| format!("{id}:{path}"));
+        for object in &objects {
+            if !self
+                .run(&["cat-file", "-e", object], None)?
+                .status
+                .success()
+            {
+                return Err(HistoryError::Missing(object.clone()));
+            }
+        }
+        let unified = format!("--unified={context}");
+        let output = self.checked(
+            &[
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                &unified,
+                &objects[0],
+                &objects[1],
+            ],
+            None,
+        )?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let Some(start) = text.find("\n@@") else {
+            return Ok(String::new());
+        };
+        // Drop git's "function context" after each hunk header: for
+        // Markdown it is just the nearest line starting with a letter.
+        let mut hunks = String::new();
+        for line in text[start + 1..].split_inclusive('\n') {
+            match line
+                .strip_prefix("@@ ")
+                .and_then(|rest| rest.split_once(" @@"))
+            {
+                Some((ranges, _)) => {
+                    hunks.push_str("@@ ");
+                    hunks.push_str(ranges);
+                    hunks.push_str(" @@\n");
+                }
+                None => hunks.push_str(line),
+            }
+        }
+        Ok(hunks)
     }
 }
 
@@ -612,6 +678,40 @@ mod tests {
         let ok = parse_log("\x1eabc\0laptop\x001\0s\0K: v\x1fbad\0\0\nM\0a.md\0").unwrap();
         assert_eq!(ok[0].trailers, [("K".to_owned(), "v".to_owned())]);
         assert_eq!(ok[0].changes, [(Change::Modified, "a.md".to_owned())]);
+    }
+
+    #[test]
+    fn diffs_compare_files_across_commits_and_paths() {
+        let repo = repo();
+        fs::write(repo.home.join("a b.md"), "one\ntwo\nthree\n").unwrap();
+        let first = repo.git.commit(&commit(&["a b.md"], "add")).unwrap();
+        fs::remove_file(repo.home.join("a b.md")).unwrap();
+        fs::write(repo.home.join("c.md"), "one\n2\nthree\n").unwrap();
+        let second = repo
+            .git
+            .commit(&commit(&["a b.md", "c.md"], "move"))
+            .unwrap();
+
+        let diff = repo
+            .git
+            .diff((&first, "a b.md"), (&second, "c.md"), 0)
+            .unwrap();
+        assert_eq!(diff, "@@ -2 +2 @@\n-two\n+2\n");
+        let wide = repo
+            .git
+            .diff((&first, "a b.md"), (&second, "c.md"), 3)
+            .unwrap();
+        assert_eq!(wide, "@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n");
+        assert_eq!(
+            repo.git
+                .diff((&first, "a b.md"), (&first, "a b.md"), 3)
+                .unwrap(),
+            ""
+        );
+        assert!(matches!(
+            repo.git.diff((&first, "c.md"), (&second, "c.md"), 3),
+            Err(HistoryError::Missing(object)) if object.ends_with(":c.md")
+        ));
     }
 
     #[test]

@@ -17,11 +17,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - Exit codes `65` (invalid request) and `70` (store fault).
 - MCP server (phase 2): `joedocs serve` speaks MCP Streamable HTTP on `/mcp` with bearer API keys, `Host` and `Origin` checks, and `GET /health`. Tools: `list_projects`, `list_documents`, `get_document`, `new_document`, `update_document`, `rename_document`, `change_document_front_matter`, `archive_document`, with JSON schemas, per-project grant checks and structured errors.
 - Audit log of every change and refused change made through MCP.
-- `Dockerfile` and `compose.yaml` to run `joedocs serve` locally, with the vault and state in volumes.
+- `Dockerfile` and `compose.yaml` to run `joedocs serve` locally, with the vault, database and history bind-mounted from `.local/data` (git-ignored) and the server running as your user; `just docker-up` starts it.
 - Deployment tests (`tests/deployment.rs`) for a running server, and `just docker-test`, which runs them against a throwaway Compose stack before and after a restart.
 - Config key `server.allowed_hosts`; exit code `69` when the server cannot listen.
 - Search (phase 3): the `search_documents` MCP tool finds documents by text (words, `"phrases"`, `-exclude`, `prefix*`, `OR`, ignoring word endings and accents) and by front matter filters (`eq`, `ne`, `in`, `contains`, `gt`, `gte`, `lt`, `lte`, `exists`) in one project or every readable one, with relevance scores and snippets. Built on SQLite FTS5; the index is kept current by every write.
 - `joedocs reindex` rebuilds the document index and search from the git history, recreates projects missing from the database, and lists vault files that differ from the history. `joedocs serve` runs it on start when the index is behind the history or from an older build.
+- History and editing tools (phase 4): `get_document_history`, `diff_document` (unified diff between any two revisions), `restore_document_version`, `move_document` (change type), `edit_document` (exact replacements in the body) and `append_to_document`.
+- Commands `archive list [--project]` and `archive restore <id>`, and `check`, which reports vault files that differ from the history or belong to no document, and exits `1` when it finds problems.
 - Dependencies: `rmcp`, `axum`, `tokio`, `tokio-util` (MCP server).
 - Dependencies: `rusqlite` (bundled SQLite), `serde-saphyr` (YAML), `serde_json`, `indexmap` (ordered front matter), `jiff` (timestamps), `sha2` and `getrandom` (API keys).
 

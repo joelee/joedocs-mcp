@@ -1,6 +1,6 @@
 //! End-to-end tests of the admin commands (`init`, `project`, `key`,
-//! `reindex`) run
-//! through the compiled binary against a temporary vault and real git.
+//! `reindex`, `archive`, `check`) run through the compiled binary against a
+//! temporary vault and real git.
 
 use std::path::{Path, PathBuf};
 
@@ -222,5 +222,103 @@ fn reindex_reports_a_history_it_cannot_replay() {
         .code(70)
         .stderr(predicate::str::contains(
             "cannot rebuild the index from history commit",
+        ));
+}
+
+#[test]
+fn archived_documents_are_listed_and_restored_and_check_reports_drift() {
+    use joedocs::store::{Actor, NewDocument};
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    cmd(root.path())
+        .args(["archive", "list"])
+        .assert()
+        .success()
+        .stdout("No archived documents.\n");
+    cmd(root.path())
+        .arg("check")
+        .assert()
+        .success()
+        .stdout("No problems found.\n");
+
+    let mut store = library_store(root.path()).unwrap();
+    let actor = Actor::new("laptop", "test");
+    store
+        .create(
+            &actor,
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Old plan".into(),
+                content: "x".into(),
+                ..NewDocument::default()
+            },
+        )
+        .unwrap();
+    store.archive(&actor, "JD-1", "superseded").unwrap();
+    drop(store);
+
+    cmd(root.path())
+        .args(["archive", "list", "--project", "joedocs"])
+        .assert()
+        .success()
+        .stdout(
+            "ID    PROJECT  TYPE  TITLE     ARCHIVED              BY      REASON\n\
+             JD-1  joedocs  home  Old plan  2026-10-26T07:33:20Z  laptop  superseded\n",
+        );
+    cmd(root.path())
+        .args(["archive", "restore", "jd-1"])
+        .assert()
+        .success()
+        .stdout("Restored JD-1 at revision 3: joedocs/home/Old plan.md\n");
+    cmd(root.path())
+        .args(["archive", "restore", "JD-1"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("JD-1 is not archived"));
+    let log = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(root.path().join("state/history.git"))
+        .args(["log", "-1", "--format=%an|%s"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&log.stdout),
+        "admin|Unarchive JD-1\n"
+    );
+
+    std::fs::write(
+        vault(root.path()).join("joedocs/home/Old plan.md"),
+        "edited",
+    )
+    .unwrap();
+    std::fs::write(vault(root.path()).join("stray.md"), "x").unwrap();
+    cmd(root.path())
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "Vault files that are missing or differ from the history (writes to them are refused):\n  \
+             JD-1  joedocs/home/Old plan.md\n",
+        ))
+        .stdout(predicate::str::contains("restore --source=HEAD -- '<path>'"))
+        .stdout(predicate::str::contains(
+            "Vault files that belong to no document (move them out of the vault):\n  stray.md\n",
+        ))
+        .stderr("error: check found 2 problems\n");
+
+    let conn = joedocs::db::open(&root.path().join("state/joedocs.db")).unwrap();
+    conn.execute("DELETE FROM meta WHERE key = 'index_format'", [])
+        .unwrap();
+    drop(conn);
+    cmd(root.path())
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::starts_with(
+            "The index is behind the history",
         ));
 }

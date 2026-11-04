@@ -304,7 +304,10 @@ fn recreate_project(
 }
 
 /// Live documents whose vault file is missing or not the indexed content.
-fn drifted(conn: &Connection, home: &std::path::Path) -> Result<Vec<(String, String)>, Error> {
+pub(super) fn drifted(
+    conn: &Connection,
+    home: &std::path::Path,
+) -> Result<Vec<(String, String)>, Error> {
     let mut drifted = Vec::new();
     for row in db::live_documents(conn)? {
         let same =

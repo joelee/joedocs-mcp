@@ -201,23 +201,35 @@ pub struct Listing {
     pub next_start: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Action {
+/// What a revision did, recorded as `JoeDocs-Action`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Action {
     Create,
     Update,
     Rename,
     FrontMatter,
     Archive,
+    Move,
+    Edit,
+    Append,
+    Restore,
+    Unarchive,
 }
 
 impl Action {
-    fn name(self) -> &'static str {
+    /// The trailer value; `archive` is the only one without content.
+    pub(super) fn name(self) -> &'static str {
         match self {
             Self::Create => "create",
             Self::Update => "update",
             Self::Rename => "rename",
             Self::FrontMatter => "front_matter",
-            Self::Archive => "archive",
+            Self::Archive => ARCHIVE,
+            Self::Move => "move",
+            Self::Edit => "edit",
+            Self::Append => "append",
+            Self::Restore => "restore",
+            Self::Unarchive => "unarchive",
         }
     }
 
@@ -228,16 +240,26 @@ impl Action {
             Self::Rename => "Rename",
             Self::FrontMatter => "Change front matter of",
             Self::Archive => "Archive",
+            Self::Move => "Move",
+            Self::Edit => "Edit",
+            Self::Append => "Append to",
+            Self::Restore => "Restore",
+            Self::Unarchive => "Unarchive",
         }
     }
 }
 
+/// The action of a revision that archived its document (and so has no
+/// content).
+pub(super) const ARCHIVE: &str = "archive";
+
 /// The editable parts of a document during a change.
-struct Draft {
-    title: String,
-    status: String,
-    extra: Fields,
-    body: String,
+pub(super) struct Draft {
+    pub(super) title: String,
+    pub(super) doc_type: String,
+    pub(super) status: String,
+    pub(super) extra: Fields,
+    pub(super) body: String,
 }
 
 impl Store {
@@ -499,15 +521,7 @@ impl Store {
         let id = parse_id(id)?;
         let row = live_row(&self.conn, &id)?;
         let wanted = version.unwrap_or(row.revision);
-        if wanted == 0 || wanted > row.revision {
-            return Err(Error::invalid(
-                "version",
-                format!("{} has revisions 1 to {}", row.id, row.revision),
-            ));
-        }
-        let revision = db::get_revision(&self.conn, &row.id, wanted)?.ok_or_else(|| {
-            Error::invalid("version", format!("revision {wanted} is not indexed"))
-        })?;
+        let revision = revision_with_content(&self.conn, &row, wanted, "version")?;
 
         let current = (wanted == row.revision)
             .then(|| read_verified(&self.paths.home, &row))
@@ -527,7 +541,12 @@ impl Store {
         })
     }
 
-    fn committed_text(&self, row: &DocumentRow, revision: &RevisionRow) -> Result<String, Error> {
+    /// The file as committed at `revision`.
+    pub(super) fn committed_text(
+        &self,
+        row: &DocumentRow,
+        revision: &RevisionRow,
+    ) -> Result<String, Error> {
         let bytes = self.history.show(&revision.commit_id, &revision.path)?;
         String::from_utf8(bytes).map_err(|_| integrity(row))
     }
@@ -579,8 +598,9 @@ impl Store {
     }
 
     /// Writes a new revision of an existing document: `edit` changes the
-    /// draft, then the file is rewritten (and moved if the title changed).
-    fn revise(
+    /// draft, then the file is rewritten (and moved if the title or type
+    /// changed).
+    pub(super) fn revise(
         &mut self,
         actor: &Actor,
         id: &str,
@@ -615,6 +635,7 @@ impl Store {
         let parsed = front_matter::parse(&text).map_err(|_| integrity(&row))?;
         let mut draft = Draft {
             title: row.title.clone(),
+            doc_type: row.doc_type.clone(),
             status: row.status.clone(),
             extra: front_matter::extras(&parsed.fields),
             body: parsed.body.to_owned(),
@@ -623,7 +644,8 @@ impl Store {
 
         let old_path = row.path.clone();
         let old_title = std::mem::replace(&mut row.title, draft.title);
-        if row.title != old_title {
+        let old_type = std::mem::replace(&mut row.doc_type, draft.doc_type);
+        if row.title != old_title || row.doc_type != old_type {
             row.path = choose_path(
                 &tx,
                 &paths.home,
@@ -650,6 +672,7 @@ impl Store {
         )?;
         let summary = summary.unwrap_or_else(|| match action {
             Action::Rename => format!("{old_title} → {}", row.title),
+            Action::Move => format!("{old_type} → {}", row.doc_type),
             _ => String::new(),
         });
         let changed = Changed {
@@ -667,6 +690,9 @@ impl Store {
             paths: &[&old_path, &row.path],
         };
         finish(tx, history.as_ref(), journal, &commit)?;
+        if old_path != row.path {
+            remove_empty_parent(&paths.home.join(&old_path));
+        }
         Ok(changed)
     }
 }
@@ -675,7 +701,7 @@ impl Store {
 /// indexes the row (inserting it when there is no `old_path`), and writes
 /// the file (moving it from `old_path` if given and different). The returned journal undoes the file changes if it is
 /// dropped before [`finish`] completes it.
-fn write_revision(
+pub(super) fn write_revision(
     conn: &Connection,
     home: &Path,
     settings: &Settings,
@@ -723,20 +749,20 @@ fn write_revision(
 }
 
 /// One revision about to be committed.
-struct Change<'a> {
-    row: &'a DocumentRow,
+pub(super) struct Change<'a> {
+    pub(super) row: &'a DocumentRow,
     /// Commit time: the revision's `updated` time.
-    at: jiff::Timestamp,
-    action: Action,
-    summary: &'a str,
-    actor: &'a Actor,
-    paths: &'a [&'a str],
+    pub(super) at: jiff::Timestamp,
+    pub(super) action: Action,
+    pub(super) summary: &'a str,
+    pub(super) actor: &'a Actor,
+    pub(super) paths: &'a [&'a str],
 }
 
 /// Commits the change to history, then records the revision and the new
 /// history head and commits the transaction. If the history commit fails,
 /// the vault files are restored and the transaction rolls back.
-fn finish(
+pub(super) fn finish(
     tx: Transaction<'_>,
     history: &dyn History,
     journal: Journal,
@@ -806,7 +832,7 @@ fn header(row: &DocumentRow) -> Header {
     }
 }
 
-fn apply_front_matter(
+pub(super) fn apply_front_matter(
     draft: &mut Draft,
     set: &Fields,
     remove: &[String],
@@ -822,18 +848,46 @@ fn apply_front_matter(
     .map_err(|e| Error::invalid("front_matter", e.0))
 }
 
-fn parse_id(id: &str) -> Result<DocumentId, Error> {
+pub(super) fn parse_id(id: &str) -> Result<DocumentId, Error> {
     id.parse()
         .map_err(|e: crate::document::InvalidId| Error::invalid("document_id", e.to_string()))
 }
 
-fn live_row(conn: &Connection, id: &DocumentId) -> Result<DocumentRow, Error> {
+pub(super) fn live_row(conn: &Connection, id: &DocumentId) -> Result<DocumentRow, Error> {
     let id = id.to_string();
     let row = db::get_document(conn, &id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
     if row.archived_at.is_some() {
         return Err(Error::Archived(id));
     }
     Ok(row)
+}
+
+/// Revision `wanted` of `row`, which must exist and have content.
+pub(super) fn revision_with_content(
+    conn: &Connection,
+    row: &DocumentRow,
+    wanted: u64,
+    field: &'static str,
+) -> Result<RevisionRow, Error> {
+    if wanted == 0 || wanted > row.revision {
+        return Err(Error::invalid(
+            field,
+            format!("{} has revisions 1 to {}", row.id, row.revision),
+        ));
+    }
+    let revision = db::get_revision(conn, &row.id, wanted)?
+        .ok_or_else(|| Error::invalid(field, format!("revision {wanted} is not indexed")))?;
+    if revision.action == ARCHIVE {
+        return Err(Error::invalid(
+            field,
+            format!(
+                "revision {wanted} archived {} and has no content; use revision {}",
+                row.id,
+                wanted - 1
+            ),
+        ));
+    }
+    Ok(revision)
 }
 
 pub(super) fn integrity(row: &DocumentRow) -> Error {
@@ -844,7 +898,7 @@ pub(super) fn integrity(row: &DocumentRow) -> Error {
 }
 
 /// Reads the document's file and checks it is the one the index recorded.
-fn read_verified(home: &Path, row: &DocumentRow) -> Result<String, Error> {
+pub(super) fn read_verified(home: &Path, row: &DocumentRow) -> Result<String, Error> {
     let file = home.join(&row.path);
     let bytes = match fs::read(&file) {
         Ok(bytes) => bytes,
@@ -859,7 +913,7 @@ fn read_verified(home: &Path, row: &DocumentRow) -> Result<String, Error> {
 
 /// Picks `<project>/<type>/<stem>.md`, or `<stem> (<id>).md` when that is
 /// taken by another document or by a file the index does not know.
-fn choose_path(
+pub(super) fn choose_path(
     conn: &Connection,
     home: &Path,
     project: &str,
@@ -900,7 +954,7 @@ pub(super) fn check_member(
 }
 
 /// One line of at most [`MAX_SUMMARY_CHARS`], or `None` when empty.
-fn tidy_line(text: Option<&str>) -> Option<String> {
+pub(super) fn tidy_line(text: Option<&str>) -> Option<String> {
     let line: String = text?
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -916,7 +970,7 @@ pub(super) fn sha256(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Removes the type directory, then the project directory, if empty.
-fn remove_empty_parent(file: &Path) {
+pub(super) fn remove_empty_parent(file: &Path) {
     let mut dir = file.parent();
     for _ in 0..2 {
         let Some(path) = dir else { return };

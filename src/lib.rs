@@ -26,7 +26,7 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 pub use app_id::AppId;
-pub use cli::{Cli, Command, ConfigCommand};
+pub use cli::{ArchiveCommand, Cli, Command, ConfigCommand};
 pub use config::{Config, ConfigError, Resolved};
 
 use crate::auth::RandomSource;
@@ -40,6 +40,8 @@ use crate::store::{Paths, Settings, Store};
 /// Exit code for invalid requests, such as a bad name or an unknown project
 /// (`EX_DATAERR` from `sysexits.h`).
 pub const EXIT_DATA: u8 = 65;
+/// Exit code when `check` finds problems.
+pub const EXIT_PROBLEMS: u8 = 1;
 /// Exit code for internal failures: database, history or vault errors
 /// (`EX_SOFTWARE` from `sysexits.h`).
 pub const EXIT_SOFTWARE: u8 = 70;
@@ -63,6 +65,9 @@ pub enum Error {
     /// A store operation failed.
     #[error(transparent)]
     Store(#[from] store::Error),
+    /// `check` found problems (already reported on standard output).
+    #[error("check found {0} problems")]
+    Problems(usize),
     /// The MCP server could not start or failed while running.
     #[error("cannot serve on {addr}: {source}")]
     Serve {
@@ -83,6 +88,7 @@ impl Error {
             Self::Store(error) if error.is_user_error() => EXIT_DATA,
             Self::Store(_) => EXIT_SOFTWARE,
             Self::Serve { .. } => EXIT_UNAVAILABLE,
+            Self::Problems(_) => EXIT_PROBLEMS,
         }
     }
 }
@@ -175,6 +181,10 @@ pub fn execute(
             mcp::run(store, loaded.config(), out)?;
         }
         Command::Reindex => admin::reindex(&mut open_store(loaded, ctx)?, out)?,
+        Command::Archive { command } => {
+            admin::archive(&mut open_store(loaded, ctx)?, command, out)?;
+        }
+        Command::Check => admin::check(&open_store(loaded, ctx)?, out)?,
         Command::Project { command } => {
             admin::project(&mut open_store(loaded, ctx)?, command, out)?;
         }

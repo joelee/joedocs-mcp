@@ -43,6 +43,15 @@ pub enum Command {
     /// Rebuild the document index and search from the history (safe to
     /// rerun; projects and API keys are kept).
     Reindex,
+    /// List and restore archived documents.
+    Archive {
+        /// What to do.
+        #[command(subcommand)]
+        command: ArchiveCommand,
+    },
+    /// Report drift between the vault, the history and the index (changes
+    /// nothing; exits 1 if it finds problems).
+    Check,
     /// Register and list projects.
     Project {
         /// What to do.
@@ -73,6 +82,22 @@ pub enum ProjectCommand {
     },
     /// List projects.
     List,
+}
+
+/// `archive` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum ArchiveCommand {
+    /// List archived documents, most recently archived first.
+    List {
+        /// Only this project.
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Bring an archived document back as it was before it was archived.
+    Restore {
+        /// Document ID, e.g. JD-42.
+        document_id: String,
+    },
 }
 
 /// `key` subcommands.

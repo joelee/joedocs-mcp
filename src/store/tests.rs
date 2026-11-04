@@ -43,6 +43,14 @@ impl History for Flaky {
     fn log(&self) -> Result<Vec<Logged>, HistoryError> {
         self.git.log()
     }
+    fn diff(
+        &self,
+        from: (&str, &str),
+        to: (&str, &str),
+        context: u32,
+    ) -> Result<String, HistoryError> {
+        self.git.diff(from, to, context)
+    }
 }
 
 struct Fixture {

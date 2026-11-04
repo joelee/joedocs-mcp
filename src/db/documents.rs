@@ -314,6 +314,59 @@ pub fn insert_revision(conn: &Connection, rev: &RevisionRow) -> rusqlite::Result
     Ok(())
 }
 
+const REVISION_COLUMNS: &str = "document_id, revision, commit_id, path, action, author, client,
+    summary, created_at";
+
+fn revision_from_row(row: &Row<'_>) -> rusqlite::Result<RevisionRow> {
+    Ok(RevisionRow {
+        document_id: row.get(0)?,
+        revision: row.get(1)?,
+        commit_id: row.get(2)?,
+        path: row.get(3)?,
+        action: row.get(4)?,
+        author: row.get(5)?,
+        client: row.get(6)?,
+        summary: row.get(7)?,
+        created_at: row.get(8)?,
+    })
+}
+
+/// A page of a document's revisions, newest first.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn list_revisions(
+    conn: &Connection,
+    document_id: &str,
+    offset: u64,
+    limit: u64,
+) -> rusqlite::Result<Vec<RevisionRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {REVISION_COLUMNS} FROM revisions WHERE document_id = ?1
+         ORDER BY revision DESC LIMIT ?2 OFFSET ?3"
+    ))?;
+    stmt.query_map(params![document_id, limit, offset], revision_from_row)?
+        .collect()
+}
+
+/// Archived documents, most recently archived first, optionally of one
+/// project.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn archived_documents(
+    conn: &Connection,
+    project_id: Option<i64>,
+) -> rusqlite::Result<Vec<DocumentRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE d.archived_at IS NOT NULL AND (?1 IS NULL OR d.project_id = ?1)
+         ORDER BY d.archived_at DESC, d.project_id, d.seq DESC"
+    ))?;
+    stmt.query_map([project_id], from_row)?.collect()
+}
+
 /// One revision of a document.
 ///
 /// # Errors
@@ -325,23 +378,11 @@ pub fn get_revision(
     revision: u64,
 ) -> rusqlite::Result<Option<RevisionRow>> {
     conn.query_row(
-        "SELECT document_id, revision, commit_id, path, action, author, client, summary,
-            created_at
-         FROM revisions WHERE document_id = ?1 AND revision = ?2",
+        &format!(
+            "SELECT {REVISION_COLUMNS} FROM revisions WHERE document_id = ?1 AND revision = ?2"
+        ),
         params![document_id, revision],
-        |row| {
-            Ok(RevisionRow {
-                document_id: row.get(0)?,
-                revision: row.get(1)?,
-                commit_id: row.get(2)?,
-                path: row.get(3)?,
-                action: row.get(4)?,
-                author: row.get(5)?,
-                client: row.get(6)?,
-                summary: row.get(7)?,
-                created_at: row.get(8)?,
-            })
-        },
+        revision_from_row,
     )
     .optional()
 }

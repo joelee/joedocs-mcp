@@ -129,13 +129,19 @@ async fn tools_are_listed_with_schemas_and_hints() {
     assert_eq!(
         names,
         [
+            "append_to_document",
             "archive_document",
             "change_document_front_matter",
+            "diff_document",
+            "edit_document",
             "get_document",
+            "get_document_history",
             "list_documents",
             "list_projects",
+            "move_document",
             "new_document",
             "rename_document",
+            "restore_document_version",
             "search_documents",
             "update_document",
         ]
@@ -148,7 +154,9 @@ async fn tools_are_listed_with_schemas_and_hints() {
         );
         let read_only = tool.annotations.as_ref().and_then(|a| a.read_only_hint);
         let expected = [
+            "diff_document",
             "get_document",
+            "get_document_history",
             "list_documents",
             "list_projects",
             "search_documents",
@@ -355,6 +363,146 @@ async fn search_respects_grants(writer: &Client, reader: &Client) -> TestResult<
         (Some("invalid_argument"), Some("query"))
     );
     Ok(())
+}
+
+/// JD-1's history and diff after an edit, an append and a move, as seen by
+/// a key that may only read (and so may not append).
+async fn check_history_and_diff(reader: &Client) -> TestResult<()> {
+    let history = ok(
+        reader,
+        "get_document_history",
+        json!({"document_id": "JD-1", "limit": 2}),
+    )
+    .await?;
+    assert_eq!(history["total"], 4);
+    assert_eq!(history["next_start"], 3);
+    assert_eq!(history["revisions"][0]["action"], "move");
+    assert_eq!(history["revisions"][1]["action"], "append");
+
+    let diff = ok(
+        reader,
+        "diff_document",
+        json!({"document_id": "JD-1", "from": 1, "context": 0}),
+    )
+    .await?;
+    assert_eq!(
+        (diff["to"].as_u64(), diff["changed"].as_bool()),
+        (Some(4), Some(true))
+    );
+    let text = diff["diff"].as_str().ok_or("no diff")?;
+    assert!(text.contains("-It fails.\n+It fails on start.\n"), "{text}");
+    assert!(text.contains("-type: ideas\n+type: issues\n"), "{text}");
+    let denied = error(
+        reader,
+        "append_to_document",
+        json!({"document_id": "JD-1", "content": "x"}),
+    )
+    .await?;
+    assert_eq!(denied["code"], "permission_denied");
+    Ok(())
+}
+
+#[tokio::test]
+async fn history_and_editing_tools_round_trip() {
+    let server = start().await.unwrap();
+    let client = server.client(&server.writer).await.unwrap();
+    let reader = server.client(&server.reader).await.unwrap();
+    ok(
+        &client,
+        "new_document",
+        json!({"project": "joedocs", "type": "ideas", "title": "Issue", "content": "# Bug\n\nIt fails.\n"}),
+    )
+    .await
+    .unwrap();
+
+    let edited = ok(
+        &client,
+        "edit_document",
+        json!({"document_id": "JD-1", "edits": [{"old": "It fails.", "new": "It fails on start."}],
+               "expected_revision": 1, "summary": "more detail"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(edited["revision"], 2);
+    let missing = error(
+        &client,
+        "edit_document",
+        json!({"document_id": "JD-1", "edits": [{"old": "nope", "new": "x"}]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (missing["code"].as_str(), missing["field"].as_str()),
+        (Some("invalid_argument"), Some("edits"))
+    );
+
+    ok(
+        &client,
+        "append_to_document",
+        json!({"document_id": "JD-1", "content": "## Comment\n\nReproduced."}),
+    )
+    .await
+    .unwrap();
+    let moved = ok(
+        &client,
+        "move_document",
+        json!({"document_id": "JD-1", "type": "issues"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(moved["path"], "joedocs/issues/Issue.md");
+
+    check_history_and_diff(&reader).await.unwrap();
+
+    let restored = ok(
+        &client,
+        "restore_document_version",
+        json!({"document_id": "JD-1", "version": 1, "expected_revision": 4}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(restored["revision"], 5);
+    assert_eq!(restored["front_matter"]["type"], "issues");
+    let same = ok(
+        &reader,
+        "diff_document",
+        json!({"document_id": "JD-1", "from": 1}),
+    )
+    .await
+    .unwrap();
+    assert!(
+        same["diff"]
+            .as_str()
+            .unwrap()
+            .contains("-revision: 1\n+revision: 5\n")
+    );
+    assert!(!same["diff"].as_str().unwrap().contains("fails"), "{same}");
+
+    let hidden = error(
+        &client,
+        "get_document_history",
+        json!({"document_id": "SC-1"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(hidden["code"], "not_found");
+
+    client.cancel().await.unwrap();
+    reader.cancel().await.unwrap();
+    let audit = audit_log(&server.root).unwrap();
+    assert_eq!(
+        audit,
+        [
+            "new_document JD-1 ok",
+            "edit_document JD-1 ok",
+            "edit_document JD-1 invalid_argument",
+            "append_to_document JD-1 ok",
+            "move_document JD-1 ok",
+            "append_to_document JD-1 permission_denied",
+            "restore_document_version JD-1 ok",
+        ]
+    );
+    server.stop().await.unwrap();
 }
 
 #[tokio::test]

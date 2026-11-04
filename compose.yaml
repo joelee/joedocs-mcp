@@ -1,22 +1,26 @@
-# Local JoeDocs server: `docker compose up -d`, then create a project and a
-# key with `docker compose exec joedocs joedocs ...`. See
+# Local JoeDocs server: `just docker-up`, then create a project and a key
+# with `docker compose exec joedocs joedocs ...`. See
 # docs/developer-guide.md ("Running with Docker").
+#
+# The vault and the state (SQLite database and git history) are bind-mounted
+# from $JOEDOCS_DATA (default ./.local/data), so they persist and can be
+# inspected on the host. The server runs as $JOEDOCS_UID:$JOEDOCS_GID
+# (default 1000:1000; `just docker-up` uses yours), so the files stay yours.
+# Create $JOEDOCS_DATA/vault and $JOEDOCS_DATA/state before starting, or
+# Docker creates them owned by root.
 services:
   joedocs:
     build: .
     image: joedocs:local
     # Forwards SIGTERM so `docker compose stop` shuts the server down cleanly.
     init: true
+    user: "${JOEDOCS_UID:-1000}:${JOEDOCS_GID:-1000}"
     ports:
       # Loopback only; MCP clients on this machine use http://127.0.0.1:8750/mcp.
       - "127.0.0.1:${JOEDOCS_PORT:-8750}:8750"
     environment:
       JOEDOCS__LOG__LEVEL: ${JOEDOCS_LOG_LEVEL:-info}
     volumes:
-      - vault:/data/vault
-      - state:/data/state
+      - ${JOEDOCS_DATA:-./.local/data}/vault:/data/vault
+      - ${JOEDOCS_DATA:-./.local/data}/state:/data/state
     restart: unless-stopped
-
-volumes:
-  vault:
-  state:

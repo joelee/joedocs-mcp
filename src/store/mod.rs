@@ -1,7 +1,8 @@
 //! Document use cases behind every MCP tool and admin command (create, get,
-//! update, rename, change front matter, archive, list; projects and API
-//! keys), the single-writer lock, and the ordering of the vault file,
-//! history and database steps.
+//! update, edit, append, rename, move, change front matter, restore a
+//! revision, archive and unarchive, list, search, history and diff;
+//! projects and API keys; reindex and check), the single-writer lock, and
+//! the ordering of the vault file, history and database steps.
 //!
 //! Every document change runs in this order (see `docs/plan.md` section 11):
 //!
@@ -17,10 +18,14 @@
 //! A failure before step 5 undoes the file writes and rolls the
 //! transaction back, so nothing changes.
 
+mod archive;
+mod check;
 mod documents;
+mod editing;
 mod journal;
 mod registry;
 mod reindex;
+mod revisions;
 mod search;
 
 use std::fs::{self, File, OpenOptions};
@@ -28,12 +33,16 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub use archive::ArchivedInfo;
+pub use check::CheckReport;
 pub use documents::{
     Archived, Changed, DocumentInfo, Fetched, ListRequest, Listing, MAX_LIST_LIMIT, NewDocument,
     RevisionInfo, Update,
 };
+pub use editing::{MAX_EDITS, Replacement};
 pub use registry::CreatedKey;
 pub use reindex::Reindexed;
+pub use revisions::{Diff, HistoryPage, MAX_DIFF_CONTEXT, MAX_HISTORY_LIMIT};
 pub use search::{MAX_SEARCH_LIMIT, SearchHit, SearchRequest, SearchResults};
 
 use crate::AppId;

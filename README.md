@@ -2,7 +2,7 @@
 
 JoeDocs: a central MCP server for multi-project documentation, stored as an Obsidian vault with git history and a SQLite index.
 
-**Status:** phases 0 to 3 of [docs/plan.md](docs/plan.md) are done: configuration, the document store with git history and a SQLite index, the admin commands, the MCP server with nine document tools, and full-text and front matter search with `reindex`. History and editing tools are phase 4.
+**Status:** phases 0 to 4 of [docs/plan.md](docs/plan.md) are done: configuration, the document store with git history and a SQLite index, the admin commands, the MCP server with fifteen document tools, full-text and front matter search, and history, diff, restore and in-place editing. Operations (deployment and backups) are phase 5.
 
 ## Quick start
 
@@ -20,7 +20,7 @@ cargo run -- serve                                     # http://127.0.0.1:8750/m
 Or run it in Docker (see [Running with Docker](docs/developer-guide.md#running-with-docker)):
 
 ```bash
-docker compose up --detach --build --wait
+just docker-up      # data persists in .local/data
 docker compose exec joedocs joedocs project add joedocs --key JD --title JoeDocs
 docker compose exec joedocs joedocs key create laptop --grant joedocs:write
 ```
@@ -46,6 +46,9 @@ Commands:
   serve                               Run the MCP server on server.bind until Ctrl-C or SIGTERM
                                       (rebuilds the index first if it is behind the history)
   reindex                             Rebuild the document index and search from the history
+  archive list [--project NAME]       List archived documents
+  archive restore DOCUMENT_ID         Bring an archived document back
+  check                               Report drift between the vault, the history and the index
   project add NAME --key KEY [--title TITLE]
   project list
   key create NAME [--grant PROJECT:PERMISSION]...
@@ -54,9 +57,12 @@ Commands:
   key revoke NAME
 ```
 
-Exit codes: `0` success, `2` usage error, `65` invalid request (bad name, unknown project, not initialised), `69` cannot listen, `70` database, history or vault fault, `74` output error, `78` configuration error.
+Exit codes: `0` success, `1` `check` found problems, `2` usage error, `65` invalid request (bad name, unknown project, not initialised), `69` cannot listen, `70` database, history or vault fault, `74` output error, `78` configuration error.
 
-MCP tools: `list_projects`, `list_documents`, `search_documents`, `get_document`, `new_document`, `update_document`, `rename_document`, `change_document_front_matter`, `archive_document`.
+MCP tools:
+
+- Reading: `list_projects`, `list_documents`, `search_documents`, `get_document`, `get_document_history`, `diff_document`.
+- Writing: `new_document`, `update_document`, `edit_document` (exact replacements), `append_to_document`, `rename_document`, `move_document` (change type), `change_document_front_matter`, `restore_document_version`, `archive_document`.
 
 `search_documents` takes a `query` (words, `"phrases"`, `-exclude`, `prefix*`, `a OR b`; word endings are ignored) and `filters` on any front matter key, for example `{"tags": {"contains": "security"}, "updated": {"gte": "2026-10-01"}}`, in one project or all of them (`"project": "*"`). See [plan.md section 7](docs/plan.md#7-search-decision-2).
 

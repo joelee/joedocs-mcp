@@ -1,6 +1,6 @@
 # JoeDocs: initial plan
 
-Status: **phases 0 to 3 done**. The configuration, the document store, git history, the SQLite index, the admin `init`/`project`/`key`/`reindex` commands, the MCP server (`joedocs serve`, nine tools) and search are implemented; phases 4 and 5 are not. Choices made while building phases 1 to 3 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
+Status: **phases 0 to 4 done**. The configuration, the document store, git history, the SQLite index, the admin commands (`init`, `project`, `key`, `reindex`, `archive`, `check`), the MCP server (`joedocs serve`, fifteen tools), search, and the history and editing tools are implemented; phase 5 (operations) is not. Choices made while building phases 1 to 4 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
 
 ## 1. Goal
 
@@ -95,12 +95,12 @@ All tools return structured JSON (MCP `structuredContent` with an `outputSchema`
 | Tool | Why |
 | --- | --- |
 | `list_projects` | Discovery: the projects this key can access, with permission, document types, allowed statuses and document counts. Agents call this first. **Implemented in phase 2.** |
-| `get_document_history` | The revisions of a document: revision, time, client, action and summary. |
-| `diff_document` | A unified diff between two revisions, so an agent can see what changed since it last read the document. |
-| `restore_document_version` | Makes an old revision the new latest revision. Nothing is rewritten. |
-| `move_document` | Changes the document type (folder), for example from `ideas` to `plans`. |
-| `edit_document` | Applies exact `old`/`new` string replacements (like an editor's search-and-replace) without resending the whole document. This saves tokens and avoids clobbering on large docs. |
-| `append_to_document` | Appends a section, for example a comment on an issue or a log entry. |
+| `get_document_history` | The revisions of a document: revision, time, client, action and summary. **Implemented in phase 4** (`document_id`, `limit=50`, `start=1`; newest first). |
+| `diff_document` | A unified diff between two revisions, so an agent can see what changed since it last read the document. **Implemented in phase 4** (`document_id`, `from`, `to?` = latest, `context=3`; returns `diff` and `changed`). |
+| `restore_document_version` | Makes an old revision the new latest revision. Nothing is rewritten. **Implemented in phase 4** (`document_id`, `version`, `expected_revision?`, `summary?`). |
+| `move_document` | Changes the document type (folder), for example from `ideas` to `plans`. **Implemented in phase 4** (`document_id`, `type`, `expected_revision?`). |
+| `edit_document` | Applies exact `old`/`new` string replacements (like an editor's search-and-replace) without resending the whole document. This saves tokens and avoids clobbering on large docs. **Implemented in phase 4** (`document_id`, `edits[]`, `expected_revision?`, `summary?`). |
+| `append_to_document` | Appends a section, for example a comment on an issue or a log entry. **Implemented in phase 4** (`document_id`, `content`, `expected_revision?`, `summary?`). |
 
 Admin operations are deliberately **not** MCP tools in v1. They run through the CLI on the server host: registering projects, creating, granting and revoking keys, listing and restoring archives, reindexing and integrity checks. This keeps a leaked client key from escalating.
 
@@ -415,14 +415,14 @@ Time and randomness will be injected (`Clock` and key-generator traits) like `En
 | 1. Core store (no network) | `Clock` trait (moved from phase 0, so it lands with its first user and the chosen time crate); `document` types and front matter; `db` schema and migrations; `history` via git; `store` create, get, update, rename, front matter (set and remove), archive and list; the integrity guard; `admin init/project/key` | Integration tests drive the store against a temp vault and real git, including a file edited behind the store's back (done) |
 | 2. MCP over HTTP | `serve`, bearer auth, Origin check, the section 3 tools, structured errors | An rmcp client in tests round-trips every tool (done), and Claude Code connects for real (to be confirmed on the server) |
 | 3. Search | FTS5 index, query grammar, filters, snippets, `reindex` | Search tests over a fixture vault (done) |
-| 4. History and editing tools | `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, `archive list/restore`, `check` (`list_projects` moved to phase 2) | |
+| 4. History and editing tools | `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, `archive list/restore`, `check` (`list_projects` moved to phase 2) | Every tool round-trips over MCP, and each new action replays identically through `reindex` (done) |
 | 5. Operations | systemd unit, deploy guide (Caddy/Tailscale), optional `git push` backup, DB backup command. A local Docker Compose stack and `just docker-test` exist already (added after phase 2) | Running on the real server |
 | Later | Approval provenance (server-stamped `status_changed`/`status_changed_by`, `approve` grant for protected statuses); per-type templates (MCP prompts); documents as MCP resources; backlinks; embedding search; attachments; secret scanning on write | |
 
 ## 16. Risks
 
 - **Secrets pasted into documents live in git history forever.** Removing them needs a history rewrite. A gitleaks-style scan on write could reject them (listed under Later).
-- **Renames break `[[links]]`** in other notes unless the server rewrites them. Proposed: rewrite links within the same project in the same commit (phase 4).
+- **Renames break `[[links]]`** in other notes unless the server rewrites them. Proposed: rewrite links within the same project in the same commit. Deferred from phase 4 to the backlog: one commit would then change several documents, which the one-revision-per-commit history and `reindex` do not yet allow. Meanwhile the old title stays in `aliases`, which Obsidian resolves.
 - **rmcp API churn.** All rmcp use stays inside `mcp/` so that upgrades touch one module.
 - **Repository growth** is a non-issue for text at this scale, since git delta-compresses.
 
@@ -486,3 +486,18 @@ Phase 3 implementation choices, 2026-11-04 (open to revision):
 | `reindex` | Rebuilds documents, revisions and search from `git log` in one transaction; an error leaves the index unchanged. Commits without a `JoeDocs-Document` trailer are skipped and counted. A project missing from the database is recreated from front matter with its name as its title. Vault files that differ from the history are reported; writes to them stay refused by the integrity guard. |
 | `serve` start | Runs `reindex` when the recorded history head or index format differs, and logs the outcome. |
 | Commit dates | Fixed in phase 3: commits made by phases 1 and 2 have a 1970 author date, because the revision time was parsed back with a format jiff rejects. A `reindex` of such a history gives those revisions 1970 times; start such stores afresh. |
+
+Phase 4 implementation choices, 2026-11-04 (open to revision):
+
+| Topic | Choice |
+| --- | --- |
+| One write path | Edit, append, move and restore are revisions like update and rename: same lock, integrity guard, `expected_revision` (optional for all four) and audit log. A move or rename removes folders it empties. |
+| `edit_document` | Replacements apply to the body only, in order, each to the result of the previous. Each `old` must occur exactly once; otherwise nothing changes and the error names the edit (`edit 2: old occurs 3 times...`). 1 to 64 edits. |
+| `append_to_document` | Adds the content after exactly one blank line and ends it with a newline. |
+| `restore_document_version` | Brings back the body, status, tags and custom keys of the chosen revision. Title, type and aliases stay current, because only rename and move change those (and aliases keep old titles resolvable). The summary defaults to `revision N`. |
+| `diff_document` | Unified diff of the whole file, front matter included, from git (`git diff` of two blobs) without git's hunk "function context". Labelled `--- JD-1 revision 1` / `+++ JD-1 revision 4`. `from` may be newer than `to`. |
+| History of archived documents | `get_document_history` and `diff_document` answer `archived`, like `get_document`. An archive revision has no content, so asking for it as a version, or diffing it, is `invalid_argument`. |
+| `archive restore` | Restores the content from before the archive, at the old path or with ` (JD-n)` appended if a newer document took it. Action `unarchive`, author `admin`, client `joedocs-cli`. |
+| `check` | Read-only. Reports an index behind the history, vault files missing or differing from the history (with the git command that discards the change), and files no live document owns (dot-files and dot-folders such as `.obsidian` are ignored). Exits `1` when it finds problems. |
+| New actions | `edit`, `append`, `move`, `restore`, `unarchive` in `JoeDocs-Action`; `reindex` treats every action except `archive` as having content. |
+| Link rewriting | Deferred (section 16). |
