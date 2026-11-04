@@ -1,0 +1,22 @@
+# Local JoeDocs server: `docker compose up -d`, then create a project and a
+# key with `docker compose exec joedocs joedocs ...`. See
+# docs/developer-guide.md ("Running with Docker").
+services:
+  joedocs:
+    build: .
+    image: joedocs:local
+    # Forwards SIGTERM so `docker compose stop` shuts the server down cleanly.
+    init: true
+    ports:
+      # Loopback only; MCP clients on this machine use http://127.0.0.1:8750/mcp.
+      - "127.0.0.1:${JOEDOCS_PORT:-8750}:8750"
+    environment:
+      JOEDOCS__LOG__LEVEL: ${JOEDOCS_LOG_LEVEL:-info}
+    volumes:
+      - vault:/data/vault
+      - state:/data/state
+    restart: unless-stopped
+
+volumes:
+  vault:
+  state:

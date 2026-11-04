@@ -29,6 +29,7 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 | `just deny` | Advisories, licences, bans and sources. |
 | `just secrets` | Scan git history for secrets. |
 | `just msrv` | Check the declared MSRV builds (library profile). |
+| `just docker-test [port]` | Build a throwaway Compose stack, run the deployment tests against it before and after a restart, then remove it (default port 18750). |
 | `just ci` | Everything above, in CI order. |
 
 ## Testing
@@ -36,6 +37,27 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 - Unit tests sit beside the code and use `MapEnv` and `MemFs` instead of the real environment and filesystem.
 - Integration tests in `tests/cli.rs` run the binary with `env_clear()`, a temporary `HOME` and working directory, so your own config files and `.env` cannot affect results.
 - Never call `std::env::set_var` or `remove_var`; they are `unsafe` in Rust 2024 and race with parallel tests.
+- `tests/store.rs` and `tests/mcp.rs` drive the store and the MCP server in-process against a temporary vault and real git. `tests/common/` holds the shared MCP client helpers.
+- `tests/deployment.rs` is a black-box suite for a running server. It is ignored by `just test` and `just ci`; `just docker-test` runs it against Docker Compose, or set `JOEDOCS_TEST_URL`, `JOEDOCS_TEST_TOKEN` and `JOEDOCS_TEST_PROJECT` and run `cargo nextest run --test deployment --run-ignored only` against any server.
+
+## Running with Docker
+
+`compose.yaml` runs `joedocs serve` in a container. On start it runs `joedocs init` (which does nothing once initialised), and it keeps the vault and the state in the named volumes `vault` and `state`.
+
+```bash
+docker compose up --detach --build --wait
+docker compose exec joedocs joedocs project add joedocs --key JD --title JoeDocs
+docker compose exec joedocs joedocs key create laptop --grant joedocs:write   # last line is the token
+claude mcp add --transport http joedocs http://127.0.0.1:8750/mcp \
+  --header "Authorization: Bearer jd_..."
+docker compose logs --follow
+docker compose down              # keeps the volumes; add --volumes to delete the data
+```
+
+- The port is published on loopback only: `JOEDOCS_PORT` (default `8750`). `JOEDOCS_LOG_LEVEL` sets the log level.
+- Other settings go under `environment:` as `JOEDOCS__SECTION__KEY`, e.g. `JOEDOCS__SERVER__ALLOWED_HOSTS: '["localhost", "127.0.0.1", "docs.example.net"]'`, or mount a file at `/etc/joedocs/config.toml`.
+- To look at the vault: `docker compose exec joedocs find /data/vault -name '*.md'`, or copy it out with `docker compose cp joedocs:/data/vault ./vault-copy`.
+- The container runs as uid 10001. If you bind-mount host directories instead of volumes, they must be writable by that uid.
 
 ## Debugging
 

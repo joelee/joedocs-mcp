@@ -6,30 +6,21 @@
 use std::path::Path;
 use std::sync::Arc;
 
+mod common;
+
 use joedocs::Config;
 use joedocs::auth::CountingRandom;
 use joedocs::clock::FixedClock;
 use joedocs::history::GitCli;
 use joedocs::mcp::{ServerOptions, Shared, serve};
 use joedocs::store::{Actor, NewDocument, Paths, Settings, Store};
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
-};
-use rmcp::service::RunningService;
-use rmcp::transport::StreamableHttpClientTransport;
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use rmcp::{RoleClient, ServiceExt as _};
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-type Client = RunningService<RoleClient, ClientConfig>;
-
-/// Helpers return `Result`; only `#[test]` functions may unwrap.
-type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use common::{Client, INIT, TestResult, call, connect, error, ok, post, status};
 
 struct Server {
     _dir: TempDir,
@@ -100,16 +91,7 @@ async fn start() -> TestResult<Server> {
 
 impl Server {
     async fn client(&self, token: &str) -> TestResult<Client> {
-        let transport = StreamableHttpClientTransport::from_config(
-            StreamableHttpClientTransportConfig::with_uri(format!("http://{}/mcp", self.addr))
-                .auth_header(token),
-        );
-        Ok(ClientConfig::new(
-            ClientCapabilities::default(),
-            Implementation::new("test-client", "1.0"),
-        )
-        .serve(transport)
-        .await?)
+        connect(&format!("http://{}/mcp", self.addr), token).await
     }
 
     async fn stop(mut self) -> TestResult<()> {
@@ -118,54 +100,6 @@ impl Server {
         }
         Ok(self.task.await??)
     }
-}
-
-async fn call(client: &Client, tool: &str, args: Value) -> TestResult<CallToolResult> {
-    let args = args.as_object().cloned().unwrap_or_default();
-    Ok(client
-        .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(args))
-        .await?)
-}
-
-/// The structured result of a call that must succeed.
-async fn ok(client: &Client, tool: &str, args: Value) -> TestResult<Value> {
-    let result = call(client, tool, args).await?;
-    assert_ne!(result.is_error, Some(true), "{tool}: {result:?}");
-    Ok(result.structured_content.ok_or("no structured content")?)
-}
-
-/// The `error` object of a call that must fail.
-async fn error(client: &Client, tool: &str, args: Value) -> TestResult<Value> {
-    let result = call(client, tool, args).await?;
-    assert_eq!(result.is_error, Some(true), "{tool}: {result:?}");
-    let content = result.structured_content.ok_or("no structured content")?;
-    Ok(content["error"].clone())
-}
-
-/// Sends a raw HTTP/1.1 request and returns the status code.
-async fn status(addr: std::net::SocketAddr, request: &str) -> TestResult<u16> {
-    let mut stream = TcpStream::connect(addr).await?;
-    stream.write_all(request.as_bytes()).await?;
-    let mut response = Vec::new();
-    let mut buf = [0u8; 1024];
-    while !response.windows(4).any(|w| w == b"\r\n\r\n") {
-        let n = stream.read(&mut buf).await?;
-        if n == 0 {
-            break;
-        }
-        response.extend_from_slice(&buf[..n]);
-    }
-    let text = String::from_utf8_lossy(&response);
-    Ok(text.split(' ').nth(1).ok_or("no status line")?.parse()?)
-}
-
-fn post(host: &str, extra: &str, body: &str) -> String {
-    format!(
-        "POST /mcp HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n\
-         Accept: application/json, text/event-stream\r\n{extra}Content-Length: {}\r\n\
-         Connection: close\r\n\r\n{body}",
-        body.len()
-    )
 }
 
 fn audit_log(root: &Path) -> TestResult<Vec<String>> {
@@ -183,8 +117,6 @@ fn audit_log(root: &Path) -> TestResult<Vec<String>> {
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
-
-const INIT: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"1"}}}"#;
 
 #[tokio::test]
 async fn tools_are_listed_with_schemas_and_hints() {
@@ -448,31 +380,34 @@ async fn http_requests_need_a_valid_key_host_and_origin() {
     let auth = format!("Authorization: Bearer {}\r\n", server.writer);
 
     let health = format!("GET /health HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    assert_eq!(status(addr, &health).await.unwrap(), 200);
-    assert_eq!(status(addr, &post(&host, "", INIT)).await.unwrap(), 401);
+    assert_eq!(status(&host, &health).await.unwrap(), 200);
+    assert_eq!(status(&host, &post(&host, "", INIT)).await.unwrap(), 401);
     let wrong = format!(
         "Authorization: Bearer jd_{}_{}\r\n",
         "0".repeat(12),
         "1".repeat(64)
     );
-    assert_eq!(status(addr, &post(&host, &wrong, INIT)).await.unwrap(), 401);
     assert_eq!(
-        status(addr, &post(&host, "Authorization: Basic eDp5\r\n", INIT))
+        status(&host, &post(&host, &wrong, INIT)).await.unwrap(),
+        401
+    );
+    assert_eq!(
+        status(&host, &post(&host, "Authorization: Basic eDp5\r\n", INIT))
             .await
             .unwrap(),
         401
     );
-    assert_eq!(status(addr, &post(&host, &auth, INIT)).await.unwrap(), 200);
+    assert_eq!(status(&host, &post(&host, &auth, INIT)).await.unwrap(), 200);
 
     let evil_origin = format!("{auth}Origin: http://evil.example\r\n");
     assert_eq!(
-        status(addr, &post(&host, &evil_origin, INIT))
+        status(&host, &post(&host, &evil_origin, INIT))
             .await
             .unwrap(),
         403
     );
     assert_eq!(
-        status(addr, &post("evil.example", &auth, INIT))
+        status(&host, &post("evil.example", &auth, INIT))
             .await
             .unwrap(),
         403
@@ -482,7 +417,7 @@ async fn http_requests_need_a_valid_key_host_and_origin() {
         let mut store = store(&server.root).unwrap();
         store.revoke("laptop").unwrap();
     }
-    assert_eq!(status(addr, &post(&host, &auth, INIT)).await.unwrap(), 401);
+    assert_eq!(status(&host, &post(&host, &auth, INIT)).await.unwrap(), 401);
     server.stop().await.unwrap();
 }
 
@@ -533,7 +468,12 @@ fn the_serve_command_runs_until_sigterm() {
         .unwrap();
     let health = format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    assert_eq!(runtime.block_on(status(addr, &health)).unwrap(), 200);
+    assert_eq!(
+        runtime
+            .block_on(status(&addr.to_string(), &health))
+            .unwrap(),
+        200
+    );
 
     let killed = Command::new("kill")
         .args(["-TERM", &child.id().to_string()])

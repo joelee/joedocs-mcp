@@ -6,7 +6,7 @@ Phases and design are in [plan.md](plan.md#15-phases), and review decisions are 
 
 ## In progress
 
-- Confirm a real Claude Code connection to `joedocs serve` on the server (phase 2's last check).
+- Confirm a real Claude Code connection to `joedocs serve` (phase 2's last check), first against the local Docker Compose stack, then on the server.
 
 ## Planned
 

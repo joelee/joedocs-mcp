@@ -17,6 +17,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - Exit codes `65` (invalid request) and `70` (store fault).
 - MCP server (phase 2): `joedocs serve` speaks MCP Streamable HTTP on `/mcp` with bearer API keys, `Host` and `Origin` checks, and `GET /health`. Tools: `list_projects`, `list_documents`, `get_document`, `new_document`, `update_document`, `rename_document`, `change_document_front_matter`, `archive_document`, with JSON schemas, per-project grant checks and structured errors.
 - Audit log of every change and refused change made through MCP.
+- `Dockerfile` and `compose.yaml` to run `joedocs serve` locally, with the vault and state in volumes.
+- Deployment tests (`tests/deployment.rs`) for a running server, and `just docker-test`, which runs them against a throwaway Compose stack before and after a restart.
 - Config key `server.allowed_hosts`; exit code `69` when the server cannot listen.
 - Dependencies: `rmcp`, `axum`, `tokio`, `tokio-util` (MCP server).
 - Dependencies: `rusqlite` (bundled SQLite), `serde-saphyr` (YAML), `serde_json`, `indexmap` (ordered front matter), `jiff` (timestamps), `sha2` and `getrandom` (API keys).

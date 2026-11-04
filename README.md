@@ -17,6 +17,14 @@ cargo run -- key create laptop --grant joedocs:write   # prints the token once
 cargo run -- serve                                     # http://127.0.0.1:8750/mcp
 ```
 
+Or run it in Docker (see [Running with Docker](docs/developer-guide.md#running-with-docker)):
+
+```bash
+docker compose up --detach --build --wait
+docker compose exec joedocs joedocs project add joedocs --key JD --title JoeDocs
+docker compose exec joedocs joedocs key create laptop --grant joedocs:write
+```
+
 Connect Claude Code (through your TLS proxy or Tailscale name; add that host to `server.allowed_hosts`):
 
 ```bash

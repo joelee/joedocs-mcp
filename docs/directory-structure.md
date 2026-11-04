@@ -4,6 +4,9 @@
 .
 ├── AGENTS.md               Instructions for coding agents
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code
+├── Dockerfile              Two-stage image: build, then debian-slim with git
+├── compose.yaml            Local server with vault and state volumes
+├── .dockerignore           Sends only Cargo.toml, Cargo.lock and src/ to the build
 ├── CHANGELOG.md            Keep a Changelog
 ├── Cargo.toml              Manifest, MSRV, lint levels
 ├── Cargo.lock              Committed; CI uses --locked
@@ -62,6 +65,8 @@
 │       └── tests.rs        Store unit tests (temp vault, real git)
 └── tests/
     ├── admin.rs            init, project and key through the binary
+    ├── common/mod.rs       Shared MCP client and raw HTTP helpers
+    ├── deployment.rs       Ignored black-box suite for a running server (just docker-test)
     ├── cli.rs              End-to-end tests of the binary
     ├── config_example.rs   config.example.toml matches the schema
     ├── mcp.rs              Every tool over HTTP, grants, Host/Origin, serve

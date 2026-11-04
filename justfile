@@ -72,3 +72,18 @@ msrv:
 
 # Full gate, identical locally and in CI
 ci: fetch fmt-check lint coverage doctest doc deny secrets build
+
+# Build a throwaway Docker Compose stack, run the deployment tests against it before and after a restart, then remove it
+docker-test port="18750":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export COMPOSE_PROJECT_NAME=joedocs-test JOEDOCS_PORT={{port}}
+    trap 'docker compose down --volumes --remove-orphans >/dev/null 2>&1' EXIT
+    docker compose up --detach --build --wait
+    docker compose exec -T joedocs joedocs project add itest --key IT --title "Integration tests"
+    token="$(docker compose exec -T joedocs joedocs key create itest --grant itest:write | tail -n 1)"
+    export JOEDOCS_TEST_URL="http://127.0.0.1:{{port}}" JOEDOCS_TEST_TOKEN="$token" JOEDOCS_TEST_PROJECT=itest
+    JOEDOCS_TEST_PHASE=before-restart cargo nextest run --locked --test deployment --run-ignored only
+    docker compose restart
+    docker compose up --detach --wait
+    JOEDOCS_TEST_PHASE=after-restart cargo nextest run --locked --test deployment --run-ignored only

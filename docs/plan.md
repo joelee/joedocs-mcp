@@ -409,7 +409,7 @@ Time and randomness will be injected (`Clock` and key-generator traits) like `En
 | 2. MCP over HTTP | `serve`, bearer auth, Origin check, the section 3 tools, structured errors | An rmcp client in tests round-trips every tool (done), and Claude Code connects for real (to be confirmed on the server) |
 | 3. Search | FTS5 index, query grammar, filters, snippets, `reindex` | Search tests over a fixture vault |
 | 4. History and editing tools | `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, `archive list/restore`, `check` (`list_projects` moved to phase 2) | |
-| 5. Operations | systemd unit, deploy guide (Caddy/Tailscale), optional `git push` backup, DB backup command | Running on the real server |
+| 5. Operations | systemd unit, deploy guide (Caddy/Tailscale), optional `git push` backup, DB backup command. A local Docker Compose stack and `just docker-test` exist already (added after phase 2) | Running on the real server |
 | Later | Approval provenance (server-stamped `status_changed`/`status_changed_by`, `approve` grant for protected statuses); per-type templates (MCP prompts); documents as MCP resources; backlinks; embedding search; attachments; secret scanning on write | |
 
 ## 16. Risks
