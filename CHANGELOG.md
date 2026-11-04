@@ -38,6 +38,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- On case-insensitive file systems (macOS), renaming a document to a title that differs only in case now records the new file name in the history; before, the next change to it failed with "nothing to commit".
 - History commits now carry the revision time. Before, every commit made by the store had a 1970 author and committer date.
 
 ### Removed

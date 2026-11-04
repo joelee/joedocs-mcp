@@ -184,6 +184,9 @@ impl GitCli {
             .arg("--work-tree")
             .arg(&self.work_tree)
             .args(["-c", "core.quotepath=false", "-c", "commit.gpgsign=false"])
+            // Paths are exact, even on case-insensitive file systems, where
+            // `git init` would otherwise turn this on.
+            .args(["-c", "core.ignorecase=false"])
             .args(args)
             .current_dir(&self.work_tree)
             .env("GIT_CONFIG_GLOBAL", null_device())
@@ -230,9 +233,25 @@ impl GitCli {
     }
 
     fn stage_and_commit(&self, commit: &Commit) -> Result<(), HistoryError> {
-        let mut add = vec!["add", "--all", "--"];
-        add.extend(commit.paths.iter().map(String::as_str));
-        self.checked(&add, None)?;
+        // A path is staged if a file has exactly that name, and unstaged
+        // otherwise. Asking the file system instead would see a file that a
+        // case-only rename replaced ("Plan.md" after renaming it to
+        // "plan.md") on macOS, where names are case-insensitive.
+        let (present, gone): (Vec<&str>, Vec<&str>) = commit
+            .paths
+            .iter()
+            .map(String::as_str)
+            .partition(|path| exists_exactly(&self.work_tree.join(path)));
+        if !gone.is_empty() {
+            let mut rm = vec!["rm", "--cached", "--quiet", "--ignore-unmatch", "--"];
+            rm.extend(&gone);
+            self.checked(&rm, None)?;
+        }
+        if !present.is_empty() {
+            let mut add = vec!["add", "--"];
+            add.extend(&present);
+            self.checked(&add, None)?;
+        }
 
         let email = format!("{}@{EMAIL_DOMAIN}", commit.author);
         let date = format!("@{} +0000", commit.at.as_second());
@@ -258,6 +277,19 @@ impl GitCli {
             Err(failure(&["commit"], &output))
         }
     }
+}
+
+/// Whether a directory entry has exactly the name of `path`, compared
+/// case-sensitively whatever the file system does.
+fn exists_exactly(path: &Path) -> bool {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name() == name)
+    })
 }
 
 fn null_device() -> &'static Path {
@@ -545,6 +577,33 @@ mod tests {
     }
 
     #[test]
+    fn only_exact_names_count_as_present() {
+        let repo = repo();
+        fs::write(repo.home.join("plan.md"), "x").unwrap();
+        assert!(exists_exactly(&repo.home.join("plan.md")));
+        // True on a case-insensitive file system, for which this matters.
+        assert!(!exists_exactly(&repo.home.join("Plan.md")));
+        assert!(!exists_exactly(&repo.home.join("missing/plan.md")));
+        assert!(!exists_exactly(Path::new("/")));
+    }
+
+    #[test]
+    fn case_only_renames_are_committed_exactly() {
+        let repo = repo();
+        fs::write(repo.home.join("Plan.md"), "one").unwrap();
+        repo.git.commit(&commit(&["Plan.md"], "add")).unwrap();
+        fs::rename(repo.home.join("Plan.md"), repo.home.join("plan.md")).unwrap();
+        fs::write(repo.home.join("plan.md"), "two").unwrap();
+        repo.git
+            .commit(&commit(&["Plan.md", "plan.md"], "rename"))
+            .unwrap();
+        fs::write(repo.home.join("plan.md"), "three").unwrap();
+        let third = repo.git.commit(&commit(&["plan.md"], "edit")).unwrap();
+        assert_eq!(git_out(&repo, &["ls-files"]), "plan.md\n");
+        assert_eq!(repo.git.show(&third, "plan.md").unwrap(), b"three");
+    }
+
+    #[test]
     fn deletions_and_renames_are_committed() {
         let repo = repo();
         fs::write(repo.home.join("a.md"), "x").unwrap();
@@ -578,10 +637,11 @@ mod tests {
     }
 
     #[test]
-    fn staging_a_missing_path_fails() {
+    fn committing_a_path_that_never_existed_fails() {
         let repo = repo();
         let err = repo.git.commit(&commit(&["nope.md"], "x")).unwrap_err();
-        assert!(err.to_string().starts_with("git add failed: "), "{err}");
+        assert!(err.to_string().starts_with("git commit failed: "), "{err}");
+        assert_eq!(repo.git.head().unwrap(), None);
     }
 
     #[test]
