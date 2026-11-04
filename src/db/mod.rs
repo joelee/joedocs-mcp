@@ -16,7 +16,10 @@ pub use documents::{
     DocumentRow, ListQuery, RevisionRow, Sort, get_document, get_revision, insert_document,
     insert_revision, list_documents, path_taken, save_document,
 };
-pub use keys::{KeyRow, find_key_by_name, insert_key, list_keys, revoke_key, set_grant};
+pub use keys::{
+    KeyRow, find_key_by_id, find_key_by_name, insert_key, key_secret, list_keys, revoke_key,
+    set_grant, touch_key,
+};
 pub use projects::{
     ProjectRow, allocate_seq, find_project, find_project_by_id, insert_project, list_projects,
 };
@@ -25,7 +28,10 @@ use rusqlite::{OptionalExtension as _, params};
 
 /// Schema migrations, applied in order. The schema version
 /// (`PRAGMA user_version`) is the number applied.
-const MIGRATIONS: &[&str] = &[include_str!("migrations/0001_core.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("migrations/0001_core.sql"),
+    include_str!("migrations/0002_audit.sql"),
+];
 
 /// The schema version this build expects.
 pub const SCHEMA_VERSION: usize = MIGRATIONS.len();
@@ -88,6 +94,47 @@ fn migrate(conn: &mut Connection) -> Result<(), DbError> {
         tx.pragma_update(None, "user_version", index + 1)?;
         tx.commit()?;
     }
+    Ok(())
+}
+
+/// One audited tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditEntry<'a> {
+    /// Time of the call.
+    pub at: &'a str,
+    /// API key ID.
+    pub api_key_id: &'a str,
+    /// API key name.
+    pub key_name: &'a str,
+    /// MCP client name.
+    pub client: &'a str,
+    /// Tool name.
+    pub tool: &'a str,
+    /// Document the call targeted, if any.
+    pub document_id: Option<&'a str>,
+    /// `ok` or an error code.
+    pub outcome: &'a str,
+}
+
+/// Appends an audit entry.
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn insert_audit(conn: &Connection, entry: &AuditEntry<'_>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO audit_log (at, api_key_id, key_name, client, tool, document_id, outcome)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            entry.at,
+            entry.api_key_id,
+            entry.key_name,
+            entry.client,
+            entry.tool,
+            entry.document_id,
+            entry.outcome
+        ],
+    )?;
     Ok(())
 }
 
@@ -164,6 +211,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = open(&dir.path().join("missing/joedocs.db")).unwrap_err();
         assert!(err.to_string().starts_with("database error: "), "{err}");
+    }
+
+    #[test]
+    fn audit_entries_are_stored() {
+        let conn = open_in_memory().unwrap();
+        let entry = AuditEntry {
+            at: "t",
+            api_key_id: "k",
+            key_name: "laptop",
+            client: "c",
+            tool: "update_document",
+            document_id: Some("JD-1"),
+            outcome: "conflict",
+        };
+        insert_audit(&conn, &entry).unwrap();
+        let outcome: String = conn
+            .query_row("SELECT outcome FROM audit_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(outcome, "conflict");
     }
 
     #[test]

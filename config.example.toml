@@ -11,7 +11,12 @@ level = "info"
 # Address and port the MCP server listens on. Keep it on localhost and put a
 # TLS reverse proxy (or Tailscale) in front for remote clients.
 bind = "127.0.0.1:8750"
-# Extra Origin header values to accept, e.g. ["https://docs.example.net"].
+# Host header values to accept (DNS-rebinding protection), as host or
+# host:port. Behind a reverse proxy, add the public name, e.g.
+# ["localhost", "127.0.0.1", "::1", "docs.example.net"].
+allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+# Origin header values to accept, e.g. ["https://docs.example.net"]. Requests
+# without an Origin header (CLI and desktop clients) are always allowed.
 allowed_origins = []
 # Largest accepted document (front matter and body), in bytes.
 max_document_bytes = 1048576

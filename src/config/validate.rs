@@ -32,6 +32,22 @@ impl Config {
     ///
     /// Returns the [`Violation`] for the first key that breaks a rule.
     pub fn validate(&self) -> Result<(), Violation> {
+        if self.server.allowed_hosts.is_empty() {
+            return Err(Violation::new(
+                "server.allowed_hosts",
+                "must not be empty; list the host names clients use, such as localhost",
+            ));
+        }
+        for host in &self.server.allowed_hosts {
+            if host.is_empty() || host.contains(['/', ' ', '?', '#', '@']) {
+                return Err(Violation::new(
+                    "server.allowed_hosts",
+                    format!(
+                        "\"{host}\" is not a host name like docs.example.net or localhost:8750"
+                    ),
+                ));
+            }
+        }
         for origin in &self.server.allowed_origins {
             if !is_origin(origin) {
                 return Err(Violation::new(
@@ -161,6 +177,20 @@ mod tests {
             let v = violation(|c| c.server.allowed_origins = vec![bad.into()]);
             assert_eq!(v.key, "server.allowed_origins", "{bad}");
         }
+    }
+
+    #[test]
+    fn allowed_hosts_must_be_bare_host_names() {
+        let v = violation(|c| c.server.allowed_hosts.clear());
+        assert_eq!(v.key, "server.allowed_hosts");
+        assert!(v.message.contains("must not be empty"), "{}", v.message);
+        for bad in ["", "https://x", "x/y", "a b"] {
+            let v = violation(|c| c.server.allowed_hosts = vec![bad.into()]);
+            assert_eq!(v.key, "server.allowed_hosts", "{bad}");
+        }
+        let mut config = Config::default();
+        config.server.allowed_hosts = vec!["docs.example.net".into(), "localhost:8750".into()];
+        assert_eq!(config.validate(), Ok(()));
     }
 
     #[test]

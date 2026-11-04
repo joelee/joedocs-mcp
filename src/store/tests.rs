@@ -756,3 +756,51 @@ fn store_exposes_its_paths_and_settings() {
     assert!(format!("{:?}", fx.store).starts_with("Store {"));
     assert!(fx.paths.lock_file().ends_with("state/joedocs.lock"));
 }
+
+#[test]
+fn tokens_authenticate_until_revoked() {
+    let mut fx = fixture();
+    let created = fx
+        .store
+        .create_key(
+            "laptop",
+            &["joedocs:read".parse().unwrap()],
+            &CountingRandom(3),
+        )
+        .unwrap();
+    let key = fx.store.authenticate(&created.token).unwrap().unwrap();
+    assert_eq!(key.name, "laptop");
+    assert_eq!(
+        fx.store.keys().unwrap()[0].last_used_at.as_deref(),
+        Some("2026-10-26T07:33:20Z")
+    );
+
+    let token = secrecy::ExposeSecret::expose_secret(&created.token);
+    let wrong_secret = format!(
+        "{}{}",
+        &token[..token.len() - 1],
+        if token.ends_with('0') { "1" } else { "0" }
+    );
+    let unknown_id = format!("jd_ffffffffffff_{}", &token[16..]);
+    for bad in [wrong_secret, unknown_id, "nonsense".to_owned()] {
+        assert!(fx.store.authenticate(&bad.into()).unwrap().is_none());
+    }
+    fx.store.revoke("laptop").unwrap();
+    assert!(fx.store.authenticate(&created.token).unwrap().is_none());
+}
+
+#[test]
+fn documents_map_to_projects_by_key() {
+    let fx = fixture();
+    assert_eq!(
+        fx.store.project_of_document("jd-99").unwrap().unwrap().name,
+        "joedocs"
+    );
+    assert!(fx.store.project_of_document("XX-1").unwrap().is_none());
+    assert!(fx.store.project_of_document("joedocs").is_err());
+    assert_eq!(fx.store.project("joedocs").unwrap().unwrap().key, "JD");
+    assert!(fx.store.project("JD").unwrap().is_none());
+    fx.store
+        .audit("k", &actor(), "archive_document", Some("JD-1"), "ok")
+        .unwrap();
+}

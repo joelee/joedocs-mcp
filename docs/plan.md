@@ -1,6 +1,6 @@
 # JoeDocs: initial plan
 
-Status: **phases 0 and 1 done**. The configuration, the document store, git history, the SQLite index and the admin `init`/`project`/`key` commands are implemented; the MCP server (phase 2) and later phases are not. Choices made while building phase 1 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
+Status: **phases 0 to 2 done**. The configuration, the document store, git history, the SQLite index, the admin `init`/`project`/`key` commands and the MCP server (`joedocs serve`, eight tools) are implemented; search (phase 3) and later phases are not. Choices made while building phases 1 and 2 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
 
 ## 1. Goal
 
@@ -94,7 +94,7 @@ All tools return structured JSON (MCP `structuredContent` with an `outputSchema`
 
 | Tool | Why |
 | --- | --- |
-| `list_projects` | Discovery: the projects this key can access, with permission, document types, allowed statuses and document counts. Agents call this first. |
+| `list_projects` | Discovery: the projects this key can access, with permission, document types, allowed statuses and document counts. Agents call this first. **Implemented in phase 2.** |
 | `get_document_history` | The revisions of a document: revision, time, client, action and summary. |
 | `diff_document` | A unified diff between two revisions, so an agent can see what changed since it last read the document. |
 | `restore_document_version` | Makes an old revision the new latest revision. Nothing is rewritten. |
@@ -229,7 +229,10 @@ Git implementation choice:
 - **API keys:** clients send `Authorization: Bearer jd_<id>_<secret>`. The key is 32 random bytes and is shown once at creation. The DB stores only `id` and `SHA-256(secret)`. A slow hash is unnecessary for high-entropy random keys. Keys carry a name (used as `created_by` and `updated_by`) and per-project grants of `read` or `write`. Revocation takes effect immediately, and `last_used_at` is recorded.
 - **Client setup** (Claude Code example):
   `claude mcp add --transport http joedocs https://docs.example.net/mcp --header "Authorization: Bearer jd_..."`
-- **Limits:** a maximum document size (default 1 MiB) and a request body limit. Every mutation is written to an audit log.
+- **Limits:** a maximum document size (default 1 MiB) and a request body limit of 4 × `max_document_bytes` + 64 KiB (JSON escaping can grow a document). Every change, and every refused attempt to change, is written to the `audit_log` table.
+- **Host and Origin (phase 2):** rmcp checks `Host` against `server.allowed_hosts` (default loopback names) to block DNS rebinding, and `Origin` against `server.allowed_origins`. Requests without `Origin` pass; any other `Origin` gets `403`. Origins without a port are given the scheme's default port.
+- **Errors (phase 2):** tool failures are tool results with `isError: true` and `structuredContent.error = {code, message, ...}`. Codes: `invalid_argument` (with `field`), `not_found`, `archived`, `already_exists`, `conflict` (with `current_revision`), `integrity`, `too_large`, `permission_denied`, `internal`. Internal faults are logged in full and reported without paths or details.
+- **Health:** `GET /health` answers `ok` without authentication.
 
 ## 9. Configuration (non-secret, `config.toml`)
 
@@ -241,7 +244,8 @@ level = "info"
 
 [server]
 bind = "127.0.0.1:8750"
-allowed_origins = []              # extra Origin values to accept
+allowed_hosts = ["localhost", "127.0.0.1", "::1"]  # Host values to accept (phase 2)
+allowed_origins = []              # Origin values to accept
 max_document_bytes = 1048576
 
 [storage]
@@ -343,6 +347,7 @@ Audited with `cargo deny` against the current `deny.toml` (RustSec DB of 2026-11
 | Crate | Version | Features | Licence | Purpose |
 | --- | --- | --- | --- | --- |
 | `rmcp` | 3.8.0 | no defaults; `server`, `macros`, `transport-streamable-http-server` | Apache-2.0 | MCP server; `StreamableHttpService` is a tower service |
+| `tokio-util` | 0.7.20 | no defaults | MIT | `CancellationToken` to end MCP sessions on shutdown (added in phase 2; already in the tree through rmcp) |
 | `rmcp` (dev) | 3.8.0 | no defaults; `client`, `transport-streamable-http-client-reqwest` (no TLS) | Apache-2.0 | End-to-end tests; adds about 35 crates, no new licences |
 | `schemars` | 1.2.3 | (via rmcp) | MIT | Tool input schemas |
 | `tokio` | ≥ 1.54.1 | `rt-multi-thread`, `macros`, `net`, `signal`, `sync`, `time` | MIT | Runtime; 1.54.1 fixes RUSTSEC-2026-0384/0386 |
@@ -401,9 +406,9 @@ Time and randomness will be injected (`Clock` and key-generator traits) like `En
 | --- | --- | --- |
 | 0. Foundations | Remove the `greet` example; add the `server`, `storage` and `documents` config; approve dependencies and `deny.toml` | `just ci` is green with the real config schema (done); dependencies approved (done) |
 | 1. Core store (no network) | `Clock` trait (moved from phase 0, so it lands with its first user and the chosen time crate); `document` types and front matter; `db` schema and migrations; `history` via git; `store` create, get, update, rename, front matter (set and remove), archive and list; the integrity guard; `admin init/project/key` | Integration tests drive the store against a temp vault and real git, including a file edited behind the store's back (done) |
-| 2. MCP over HTTP | `serve`, bearer auth, Origin check, the section 3 tools, structured errors | An rmcp client in tests round-trips every tool, and Claude Code connects for real |
+| 2. MCP over HTTP | `serve`, bearer auth, Origin check, the section 3 tools, structured errors | An rmcp client in tests round-trips every tool (done), and Claude Code connects for real (to be confirmed on the server) |
 | 3. Search | FTS5 index, query grammar, filters, snippets, `reindex` | Search tests over a fixture vault |
-| 4. History and editing tools | `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, `list_projects`, `archive list/restore`, `check` | |
+| 4. History and editing tools | `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, `archive list/restore`, `check` (`list_projects` moved to phase 2) | |
 | 5. Operations | systemd unit, deploy guide (Caddy/Tailscale), optional `git push` backup, DB backup command | Running on the real server |
 | Later | Approval provenance (server-stamped `status_changed`/`status_changed_by`, `approve` grant for protected statuses); per-type templates (MCP prompts); documents as MCP resources; backlinks; embedding search; attachments; secret scanning on write | |
 
@@ -447,3 +452,17 @@ Phase 1 implementation choices, 2026-11-04 (open to revision):
 | Index drift | Before each write the index's `history_head` is compared with git `HEAD`. On a mismatch writes are refused (`OutOfSync`) until `reindex` exists (phase 3); the replay of section 6.6 arrives with it. |
 | Git | Commits run with the user's and system's git config ignored and literal pathspecs. The author and committer are the key name with e-mail `<name>@joedocs.invalid`, and the time comes from the injected clock. The history repository is bare apart from the `--work-tree` passed on every call. |
 | Exit codes | `65` (`EX_DATAERR`) for requests the user can fix, `70` (`EX_SOFTWARE`) for database, history or vault faults, alongside the existing `78` and `74`. |
+
+Phase 2 implementation choices, 2026-11-04 (open to revision):
+
+| Topic | Choice |
+| --- | --- |
+| Tools | `list_projects`, `list_documents`, `get_document`, `new_document`, `update_document`, `rename_document`, `change_document_front_matter`, `archive_document`. `search_documents` comes with phase 3. `list_projects` moved here from phase 4 because agents need it first. |
+| `get_document` | `version` is a revision number; omit it for the latest (no `"latest"` string). |
+| Arguments | Unknown arguments are rejected, so typos such as `doc_type` fail instead of being ignored. |
+| Permissions | Grants are checked before the store is touched. A project or document the key has no grant on is `not_found`; a project the key can only read gives `permission_denied` on writes. |
+| Concurrency | One mutex around the store, used from blocking threads. This keeps a single writer (the role of the planned writer task) and keeps SQLite and git off the async runtime. |
+| Sessions | rmcp's in-memory session manager with default keep-alive; sessions end when the server stops. |
+| Client name | Taken from the per-request `clientInfo` (protocol 2026-07-28) or the `initialize` handshake, tidied to one line; `unknown` if absent. |
+| JSON key order | `front_matter` in tool results is a JSON object, whose key order is not significant (it comes out sorted); the file keeps its order. |
+| Exit codes | `69` (`EX_UNAVAILABLE`) when `serve` cannot bind or run. |

@@ -41,14 +41,18 @@
 │   │   ├── projects.rs     Project queries
 │   │   ├── keys.rs         API key and grant queries
 │   │   ├── documents.rs    Document, listing and revision queries
-│   │   └── migrations/     Embedded .sql files (0001_core.sql)
+│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit)
 │   ├── document/
 │   │   ├── mod.rs          Slugs and re-exports
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
 │   │   ├── title.rs        Title rules and file stems
 │   │   └── front_matter.rs Key classes, parse, render, change rules
 │   ├── history/mod.rs      History trait and GitCli
-│   ├── mcp/                (skeleton) MCP tools, HTTP transport, auth middleware
+│   ├── mcp/
+│   │   ├── mod.rs          Router, ServerOptions, serve, run, shutdown signal
+│   │   ├── auth.rs         Bearer key middleware and Caller
+│   │   ├── tools.rs        Tool parameters, results and handlers
+│   │   └── errors.rs       ToolError: codes and structured results
 │   ├── search/             (skeleton) Query grammar, FTS5, filters
 │   └── store/
 │       ├── mod.rs          Store, Paths, Settings, Actor, Error, write lock
@@ -60,6 +64,7 @@
     ├── admin.rs            init, project and key through the binary
     ├── cli.rs              End-to-end tests of the binary
     ├── config_example.rs   config.example.toml matches the schema
+    ├── mcp.rs              Every tool over HTTP, grants, Host/Origin, serve
     └── store.rs            A document's lifecycle across files, git and index
 ```
 

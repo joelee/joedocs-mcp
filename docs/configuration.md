@@ -33,7 +33,8 @@ Run `joedocs config paths` to see the search order and the selected file.
 | --- | --- | --- | --- | --- | --- |
 | `log.level` | string: `error`, `warn`, `info`, `debug`, `trace` | `"info"` | `JOEDOCS__LOG__LEVEL` | `--log-level` | Minimum level written to stderr. |
 | `server.bind` | string: socket address | `"127.0.0.1:8750"` | `JOEDOCS__SERVER__BIND` | | Address and port the MCP server listens on. Use a TLS reverse proxy or Tailscale for remote clients. |
-| `server.allowed_origins` | array of strings: `http(s)://host[:port]` | `[]` | `JOEDOCS__SERVER__ALLOWED_ORIGINS` | | Extra `Origin` header values to accept, e.g. `["https://docs.example.net"]`. |
+| `server.allowed_hosts` | array of strings: `host` or `host:port` (1 or more) | `["localhost", "127.0.0.1", "::1"]` | `JOEDOCS__SERVER__ALLOWED_HOSTS` | | `Host` header values to accept, which blocks DNS rebinding. Behind a reverse proxy, add the public name, e.g. `docs.example.net`. |
+| `server.allowed_origins` | array of strings: `http(s)://host[:port]` | `[]` | `JOEDOCS__SERVER__ALLOWED_ORIGINS` | | `Origin` header values to accept, e.g. `["https://docs.example.net"]`. Requests without `Origin` (CLI and desktop clients) are allowed; any other `Origin` gets `403`. |
 | `server.max_document_bytes` | integer (1 or more) | `1048576` | `JOEDOCS__SERVER__MAX_DOCUMENT_BYTES` | | Largest accepted document, front matter included, in bytes. |
 | `storage.home` | string: absolute path, or empty | `""` | `JOEDOCS__STORAGE__HOME` | | Content directory (`$JOEDOCS_HOME`) holding `<project>/<type>/*.md`. Empty means not set; commands that need it fail until it is. |
 | `storage.state_dir` | string: absolute path, or empty | `""` | `JOEDOCS__STORAGE__STATE_DIR` | | Database and history directory. Empty means `$XDG_DATA_HOME/joedocs` (when `XDG_DATA_HOME` is absolute), else `$HOME/.local/share/joedocs` (macOS too). |

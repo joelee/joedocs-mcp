@@ -103,6 +103,45 @@ pub fn find_key_by_name(conn: &Connection, name: &str) -> rusqlite::Result<Optio
     key.map(|key| with_grants(conn, key)).transpose()
 }
 
+/// The key with this public ID, with its grants.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn find_key_by_id(conn: &Connection, id: &str) -> rusqlite::Result<Option<KeyRow>> {
+    let key = conn
+        .query_row(&format!("{SELECT} WHERE id = ?1"), [id], from_row)
+        .optional()?;
+    key.map(|key| with_grants(conn, key)).transpose()
+}
+
+/// The stored SHA-256 of a key's secret.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn key_secret(conn: &Connection, id: &str) -> rusqlite::Result<Option<Vec<u8>>> {
+    conn.query_row(
+        "SELECT secret_sha256 FROM api_keys WHERE id = ?1",
+        [id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Records a successful authentication.
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn touch_key(conn: &Connection, id: &str, at: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE api_keys SET last_used_at = ?2 WHERE id = ?1",
+        params![id, at],
+    )?;
+    Ok(())
+}
+
 /// Grants `permission` on a project, replacing any earlier grant there.
 ///
 /// # Errors
@@ -155,11 +194,16 @@ mod tests {
         let grants: Vec<_> = key.grants.iter().map(ToString::to_string).collect();
         assert_eq!(grants, ["alpha:read", "joedocs:write"]);
 
+        assert_eq!(find_key_by_id(&conn, "k1").unwrap(), Some(key));
+        assert_eq!(key_secret(&conn, "k1").unwrap(), Some(vec![1; 32]));
+        assert_eq!(key_secret(&conn, "nope").unwrap(), None);
+        touch_key(&conn, "k1", "t9").unwrap();
         revoke_key(&conn, "k1", "t1").unwrap();
         revoke_key(&conn, "k1", "t2").unwrap();
         let keys = list_keys(&conn).unwrap();
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].revoked_at.as_deref(), Some("t1"));
+        assert_eq!(keys[0].last_used_at.as_deref(), Some("t9"));
         assert_eq!(find_key_by_name(&conn, "nope").unwrap(), None);
         assert!(insert_key(&conn, "k2", "laptop", &[2; 32], "t").is_err());
     }

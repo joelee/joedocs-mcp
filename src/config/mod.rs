@@ -100,8 +100,12 @@ pub const DEFAULT_PORT: u16 = 8750;
 pub struct ServerConfig {
     /// Address and port the HTTP server listens on.
     pub bind: SocketAddr,
-    /// Extra `Origin` header values to accept, such as
-    /// `https://docs.example.net`. Requests without an `Origin` are allowed.
+    /// `Host` header values to accept (DNS-rebinding protection), as
+    /// `host` or `host:port`. Add the public name when behind a proxy.
+    pub allowed_hosts: Vec<String>,
+    /// `Origin` header values to accept, such as
+    /// `https://docs.example.net`. Requests without an `Origin` are allowed;
+    /// any other `Origin` is refused.
     pub allowed_origins: Vec<String>,
     /// Largest accepted document (front matter and body), in bytes.
     pub max_document_bytes: u64,
@@ -111,6 +115,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)),
+            allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
             allowed_origins: Vec::new(),
             max_document_bytes: 1024 * 1024,
         }

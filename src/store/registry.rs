@@ -3,10 +3,10 @@
 
 use secrecy::SecretString;
 
-use super::{Error, Store};
+use super::{Actor, Error, Store};
 use crate::auth::{self, Grant, RandomSource};
-use crate::db::{self, Connection, KeyRow, ProjectRow};
-use crate::document::{check_title, is_project_key, is_slug};
+use crate::db::{self, AuditEntry, Connection, KeyRow, ProjectRow};
+use crate::document::{DocumentId, check_title, is_project_key, is_slug};
 
 /// A key just created. The token is shown to the user once.
 #[derive(Debug)]
@@ -163,6 +163,85 @@ impl Store {
             db::find_key_by_name(&tx, name)?.ok_or_else(|| Error::KeyNotFound(name.to_owned()))?;
         tx.commit()?;
         Ok(key)
+    }
+}
+
+impl Store {
+    /// The key a bearer token belongs to, if the token is well formed,
+    /// matches, and the key is not revoked. Records the time of use.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors only; every kind of bad token is `None`.
+    pub fn authenticate(&self, token: &SecretString) -> Result<Option<KeyRow>, Error> {
+        let Some((id, secret)) = auth::parse_token(token) else {
+            return Ok(None);
+        };
+        let Some(hash) = db::key_secret(&self.conn, &id)? else {
+            return Ok(None);
+        };
+        if !auth::verify_secret(&secret, &hash) {
+            return Ok(None);
+        }
+        let Some(key) = db::find_key_by_id(&self.conn, &id)? else {
+            return Ok(None);
+        };
+        if key.revoked_at.is_some() {
+            return Ok(None);
+        }
+        db::touch_key(&self.conn, &id, &self.now())?;
+        Ok(Some(key))
+    }
+
+    /// The project with this name.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors.
+    pub fn project(&self, name: &str) -> Result<Option<ProjectRow>, Error> {
+        Ok(db::find_project(&self.conn, name)?.filter(|p| p.name == name))
+    }
+
+    /// The project a document ID belongs to (by its key prefix), whether or
+    /// not the document exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] for a malformed ID, and database errors.
+    pub fn project_of_document(&self, id: &str) -> Result<Option<ProjectRow>, Error> {
+        let id: DocumentId = id.parse().map_err(|e: crate::document::InvalidId| {
+            Error::invalid("document_id", e.to_string())
+        })?;
+        Ok(db::find_project(&self.conn, id.key())?.filter(|p| p.key == id.key()))
+    }
+
+    /// Records a tool call in the audit log.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors.
+    pub fn audit(
+        &self,
+        key_id: &str,
+        actor: &Actor,
+        tool: &str,
+        document_id: Option<&str>,
+        outcome: &str,
+    ) -> Result<(), Error> {
+        let at = self.now();
+        db::insert_audit(
+            &self.conn,
+            &AuditEntry {
+                at: &at,
+                api_key_id: key_id,
+                key_name: actor.name(),
+                client: actor.client(),
+                tool,
+                document_id,
+                outcome,
+            },
+        )?;
+        Ok(())
     }
 }
 

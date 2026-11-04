@@ -1,0 +1,793 @@
+//! The MCP tools.
+//!
+//! Every tool checks the caller's grant on the project first. A project or
+//! document the key cannot see is reported as `not_found`, so its existence
+//! does not leak. Tools that change data are recorded in the audit log,
+//! including refused attempts.
+
+use std::sync::Arc;
+
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{
+    CacheScope, CallToolResult, Implementation, ListToolsResult, PaginatedRequestParams,
+    ProtocolVersion, ResultType, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData, Json, RoleServer, ServerHandler, schemars, tool, tool_handler, tool_router};
+use serde::{Deserialize, Serialize};
+
+use super::{Caller, Shared, ToolError};
+use crate::auth::Permission;
+use crate::document::front_matter::Fields;
+use crate::store::{
+    self, Actor, Changed, DocumentInfo, ListRequest, NewDocument, RevisionInfo, Sort, Store, Update,
+};
+
+/// A tool's result. Tool signatures spell this out, because rmcp's macro
+/// reads the return type to generate the output schema.
+type ToolResult<T> = Result<Json<T>, CallToolResult>;
+
+/// Instructions sent to clients at initialisation.
+const INSTRUCTIONS: &str = "\
+JoeDocs stores project documentation (plans, ideas, issues, reviews, research, specs, notes) \
+as Markdown with YAML front matter, with full version history.
+
+- Call list_projects first: it shows the projects this key can use, your permission on each, \
+and the allowed document types and statuses.
+- Documents have stable IDs like JD-42. Titles become file names and can change.
+- `content` is the Markdown body only; JoeDocs writes the front matter. Mermaid and PlantUML \
+fenced code blocks are kept as written.
+- update_document needs the revision you last read (expected_revision). On a `conflict` error, \
+get_document again, merge, and retry.
+- Front matter: id, title, project, type, revision, created*, updated*, client are set by the \
+server; status, tags and aliases are validated; other keys are yours. Values are strings, \
+numbers, booleans or lists of those.";
+
+/// The MCP server: one instance per session, sharing the store.
+#[derive(Clone)]
+pub struct JoeDocsServer {
+    shared: Arc<Shared>,
+    tool_router: ToolRouter<Self>,
+}
+
+impl std::fmt::Debug for JoeDocsServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JoeDocsServer").finish_non_exhaustive()
+    }
+}
+
+// ---------------------------------------------------------------- inputs
+
+/// No arguments.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NoParams {}
+
+/// Listing order.
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SortParam {
+    /// Most recently updated first.
+    #[default]
+    UpdatedDesc,
+    /// Least recently updated first.
+    UpdatedAsc,
+    /// Newest first.
+    CreatedDesc,
+    /// Oldest first.
+    CreatedAsc,
+    /// By title.
+    Title,
+}
+
+impl From<SortParam> for Sort {
+    fn from(sort: SortParam) -> Self {
+        match sort {
+            SortParam::UpdatedDesc => Self::UpdatedDesc,
+            SortParam::UpdatedAsc => Self::UpdatedAsc,
+            SortParam::CreatedDesc => Self::CreatedDesc,
+            SortParam::CreatedAsc => Self::CreatedAsc,
+            SortParam::Title => Self::Title,
+        }
+    }
+}
+
+fn all() -> String {
+    "all".to_owned()
+}
+fn default_limit() -> u64 {
+    200
+}
+fn one() -> u64 {
+    1
+}
+
+/// Arguments of `list_documents`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListDocumentsParams {
+    /// Project name, from `list_projects`.
+    pub project: String,
+    /// Document type, or "all".
+    #[serde(rename = "type", default = "all")]
+    pub doc_type: String,
+    /// Only documents with this status.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Most items to return (1 to 1000).
+    #[serde(default = "default_limit")]
+    pub limit: u64,
+    /// 1-based position of the first item; use `next_start` from the previous page.
+    #[serde(default = "one")]
+    pub start: u64,
+    /// Order of the items.
+    #[serde(default)]
+    pub sort: SortParam,
+}
+
+/// Arguments of `get_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetDocumentParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Revision to read; omit for the latest.
+    #[serde(default)]
+    pub version: Option<u64>,
+}
+
+/// Arguments of `new_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewDocumentParams {
+    /// Project name, from `list_projects`.
+    pub project: String,
+    /// Document type (a folder); defaults to the configured default type.
+    #[serde(rename = "type", default)]
+    pub doc_type: Option<String>,
+    /// Initial status; defaults to the configured default status.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Title; also the file name.
+    pub title: String,
+    /// Markdown body, without front matter.
+    pub content: String,
+    /// Extra front matter: tags, aliases and your own keys.
+    #[serde(default)]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub front_matter: Option<Fields>,
+    /// One-line description of the change, for the history.
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Arguments of `update_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateDocumentParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// The complete new Markdown body, without front matter.
+    pub content: String,
+    /// The revision you last read; the update is refused if it is stale.
+    pub expected_revision: u64,
+    /// Front matter keys to set at the same time (merged, not replaced).
+    #[serde(default)]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub front_matter: Option<Fields>,
+    /// One-line description of the change, for the history.
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Arguments of `rename_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenameDocumentParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// New title.
+    pub title: String,
+    /// If given, the rename is refused unless this is the current revision.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+}
+
+/// Arguments of `change_document_front_matter`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeFrontMatterParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Keys to set. Use remove (not null) to delete a key.
+    #[serde(default)]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub set: Option<Fields>,
+    /// Custom keys to delete.
+    #[serde(default)]
+    pub remove: Option<Vec<String>>,
+    /// If given, the change is refused unless this is the current revision.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+}
+
+/// Arguments of `archive_document`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveDocumentParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Why it is archived, for the history.
+    pub reason: String,
+}
+
+// --------------------------------------------------------------- outputs
+
+/// A project this key can use.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ProjectOut {
+    /// Project name (use it in other tools).
+    pub name: String,
+    /// Document ID prefix.
+    pub key: String,
+    /// Title.
+    pub title: String,
+    /// "read" or "write".
+    pub permission: String,
+    /// Number of live documents.
+    pub documents: u64,
+}
+
+/// Result of `list_projects`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ProjectsOut {
+    /// Projects this key can use.
+    pub projects: Vec<ProjectOut>,
+    /// Allowed document types.
+    pub types: Vec<String>,
+    /// Allowed statuses.
+    pub statuses: Vec<String>,
+    /// Type used when none is given.
+    pub default_type: String,
+    /// Status used when none is given.
+    pub default_status: String,
+}
+
+/// A document's metadata.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct DocumentOut {
+    /// Document ID.
+    pub id: String,
+    /// Project name.
+    pub project: String,
+    /// Document type.
+    #[serde(rename = "type")]
+    pub doc_type: String,
+    /// Title.
+    pub title: String,
+    /// Status.
+    pub status: String,
+    /// Latest revision.
+    pub revision: u64,
+    /// Path within the vault.
+    pub path: String,
+    /// Creation time (UTC).
+    pub created: String,
+    /// Key that created it.
+    pub created_by: String,
+    /// Time of the latest revision (UTC).
+    pub updated: String,
+    /// Key that wrote the latest revision.
+    pub updated_by: String,
+    /// Client that wrote the latest revision.
+    pub client: String,
+}
+
+impl From<DocumentInfo> for DocumentOut {
+    fn from(doc: DocumentInfo) -> Self {
+        Self {
+            id: doc.id,
+            project: doc.project,
+            doc_type: doc.doc_type,
+            title: doc.title,
+            status: doc.status,
+            revision: doc.revision,
+            path: doc.path,
+            created: doc.created,
+            created_by: doc.created_by,
+            updated: doc.updated,
+            updated_by: doc.updated_by,
+            client: doc.client,
+        }
+    }
+}
+
+/// One revision.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RevisionOut {
+    /// Revision number.
+    pub revision: u64,
+    /// What happened: `create`, `update`, `rename`, `front_matter` or `archive`.
+    pub action: String,
+    /// Key that made it.
+    pub author: String,
+    /// Client that made it.
+    pub client: String,
+    /// History summary.
+    pub summary: String,
+    /// Time (UTC).
+    pub at: String,
+}
+
+impl From<RevisionInfo> for RevisionOut {
+    fn from(rev: RevisionInfo) -> Self {
+        Self {
+            revision: rev.revision,
+            action: rev.action,
+            author: rev.author,
+            client: rev.client,
+            summary: rev.summary,
+            at: rev.at,
+        }
+    }
+}
+
+/// Result of `get_document`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct GetDocumentOut {
+    /// The whole document: front matter and body.
+    pub markdown: String,
+    /// Current metadata.
+    pub document: DocumentOut,
+    /// The revision returned.
+    pub revision: RevisionOut,
+}
+
+/// Result of `list_documents`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ListDocumentsOut {
+    /// One page of documents, without content.
+    pub items: Vec<DocumentOut>,
+    /// How many documents match.
+    pub total: u64,
+    /// `start` for the next page, if any.
+    pub next_start: Option<u64>,
+}
+
+/// Result of a document change.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ChangedOut {
+    /// Document ID.
+    pub document_id: String,
+    /// The new revision.
+    pub revision: u64,
+    /// Path within the vault.
+    pub path: String,
+    /// The complete front matter now in the document.
+    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
+    pub front_matter: Fields,
+}
+
+impl From<Changed> for ChangedOut {
+    fn from(changed: Changed) -> Self {
+        Self {
+            document_id: changed.id,
+            revision: changed.revision,
+            path: changed.path,
+            front_matter: changed.front_matter,
+        }
+    }
+}
+
+/// Result of `archive_document`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ArchivedOut {
+    /// Document ID.
+    pub document_id: String,
+    /// The archive revision.
+    pub revision: u64,
+    /// When it was archived (UTC).
+    pub archived_at: String,
+}
+
+// ----------------------------------------------------------------- tools
+
+fn identify(ctx: &RequestContext<RoleServer>) -> Result<(Caller, Actor), ToolError> {
+    let caller = ctx
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<Caller>())
+        .cloned()
+        .ok_or_else(ToolError::unauthenticated)?;
+    let client = ctx
+        .meta
+        .client_info()
+        .map(|info| info.name)
+        .or_else(|| {
+            ctx.peer
+                .peer_info()
+                .map(|info| info.client_info.name.clone())
+        })
+        .unwrap_or_default();
+    let actor = Actor::new(caller.name.clone(), &client);
+    Ok((caller, actor))
+}
+
+fn require_project(caller: &Caller, project: &str, needed: Permission) -> Result<(), ToolError> {
+    match caller.permission(project) {
+        Some(permission) if permission.allows(needed) => Ok(()),
+        Some(_) => Err(ToolError::permission_denied(project)),
+        None => Err(store::Error::ProjectNotFound(project.to_owned()).into()),
+    }
+}
+
+fn require_document(
+    store: &Store,
+    caller: &Caller,
+    id: &str,
+    needed: Permission,
+) -> Result<(), ToolError> {
+    let not_found = || ToolError::from(store::Error::NotFound(id.trim().to_owned()));
+    let project = store.project_of_document(id)?.ok_or_else(not_found)?;
+    match caller.permission(&project.name) {
+        Some(permission) if permission.allows(needed) => Ok(()),
+        Some(_) => Err(ToolError::permission_denied(&project.name)),
+        None => Err(not_found()),
+    }
+}
+
+impl JoeDocsServer {
+    /// A server over the shared store.
+    #[must_use]
+    pub fn new(shared: Arc<Shared>) -> Self {
+        Self {
+            shared,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Runs a read-only operation.
+    async fn read<T, F>(&self, ctx: &RequestContext<RoleServer>, f: F) -> ToolResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Store, &Caller) -> Result<T, ToolError> + Send + 'static,
+    {
+        let result = async {
+            let (caller, _) = identify(ctx)?;
+            self.shared.with_store(move |store| f(store, &caller)).await
+        }
+        .await;
+        result.map(Json).map_err(ToolError::into_result)
+    }
+
+    /// Runs a change and records it, or the refusal, in the audit log.
+    async fn write<T, F>(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        tool: &'static str,
+        document_id: Option<String>,
+        f: F,
+    ) -> ToolResult<T>
+    where
+        T: AuditId + Send + 'static,
+        F: FnOnce(&mut Store, &Caller, &Actor) -> Result<T, ToolError> + Send + 'static,
+    {
+        let result = async {
+            let (caller, actor) = identify(ctx)?;
+            self.shared
+                .with_store(move |store| {
+                    let result = f(store, &caller, &actor);
+                    let (outcome, id) = match &result {
+                        Ok(value) => ("ok", value.audit_id().or(document_id)),
+                        Err(error) => (error.code, document_id),
+                    };
+                    if let Err(error) =
+                        store.audit(&caller.key_id, &actor, tool, id.as_deref(), outcome)
+                    {
+                        tracing::warn!(%error, tool, "cannot write the audit log");
+                    }
+                    result
+                })
+                .await
+        }
+        .await;
+        result.map(Json).map_err(ToolError::into_result)
+    }
+}
+
+/// The document a change result refers to, for the audit log.
+trait AuditId {
+    fn audit_id(&self) -> Option<String>;
+}
+
+impl AuditId for ChangedOut {
+    fn audit_id(&self) -> Option<String> {
+        Some(self.document_id.clone())
+    }
+}
+
+impl AuditId for ArchivedOut {
+    fn audit_id(&self) -> Option<String> {
+        Some(self.document_id.clone())
+    }
+}
+
+#[tool_router(router = tool_router)]
+impl JoeDocsServer {
+    #[tool(
+        description = "List the projects this API key can use, with your permission on each and the allowed document types and statuses. Call this first.",
+        annotations(read_only_hint = true)
+    )]
+    async fn list_projects(
+        &self,
+        Parameters(_): Parameters<NoParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ProjectsOut>, CallToolResult> {
+        let settings = self.shared.settings.clone();
+        self.read(&ctx, move |store, caller| {
+            let projects = store
+                .projects()?
+                .into_iter()
+                .filter_map(|p| {
+                    caller.permission(&p.name).map(|permission| ProjectOut {
+                        permission: permission.to_string(),
+                        name: p.name,
+                        key: p.key,
+                        title: p.title,
+                        documents: p.documents,
+                    })
+                })
+                .collect();
+            Ok(ProjectsOut {
+                projects,
+                types: settings.types,
+                statuses: settings.statuses,
+                default_type: settings.default_type,
+                default_status: settings.default_status,
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "List a project's documents (metadata only, no content), optionally filtered by type and status, one page at a time.",
+        annotations(read_only_hint = true)
+    )]
+    async fn list_documents(
+        &self,
+        Parameters(params): Parameters<ListDocumentsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ListDocumentsOut>, CallToolResult> {
+        self.read(&ctx, move |store, caller| {
+            require_project(caller, &params.project, Permission::Read)?;
+            let listing = store.list(&ListRequest {
+                project: params.project,
+                doc_type: Some(params.doc_type),
+                status: params.status,
+                sort: params.sort.into(),
+                start: params.start,
+                limit: params.limit,
+            })?;
+            Ok(ListDocumentsOut {
+                items: listing.items.into_iter().map(DocumentOut::from).collect(),
+                total: listing.total,
+                next_start: listing.next_start,
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Read a document: the whole Markdown file (front matter and body) and its metadata. Pass version to read an earlier revision.",
+        annotations(read_only_hint = true)
+    )]
+    async fn get_document(
+        &self,
+        Parameters(params): Parameters<GetDocumentParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<GetDocumentOut>, CallToolResult> {
+        self.read(&ctx, move |store, caller| {
+            require_document(store, caller, &params.document_id, Permission::Read)?;
+            let fetched = store.get(&params.document_id, params.version)?;
+            Ok(GetDocumentOut {
+                markdown: fetched.markdown,
+                document: fetched.document.into(),
+                revision: fetched.revision.into(),
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Create a document at revision 1. Give the Markdown body in content; the server writes the front matter. Returns the new document ID.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    async fn new_document(
+        &self,
+        Parameters(params): Parameters<NewDocumentParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        self.write(&ctx, "new_document", None, move |store, caller, actor| {
+            require_project(caller, &params.project, Permission::Write)?;
+            let changed = store.create(
+                actor,
+                NewDocument {
+                    project: params.project,
+                    doc_type: params.doc_type,
+                    status: params.status,
+                    title: params.title,
+                    content: params.content,
+                    front_matter: params.front_matter.unwrap_or_default(),
+                    summary: params.summary,
+                },
+            )?;
+            Ok(changed.into())
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Replace a document's body. expected_revision must be the revision you last read; on a conflict error, read it again and merge. front_matter keys given here are set as in change_document_front_matter.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn update_document(
+        &self,
+        Parameters(params): Parameters<UpdateDocumentParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "update_document",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let changed = store.update(
+                    actor,
+                    Update {
+                        id: params.document_id,
+                        content: params.content,
+                        expected_revision: params.expected_revision,
+                        front_matter: params.front_matter.unwrap_or_default(),
+                        summary: params.summary,
+                    },
+                )?;
+                Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Change a document's title. The file is renamed and the old title is kept in aliases.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    async fn rename_document(
+        &self,
+        Parameters(params): Parameters<RenameDocumentParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "rename_document",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let changed = store.rename(
+                    actor,
+                    &params.document_id,
+                    &params.title,
+                    params.expected_revision,
+                )?;
+                Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Set and remove front matter keys without touching the body. status, tags and aliases can be set but not removed; server keys (id, title, type, revision, ...) cannot be changed here.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn change_document_front_matter(
+        &self,
+        Parameters(params): Parameters<ChangeFrontMatterParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "change_document_front_matter",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let changed = store.change_front_matter(
+                    actor,
+                    &params.document_id,
+                    &params.set.unwrap_or_default(),
+                    &params.remove.unwrap_or_default(),
+                    params.expected_revision,
+                )?;
+                Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Archive a document: it disappears from listings and the vault, but its history is kept and an administrator can restore it.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn archive_document(
+        &self,
+        Parameters(params): Parameters<ArchiveDocumentParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ArchivedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "archive_document",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let archived = store.archive(actor, &params.document_id, &params.reason)?;
+                Ok(ArchivedOut {
+                    document_id: archived.id,
+                    revision: archived.revision,
+                    archived_at: archived.archived_at,
+                })
+            },
+        )
+        .await
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for JoeDocsServer {
+    // The macro would generate this as an `async fn` with no `.await`.
+    fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
+        let cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+        std::future::ready(Ok(ListToolsResult {
+            result_type: Some(ResultType::COMPLETE),
+            tools: self.tool_router.list_all(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: cache_hints.then_some(0),
+            cache_scope: cache_hints.then_some(CacheScope::Public),
+        }))
+    }
+
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("joedocs", env!("CARGO_PKG_VERSION")))
+            .with_instructions(INSTRUCTIONS)
+    }
+}

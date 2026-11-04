@@ -37,6 +37,8 @@ pub enum Command {
     /// Create the vault, state directory, database and history (safe to
     /// rerun).
     Init,
+    /// Run the MCP server on `server.bind` until Ctrl-C or SIGTERM.
+    Serve,
     /// Register and list projects.
     Project {
         /// What to do.

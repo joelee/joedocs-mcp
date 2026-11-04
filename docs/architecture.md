@@ -14,6 +14,8 @@ flowchart LR
     main -->|init| tracing[tracing-subscriber]
     main -->|execute| exec[lib::execute]
     exec --> show[config::render_show / render_paths]
+    exec -->|serve| mcp[mcp: axum + rmcp]
+    mcp -->|bearer key| store
     exec -->|init, project, key| admin[admin: reports]
     admin --> store[store::Store]
     store --> db[(db: SQLite)]
@@ -41,7 +43,12 @@ flowchart LR
 | `history` | `History` trait and `GitCli`, with the git directory outside the vault. |
 | `auth` | API key generation, parsing, hashing and verification; `Permission` and `Grant`; `RandomSource`. |
 | `admin` | Text reports for `init`, `project` and `key`. |
-| `search`, `mcp` | Empty skeletons for phases 3 and 2; responsibilities are in [plan.md](plan.md#14-code-layout). |
+| `mcp` | `joedocs serve`: the axum app (`/mcp` behind bearer authentication, `/health`), rmcp's Streamable HTTP service with `Host`/`Origin` checks, the eight tools with JSON schemas, grant checks, audit logging, and error mapping. |
+| `search` | Empty skeleton for phase 3; responsibilities are in [plan.md](plan.md#14-code-layout). |
+
+## Request path
+
+An MCP request first passes the bearer-key middleware, which looks the token up (SHA-256 of the secret) and attaches the key's name and grants to the request. rmcp then checks `Host` and `Origin` and dispatches the tool. Each tool checks the grant for the target project, runs the store operation under the store mutex on a blocking thread, writes an audit entry for changes, and returns structured JSON or a structured error.
 
 ## Write path
 
@@ -68,5 +75,5 @@ flowchart TD
 - **In-house config resolution.** Precedence, override parsing and provenance are explicit and testable without mutating the process environment, which is `unsafe` in Rust 2024.
 - **Every config key has a default.** Defaults define each key's type, which is how environment override strings are parsed.
 - **Secrets are separate from config.** They never appear in `config.toml`, overrides or `config show` output.
-- **Exit codes follow `sysexits.h`.** `65` for requests the user can fix, `70` for store faults, `74` for output errors, `78` for configuration errors.
+- **Exit codes follow `sysexits.h`.** `65` for requests the user can fix, `69` when the server cannot listen, `70` for store faults, `74` for output errors, `78` for configuration errors.
 - **Git through its command line.** No new crates, and administrators can inspect the history with normal git. The user's git configuration is ignored so hooks and signing cannot interfere.
