@@ -141,10 +141,19 @@ pub struct NewKey {
 /// Returns an error when random bytes are unavailable.
 pub fn generate(random: &dyn RandomSource) -> Result<NewKey, RandomError> {
     let mut id = [0u8; ID_BYTES];
-    let mut secret = [0u8; SECRET_BYTES];
     random.fill(&mut id)?;
+    new_secret(&hex(&id), random)
+}
+
+/// Generates a new secret, and so a new token, for the key with this ID.
+///
+/// # Errors
+///
+/// Returns an error when random bytes are unavailable.
+pub fn new_secret(id: &str, random: &dyn RandomSource) -> Result<NewKey, RandomError> {
+    let mut secret = [0u8; SECRET_BYTES];
     random.fill(&mut secret)?;
-    let id = hex(&id);
+    let id = id.to_owned();
     let secret = hex(&secret);
     let secret_sha256 = hash_secret(&secret);
     let token = SecretString::from(format!("{KEY_PREFIX}{id}_{secret}"));

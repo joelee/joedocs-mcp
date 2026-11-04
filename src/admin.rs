@@ -286,6 +286,20 @@ pub fn key(
                 grant_list(&key.grants)
             )?;
         }
+        KeyCommand::Rotate { name } => {
+            let rotated = store.rotate_key(name, random)?;
+            writeln!(
+                out,
+                "Rotated API key {} (id {}); the old token no longer works.",
+                rotated.key.name, rotated.key.id
+            )?;
+            writeln!(
+                out,
+                "The new token is shown only now. Give it to the MCP client as:"
+            )?;
+            writeln!(out, "  Authorization: Bearer <token>")?;
+            writeln!(out, "{}", rotated.token.expose_secret())?;
+        }
         KeyCommand::Revoke { name } => {
             let key = store.revoke(name)?;
             writeln!(

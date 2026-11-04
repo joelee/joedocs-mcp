@@ -20,7 +20,7 @@ pub use documents::{
 };
 pub use keys::{
     KeyRow, find_key_by_id, find_key_by_name, insert_key, key_secret, list_keys, revoke_key,
-    set_grant, touch_key,
+    set_grant, set_key_secret, touch_key,
 };
 pub use projects::{
     ProjectRow, allocate_seq, find_project, find_project_by_id, insert_project, list_projects,

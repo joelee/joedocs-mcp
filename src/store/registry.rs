@@ -148,6 +148,38 @@ impl Store {
         Ok(key)
     }
 
+    /// Issues a new token for a key and invalidates the old one at once.
+    /// The key keeps its ID, name and grants, so the audit log and the
+    /// history still attribute its changes to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::KeyNotFound`], [`Error::Invalid`] for a revoked key
+    /// (revocation is permanent; create a new key), and database or random
+    /// source errors.
+    pub fn rotate_key(
+        &mut self,
+        name: &str,
+        random: &dyn RandomSource,
+    ) -> Result<CreatedKey, Error> {
+        let tx = self.conn.transaction()?;
+        let key =
+            db::find_key_by_name(&tx, name)?.ok_or_else(|| Error::KeyNotFound(name.to_owned()))?;
+        if key.revoked_at.is_some() {
+            return Err(Error::invalid(
+                "name",
+                format!("API key {name} is revoked; create a new key instead"),
+            ));
+        }
+        let new = auth::new_secret(&key.id, random)?;
+        db::set_key_secret(&tx, &key.id, &new.secret_sha256)?;
+        tx.commit()?;
+        Ok(CreatedKey {
+            key,
+            token: new.token,
+        })
+    }
+
     /// Revokes a key. Revoking a revoked key changes nothing.
     ///
     /// # Errors

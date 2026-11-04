@@ -110,7 +110,7 @@ joedocs serve                                  run the MCP server
 joedocs project add <name> --key JD [--title ...]
 joedocs project list
 joedocs key create <name> --grant joedocs:write --grant other:read   (prints the key once)
-joedocs key list | grant | revoke
+joedocs key list | grant | rotate | revoke      (rotate prints a new token for the same key)
 joedocs archive list [--project P]
 joedocs archive restore <document-id>
 joedocs reindex                                rebuild the DB index and FTS from the files and git
@@ -501,3 +501,5 @@ Phase 4 implementation choices, 2026-11-04 (open to revision):
 | `check` | Read-only. Reports an index behind the history, vault files missing or differing from the history (with the git command that discards the change), and files no live document owns (dot-files and dot-folders such as `.obsidian` are ignored). Exits `1` when it finds problems. |
 | New actions | `edit`, `append`, `move`, `restore`, `unarchive` in `JoeDocs-Action`; `reindex` treats every action except `archive` as having content. |
 | Link rewriting | Deferred (section 16). |
+
+After phase 4, 2026-11-04: `key rotate <name>` issues a new token for an existing key. The key keeps its ID (the first part of the token), name and grants, so the audit log and history stay attributed to it; only the secret's hash is replaced, so the old token stops working at once. A revoked key cannot be rotated: revocation is permanent, so create a new key instead.

@@ -812,6 +812,36 @@ fn tokens_authenticate_until_revoked() {
 }
 
 #[test]
+fn rotating_a_key_replaces_its_token_but_keeps_its_id_and_grants() {
+    let mut fx = fixture();
+    let grants = ["joedocs:write".parse().unwrap()];
+    let created = fx
+        .store
+        .create_key("laptop", &grants, &CountingRandom(3))
+        .unwrap();
+    let rotated = fx.store.rotate_key("laptop", &CountingRandom(90)).unwrap();
+    assert_eq!(rotated.key.id, created.key.id);
+    assert_eq!(rotated.key.grants, created.key.grants);
+    let (id, _) = crate::auth::parse_token(&rotated.token).unwrap();
+    assert_eq!(id, created.key.id);
+    assert!(fx.store.authenticate(&created.token).unwrap().is_none());
+    let key = fx.store.authenticate(&rotated.token).unwrap().unwrap();
+    assert_eq!(key.name, "laptop");
+
+    assert!(matches!(
+        fx.store.rotate_key("nobody", &CountingRandom(1)),
+        Err(Error::KeyNotFound(_))
+    ));
+    fx.store.revoke("laptop").unwrap();
+    let err = fx
+        .store
+        .rotate_key("laptop", &CountingRandom(5))
+        .unwrap_err();
+    assert!(err.to_string().contains("is revoked"), "{err}");
+    assert!(fx.store.authenticate(&rotated.token).unwrap().is_none());
+}
+
+#[test]
 fn documents_map_to_projects_by_key() {
     let fx = fixture();
     assert_eq!(

@@ -121,6 +121,12 @@ pub enum KeyCommand {
         #[arg(required = true, value_name = "PROJECT:PERMISSION")]
         grants: Vec<Grant>,
     },
+    /// Print a new token for a key; the old token stops working at once.
+    /// The key keeps its name and grants.
+    Rotate {
+        /// Key name.
+        name: String,
+    },
     /// Revoke a key immediately.
     Revoke {
         /// Key name.

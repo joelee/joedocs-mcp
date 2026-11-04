@@ -161,6 +161,24 @@ pub fn set_grant(
     Ok(())
 }
 
+/// Replaces a key's secret hash, so only a token with the new secret
+/// authenticates.
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn set_key_secret(
+    conn: &Connection,
+    key_id: &str,
+    secret_sha256: &[u8],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE api_keys SET secret_sha256 = ?2 WHERE id = ?1",
+        params![key_id, secret_sha256],
+    )?;
+    Ok(())
+}
+
 /// Marks a key revoked at `at`, unless it already is.
 ///
 /// # Errors

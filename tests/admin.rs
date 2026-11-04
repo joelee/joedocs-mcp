@@ -127,11 +127,49 @@ fn projects_and_keys_can_be_managed() {
         .assert()
         .code(65)
         .stderr("error: project other does not exist\n");
+
+    let output = cmd(root.path())
+        .args(["key", "rotate", "laptop"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rotated = String::from_utf8(output).unwrap();
+    assert!(
+        rotated.starts_with("Rotated API key laptop (id "),
+        "{rotated}"
+    );
+    let new_token = rotated.lines().last().unwrap();
+    assert_eq!(new_token.len(), 80);
+    assert_ne!(new_token, token);
+    assert_eq!(new_token[..16], token[..16], "the key ID is kept");
+    let store = library_store(root.path()).unwrap();
+    assert!(
+        store
+            .authenticate(&token.to_owned().into())
+            .unwrap()
+            .is_none()
+    );
+    let key = store
+        .authenticate(&new_token.to_owned().into())
+        .unwrap()
+        .unwrap();
+    assert_eq!(key.grants.len(), 1);
+    drop(store);
+
     cmd(root.path())
         .args(["key", "revoke", "laptop"])
         .assert()
         .success()
         .stdout(predicate::str::starts_with("API key laptop is revoked"));
+    cmd(root.path())
+        .args(["key", "rotate", "laptop"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains(
+            "is revoked; create a new key instead",
+        ));
 }
 
 /// Opens the store the binary uses under `root`, through the library.

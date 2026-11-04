@@ -54,6 +54,7 @@ Commands:
   key create NAME [--grant PROJECT:PERMISSION]...
   key list
   key grant NAME PROJECT:PERMISSION...
+  key rotate NAME                     Print a new token; the old one stops working
   key revoke NAME
 ```
 
