@@ -43,12 +43,25 @@ pub struct DocumentRow {
     pub archive_reason: Option<String>,
 }
 
-const SELECT: &str = "SELECT d.id, d.project_id, p.name, d.seq, d.type, d.title, d.path,
-    d.status, d.revision, d.created_at, d.created_by, d.updated_at, d.updated_by, d.client,
-    d.content_sha256, d.archived_at, d.archived_by, d.archive_reason
-    FROM documents d JOIN projects p ON p.id = d.project_id";
+/// The columns [`from_row`] reads, from `documents d` joined to `projects p`.
+macro_rules! columns {
+    () => {
+        "d.id, d.project_id, p.name, d.seq, d.type, d.title, d.path, d.status, d.revision,
+        d.created_at, d.created_by, d.updated_at, d.updated_by, d.client, d.content_sha256,
+        d.archived_at, d.archived_by, d.archive_reason"
+    };
+}
 
-fn from_row(row: &Row<'_>) -> rusqlite::Result<DocumentRow> {
+/// The columns [`from_row`] reads, for other queries.
+pub(super) const SELECT_COLUMNS: &str = columns!();
+
+const SELECT: &str = concat!(
+    "SELECT ",
+    columns!(),
+    " FROM documents d JOIN projects p ON p.id = d.project_id"
+);
+
+pub(super) fn from_row(row: &Row<'_>) -> rusqlite::Result<DocumentRow> {
     Ok(DocumentRow {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -144,6 +157,18 @@ pub fn save_document(conn: &Connection, doc: &DocumentRow) -> rusqlite::Result<(
 pub fn get_document(conn: &Connection, id: &str) -> rusqlite::Result<Option<DocumentRow>> {
     conn.query_row(&format!("{SELECT} WHERE d.id = ?1"), [id], from_row)
         .optional()
+}
+
+/// Every live document, by ID.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn live_documents(conn: &Connection) -> rusqlite::Result<Vec<DocumentRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE d.archived_at IS NULL ORDER BY d.project_id, d.seq"
+    ))?;
+    stmt.query_map([], from_row)?.collect()
 }
 
 /// Whether a live document other than `except` uses `path`, compared

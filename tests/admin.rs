@@ -1,4 +1,5 @@
-//! End-to-end tests of the admin commands (`init`, `project`, `key`) run
+//! End-to-end tests of the admin commands (`init`, `project`, `key`,
+//! `reindex`) run
 //! through the compiled binary against a temporary vault and real git.
 
 use std::path::{Path, PathBuf};
@@ -131,4 +132,95 @@ fn projects_and_keys_can_be_managed() {
         .assert()
         .success()
         .stdout(predicate::str::starts_with("API key laptop is revoked"));
+}
+
+/// Opens the store the binary uses under `root`, through the library.
+fn library_store(root: &Path) -> Result<joedocs::store::Store, joedocs::store::Error> {
+    use std::sync::Arc;
+    let paths = joedocs::store::Paths {
+        home: vault(root),
+        state_dir: root.join("state"),
+    };
+    let git = joedocs::history::GitCli::new(paths.git_dir(), &paths.home);
+    joedocs::store::Store::open(
+        paths,
+        joedocs::store::Settings::from_config(&joedocs::Config::default()),
+        Box::new(git),
+        Arc::new(joedocs::clock::FixedClock::at(1_793_000_000)),
+    )
+}
+
+#[test]
+fn reindex_rebuilds_from_the_history_and_reports_problems() {
+    use joedocs::store::{Actor, NewDocument};
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let mut store = library_store(root.path()).unwrap();
+    let actor = Actor::new("laptop", "test");
+    for title in ["Kept", "Gone"] {
+        store
+            .create(
+                &actor,
+                NewDocument {
+                    project: "joedocs".into(),
+                    title: title.into(),
+                    content: "x".into(),
+                    ..NewDocument::default()
+                },
+            )
+            .unwrap();
+    }
+    store.archive(&actor, "JD-2", "test").unwrap();
+    drop(store);
+
+    cmd(root.path())
+        .arg("reindex")
+        .assert()
+        .success()
+        .stdout("Rebuilt the index from the history: 2 documents (1 archived), 3 revisions.\n");
+
+    std::fs::write(vault(root.path()).join("joedocs/home/Kept.md"), "edited").unwrap();
+    for suffix in ["", "-wal", "-shm"] {
+        let file = root.path().join(format!("state/joedocs.db{suffix}"));
+        std::fs::remove_file(file).unwrap_or_default();
+    }
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path()).arg("reindex").assert().success().stdout(
+        "Rebuilt the index from the history: 2 documents (1 archived), 3 revisions.\n\
+         Recreated project joedocs (key JD), which was missing from the database; \
+         its title is its name.\n\
+         Warning: these vault files differ from the history, so writes to them are refused:\n  \
+         JD-1  joedocs/home/Kept.md\n",
+    );
+}
+
+#[test]
+fn reindex_reports_a_history_it_cannot_replay() {
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    std::fs::write(vault(root.path()).join("x.md"), "x").unwrap();
+    let git =
+        joedocs::history::GitCli::new(root.path().join("state/history.git"), vault(root.path()));
+    joedocs::history::History::commit(
+        &git,
+        &joedocs::history::Commit {
+            paths: vec!["x.md".into()],
+            author: "someone".into(),
+            at: jiff::Timestamp::UNIX_EPOCH,
+            message: "x\n\nJoeDocs-Document: JD-1\nJoeDocs-Revision: 1\nJoeDocs-Action: create\n"
+                .into(),
+        },
+    )
+    .unwrap();
+    cmd(root.path())
+        .arg("reindex")
+        .assert()
+        .code(70)
+        .stderr(predicate::str::contains(
+            "cannot rebuild the index from history commit",
+        ));
 }

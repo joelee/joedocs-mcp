@@ -37,8 +37,12 @@ pub enum Command {
     /// Create the vault, state directory, database and history (safe to
     /// rerun).
     Init,
-    /// Run the MCP server on `server.bind` until Ctrl-C or SIGTERM.
+    /// Run the MCP server on `server.bind` until Ctrl-C or SIGTERM. The
+    /// index is rebuilt first if it is behind the history.
     Serve,
+    /// Rebuild the document index and search from the history (safe to
+    /// rerun; projects and API keys are kept).
+    Reindex,
     /// Register and list projects.
     Project {
         /// What to do.

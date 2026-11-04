@@ -43,6 +43,46 @@ pub struct Commit {
     pub message: String,
 }
 
+/// How a commit changed one path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    /// The file was added.
+    Added,
+    /// The file was modified.
+    Modified,
+    /// The file was deleted.
+    Deleted,
+}
+
+/// A commit read back from the history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Logged {
+    /// Commit ID.
+    pub id: String,
+    /// Author name.
+    pub author: String,
+    /// Author time.
+    pub at: Timestamp,
+    /// First line of the message.
+    pub subject: String,
+    /// Message trailers (`Key: value`), in order.
+    pub trailers: Vec<(String, String)>,
+    /// Changed paths, relative to the vault. Renames are a deletion and an
+    /// addition.
+    pub changes: Vec<(Change, String)>,
+}
+
+impl Logged {
+    /// The value of the first trailer named `key`.
+    #[must_use]
+    pub fn trailer(&self, key: &str) -> Option<&str> {
+        self.trailers
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
 /// Version history of the vault.
 pub trait History: Send {
     /// Whether the history store exists.
@@ -77,6 +117,13 @@ pub trait History: Send {
     /// Returns [`HistoryError::Missing`] when the commit or path does not
     /// exist.
     fn show(&self, id: &str, path: &str) -> Result<Vec<u8>, HistoryError>;
+
+    /// Every commit, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the history cannot be read.
+    fn log(&self) -> Result<Vec<Logged>, HistoryError>;
 }
 
 /// [`History`] over the `git` command line, with the git directory outside
@@ -283,6 +330,77 @@ impl History for GitCli {
         }
         Ok(self.checked(&["cat-file", "blob", &object], None)?.stdout)
     }
+
+    fn log(&self) -> Result<Vec<Logged>, HistoryError> {
+        if self.head()?.is_none() {
+            return Ok(Vec::new());
+        }
+        let output = self.checked(
+            &[
+                "log",
+                "--reverse",
+                "--no-renames",
+                "--name-status",
+                "-z",
+                LOG_FORMAT,
+            ],
+            None,
+        )?;
+        parse_log(&String::from_utf8_lossy(&output.stdout))
+    }
+}
+
+/// `git log` format: a record separator, then NUL-separated fields. With
+/// `-z`, the changed paths follow as NUL-separated status and path pairs.
+const LOG_FORMAT: &str =
+    "--format=%x1e%H%x00%an%x00%at%x00%s%x00%(trailers:only,unfold,separator=%x1f)%x00";
+
+fn parse_log(text: &str) -> Result<Vec<Logged>, HistoryError> {
+    let malformed = |what: &str| HistoryError::Failed {
+        command: "log".to_owned(),
+        stderr: format!("unexpected output: {what}"),
+    };
+    let mut commits = Vec::new();
+    for record in text.split('\x1e').skip(1) {
+        let mut fields = record.split('\0');
+        let mut next = || fields.next().ok_or_else(|| malformed("a short record"));
+        let id = next()?.to_owned();
+        let author = next()?.to_owned();
+        let at = next()?
+            .parse::<i64>()
+            .ok()
+            .and_then(|secs| Timestamp::from_second(secs).ok())
+            .ok_or_else(|| malformed("a bad author time"))?;
+        let subject = next()?.to_owned();
+        let trailers = next()?
+            .split('\x1f')
+            .filter_map(|line| line.split_once(':'))
+            .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+            .collect();
+        let mut changes = Vec::new();
+        let mut rest = fields.filter(|field| !field.trim().is_empty());
+        while let Some(status) = rest.next() {
+            let change = match status.trim() {
+                "A" => Change::Added,
+                "M" | "T" => Change::Modified,
+                "D" => Change::Deleted,
+                other => return Err(malformed(&format!("change status {other}"))),
+            };
+            let path = rest
+                .next()
+                .ok_or_else(|| malformed("a status without a path"))?;
+            changes.push((change, path.to_owned()));
+        }
+        commits.push(Logged {
+            id,
+            author,
+            at,
+            subject,
+            trailers,
+            changes,
+        });
+    }
+    Ok(commits)
 }
 
 #[cfg(test)]
@@ -425,6 +543,75 @@ mod tests {
                 .to_string()
                 .starts_with("git init failed")
         );
+    }
+
+    #[test]
+    fn the_log_lists_commits_oldest_first_with_trailers_and_changes() {
+        let repo = repo();
+        assert_eq!(repo.git.log().unwrap(), []);
+        fs::create_dir_all(repo.home.join("p/plans")).unwrap();
+        fs::write(repo.home.join("p/plans/A b.md"), "one").unwrap();
+        let message = "Create JD-1: A b\n\nJoeDocs-Document: JD-1\nJoeDocs-Client: claude code\n";
+        let first = repo
+            .git
+            .commit(&commit(&["p/plans/A b.md"], message))
+            .unwrap();
+        fs::rename(
+            repo.home.join("p/plans/A b.md"),
+            repo.home.join("p/plans/B.md"),
+        )
+        .unwrap();
+        fs::write(repo.home.join("other.md"), "x").unwrap();
+        let second = repo
+            .git
+            .commit(&commit(
+                &["p/plans/A b.md", "p/plans/B.md", "other.md"],
+                "Rename",
+            ))
+            .unwrap();
+
+        let log = repo.git.log().unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].id, first);
+        assert_eq!(log[0].author, "laptop");
+        assert_eq!(log[0].at.as_second(), 1_793_000_000);
+        assert_eq!(log[0].subject, "Create JD-1: A b");
+        assert_eq!(log[0].trailer("JoeDocs-Document"), Some("JD-1"));
+        assert_eq!(log[0].trailer("JoeDocs-Client"), Some("claude code"));
+        assert_eq!(log[0].trailer("JoeDocs-Action"), None);
+        assert_eq!(
+            log[0].changes,
+            [(Change::Added, "p/plans/A b.md".to_owned())]
+        );
+        assert_eq!(log[1].id, second);
+        assert_eq!(log[1].trailers, Vec::new());
+        assert_eq!(
+            log[1].changes,
+            [
+                (Change::Added, "other.md".to_owned()),
+                (Change::Deleted, "p/plans/A b.md".to_owned()),
+                (Change::Added, "p/plans/B.md".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_log_output_is_an_error() {
+        assert_eq!(parse_log("").unwrap(), Vec::new());
+        let short = parse_log("\x1eabc\0laptop").unwrap_err();
+        assert!(short.to_string().contains("a short record"), "{short}");
+        let time = parse_log("\x1eabc\0laptop\0soon\0s\0\0").unwrap_err();
+        assert!(time.to_string().contains("author time"), "{time}");
+        let status = parse_log("\x1eabc\0laptop\x001\0s\0\0\0R100\0a\0").unwrap_err();
+        assert!(
+            status.to_string().contains("change status R100"),
+            "{status}"
+        );
+        let path = parse_log("\x1eabc\0laptop\x001\0s\0\0\0M\0").unwrap_err();
+        assert!(path.to_string().contains("without a path"), "{path}");
+        let ok = parse_log("\x1eabc\0laptop\x001\0s\0K: v\x1fbad\0\0\nM\0a.md\0").unwrap();
+        assert_eq!(ok[0].trailers, [("K".to_owned(), "v".to_owned())]);
+        assert_eq!(ok[0].changes, [(Change::Modified, "a.md".to_owned())]);
     }
 
     #[test]

@@ -293,16 +293,22 @@ fn check_alias(alias: &str) -> Result<(), String> {
     super::check_title(alias).map(|_| ())
 }
 
-fn check_key_name(key: &str) -> Result<(), FrontMatterError> {
+/// Whether `key` is a usable front matter key name: up to
+/// [`MAX_KEY_LEN`] ASCII letters, digits, `_` or `-`, not starting with `-`.
+#[must_use]
+pub fn is_key_name(key: &str) -> bool {
     let bytes = key.as_bytes();
-    let valid = bytes
+    bytes
         .first()
         .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
         && bytes.len() <= MAX_KEY_LEN
         && bytes
             .iter()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'));
-    if valid {
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+
+fn check_key_name(key: &str) -> Result<(), FrontMatterError> {
+    if is_key_name(key) {
         Ok(())
     } else {
         fail(format!(

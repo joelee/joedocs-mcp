@@ -21,7 +21,8 @@ use super::{Caller, Shared, ToolError};
 use crate::auth::Permission;
 use crate::document::front_matter::Fields;
 use crate::store::{
-    self, Actor, Changed, DocumentInfo, ListRequest, NewDocument, RevisionInfo, Sort, Store, Update,
+    self, Actor, Changed, DocumentInfo, ListRequest, NewDocument, RevisionInfo, SearchHit,
+    SearchRequest, Sort, Store, Update,
 };
 
 /// A tool's result. Tool signatures spell this out, because rmcp's macro
@@ -38,6 +39,8 @@ and the allowed document types and statuses.
 - Documents have stable IDs like JD-42. Titles become file names and can change.
 - `content` is the Markdown body only; JoeDocs writes the front matter. Mermaid and PlantUML \
 fenced code blocks are kept as written.
+- search_documents finds documents by words in the title and body (query) and by front matter \
+(filters); use project \"*\" to search every project you can read. Read a hit with get_document.
 - update_document needs the revision you last read (expected_revision). On a `conflict` error, \
 get_document again, merge, and retry.
 - Front matter: id, title, project, type, revision, created*, updated*, client are set by the \
@@ -102,6 +105,9 @@ fn default_limit() -> u64 {
 fn one() -> u64 {
     1
 }
+fn default_search_limit() -> u64 {
+    20
+}
 
 /// Arguments of `list_documents`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -124,6 +130,37 @@ pub struct ListDocumentsParams {
     /// Order of the items.
     #[serde(default)]
     pub sort: SortParam,
+}
+
+/// Arguments of `search_documents`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchDocumentsParams {
+    /// Project name, or "*" for every project this key can read.
+    pub project: String,
+    /// Document type, or "all".
+    #[serde(rename = "type", default = "all")]
+    pub doc_type: String,
+    /// Words to find in titles, aliases and bodies. All words must match;
+    /// "quoted phrase" matches words in order; -word excludes; word* matches
+    /// a prefix; a OR b matches either. Word endings are ignored (plans
+    /// matches plan). Omit to search by filters only.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Front matter conditions, all of which must hold, keyed by front
+    /// matter key. A plain value means equals, e.g. {"status": "approved"};
+    /// otherwise an object of operators: eq, ne, in (a list), contains (for
+    /// lists like tags), gt, gte, lt, lte (numbers, or dates as text such as
+    /// "2026-10-01"), exists (true or false). Text compares ignoring case.
+    /// Example: {"tags": {"contains": "security"}, "updated": {"gte": "2026-10-01"}}.
+    #[serde(default)]
+    pub filters: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Most results to return (1 to 200).
+    #[serde(default = "default_search_limit")]
+    pub limit: u64,
+    /// 1-based position of the first result; use `next_start` from the previous page.
+    #[serde(default = "one")]
+    pub start: u64,
 }
 
 /// Arguments of `get_document`.
@@ -355,6 +392,42 @@ pub struct ListDocumentsOut {
     pub next_start: Option<u64>,
 }
 
+/// One search result.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct SearchHitOut {
+    /// The document's metadata.
+    #[serde(flatten)]
+    pub document: DocumentOut,
+    /// Relevance, higher is better; absent without a query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// The best-matching part of the body, with matches marked «like this»;
+    /// absent without a query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+}
+
+impl From<SearchHit> for SearchHitOut {
+    fn from(hit: SearchHit) -> Self {
+        Self {
+            document: hit.document.into(),
+            score: hit.score,
+            snippet: hit.snippet,
+        }
+    }
+}
+
+/// Result of `search_documents`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct SearchDocumentsOut {
+    /// Best matches first (most recently updated first without a query).
+    pub items: Vec<SearchHitOut>,
+    /// How many documents match.
+    pub total: u64,
+    /// `start` for the next page, if any.
+    pub next_start: Option<u64>,
+}
+
 /// Result of a document change.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ChangedOut {
@@ -573,6 +646,39 @@ impl JoeDocsServer {
                 items: listing.items.into_iter().map(DocumentOut::from).collect(),
                 total: listing.total,
                 next_start: listing.next_start,
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Search documents by words in their title and body (query) and by front matter (filters), in one project or in every project you can read (project \"*\"). Returns metadata, a relevance score and a snippet per hit, best first; read a hit with get_document.",
+        annotations(read_only_hint = true)
+    )]
+    async fn search_documents(
+        &self,
+        Parameters(params): Parameters<SearchDocumentsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<SearchDocumentsOut>, CallToolResult> {
+        self.read(&ctx, move |store, caller| {
+            let projects = if params.project == "*" {
+                caller.grants.iter().map(|g| g.project.clone()).collect()
+            } else {
+                require_project(caller, &params.project, Permission::Read)?;
+                vec![params.project]
+            };
+            let results = store.search(&SearchRequest {
+                projects,
+                doc_type: Some(params.doc_type),
+                query: params.query.unwrap_or_default(),
+                filters: params.filters.unwrap_or_default(),
+                start: params.start,
+                limit: params.limit,
+            })?;
+            Ok(SearchDocumentsOut {
+                items: results.items.into_iter().map(SearchHitOut::from).collect(),
+                total: results.total,
+                next_start: results.next_start,
             })
         })
         .await

@@ -1,6 +1,6 @@
 # JoeDocs: initial plan
 
-Status: **phases 0 to 2 done**. The configuration, the document store, git history, the SQLite index, the admin `init`/`project`/`key` commands and the MCP server (`joedocs serve`, eight tools) are implemented; search (phase 3) and later phases are not. Choices made while building phases 1 and 2 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
+Status: **phases 0 to 3 done**. The configuration, the document store, git history, the SQLite index, the admin `init`/`project`/`key`/`reindex` commands, the MCP server (`joedocs serve`, nine tools) and search are implemented; phases 4 and 5 are not. Choices made while building phases 1 to 3 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
 
 ## 1. Goal
 
@@ -88,7 +88,7 @@ All tools return structured JSON (MCP `structuredContent` with an `outputSchema`
 | `rename_document` | `document_id`, `title`, `expected_revision?` | `revision`, `path` | Moves the file. The old title goes into `aliases`. |
 | `change_document_front_matter` | `document_id`, `set?` (JSON object), `remove?` (list of keys), `expected_revision?` | `revision`, `front_matter` | Only the named keys change. `remove` deletes **custom** keys only. Reserved keys can never be removed, and the server-owned ones cannot be set either (see section 5). `null` in `set` is rejected; use `remove` instead. Every change is a revision, so `diff_document` shows exactly which keys changed or were removed. |
 | `archive_document` | `document_id`, `reason` | `archived_at` | Removes the file from the vault and the document from list and search results. An administrator can restore it. |
-| `search_documents` | `project` (or `"*"` for every project the key can read), `type="all"`, `query`, `filters?`, `limit=200` | `items[]` with `project`, `snippet` and `score` | See section 7. |
+| `search_documents` | `project` (or `"*"` for every project the key can read), `type="all"`, `query?`, `filters?`, `limit=20` (at most 200), `start=1` | `items[]` (the `list_documents` metadata plus `score` and `snippet`), `total`, `next_start` | See section 7. **Implemented in phase 3.** |
 
 ### Proposed additions
 
@@ -187,7 +187,7 @@ How it works:
    Together with the front matter, the trailers make the whole document index **rebuildable from git** (`joedocs reindex`). Only projects and API keys live solely in SQLite, so back up the database.
 4. **Archive** is `git rm` plus a commit with `JoeDocs-Action: archive` and the reason, and the DB row is marked archived. **Restore** (admin CLI) checks the file out from the parent of the archive commit, writes it back to its old path (or a suffixed one if that path is taken) and commits. Nothing is ever lost, and the vault stays clean.
 5. All writes go through **one writer**: a single task inside `serve`, plus a file lock (`std::fs::File::lock`) so that the admin CLI and the server never write at the same time. This removes git index races and makes "write file, commit, update DB" a strict sequence.
-6. **Crash consistency.** Git and the files are the source of truth for content, and the DB is an index. On startup the server compares git `HEAD` with the last commit recorded in the DB and replays any commits it is missing.
+6. **Crash consistency.** Git and the files are the source of truth for content, and the DB is an index. On startup the server compares git `HEAD` with the last commit recorded in the DB and replays any commits it is missing. Phase 3 implements this as a full rebuild (`joedocs reindex`), which `serve` runs on start when the commits differ.
 7. **Off-site backup** (later): optionally `git push` the history to a private remote after each commit.
 
 Git implementation choice:
@@ -221,6 +221,7 @@ Git implementation choice:
 - `query` is a small, forgiving grammar: bare words, `"phrases"`, `-exclude`, `prefix*`, `OR`. JoeDocs parses it and **generates** the FTS5 expression, so an unbalanced quote never becomes a SQL error. Title matches rank above body matches (`bm25` column weights). Each result carries an FTS5 `snippet()`. An empty `query` with `filters` alone is a pure metadata query.
 - `filters` is an object keyed by front matter key. A plain value means equality. The operator objects are `eq`, `ne`, `in`, `contains` (for list keys like `tags`), `gt`/`gte`/`lt`/`lte` (for dates and numbers) and `exists`. Reserved and custom keys work the same way, because every front matter key is flattened into `doc_fields(document_id, key, value)`. List values become one row per item.
 - Only the **latest** revision of non-archived documents is indexed. Searching history can come later.
+- **Phase 3, as built:** every write replaces the document's `doc_fields` rows and its `doc_fts` row in the same transaction, and archiving removes them. The `title` column also holds the aliases, so a renamed document is still found by its old title. The tokenizer is `porter unicode61 remove_diacritics 2` (word endings and accents are ignored). Snippets come from the body, with matches between `«` and `»`. Without a `query`, results are ordered by most recent update. Filter semantics are in section 17.
 - Later: embedding search (for example `sqlite-vec`) for "find things like this" queries.
 
 ## 8. Authentication and transport
@@ -304,6 +305,12 @@ Migrations are plain `.sql` files embedded with `include_str!`, versioned with `
 - `revisions.commit_sha` is named `commit_id`.
 - A `meta` table holds `history_head`, the history commit the index reflects.
 - `doc_fields` and `doc_fts` arrive with search (phase 3), and `audit_log` with the MCP server (phase 2).
+
+Phase 3 added [`0003_search.sql`](../src/db/migrations/0003_search.sql), which differs from the draft as follows:
+
+- `doc_fields.value` compares without ASCII case, and a `num` column holds numbers, so they compare as numbers.
+- `doc_fts` has no `document_id` column. Its rowid is `project_id × 2³² + seq`, so a document's row is found without a scan.
+- The `meta` table gains `index_format`, the layout of the rebuildable index. A database with another value (or none, as from an older build) is rebuilt on the next `serve`.
 
 ## 11. Write path (example: `update_document`)
 
@@ -407,7 +414,7 @@ Time and randomness will be injected (`Clock` and key-generator traits) like `En
 | 0. Foundations | Remove the `greet` example; add the `server`, `storage` and `documents` config; approve dependencies and `deny.toml` | `just ci` is green with the real config schema (done); dependencies approved (done) |
 | 1. Core store (no network) | `Clock` trait (moved from phase 0, so it lands with its first user and the chosen time crate); `document` types and front matter; `db` schema and migrations; `history` via git; `store` create, get, update, rename, front matter (set and remove), archive and list; the integrity guard; `admin init/project/key` | Integration tests drive the store against a temp vault and real git, including a file edited behind the store's back (done) |
 | 2. MCP over HTTP | `serve`, bearer auth, Origin check, the section 3 tools, structured errors | An rmcp client in tests round-trips every tool (done), and Claude Code connects for real (to be confirmed on the server) |
-| 3. Search | FTS5 index, query grammar, filters, snippets, `reindex` | Search tests over a fixture vault |
+| 3. Search | FTS5 index, query grammar, filters, snippets, `reindex` | Search tests over a fixture vault (done) |
 | 4. History and editing tools | `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, `archive list/restore`, `check` (`list_projects` moved to phase 2) | |
 | 5. Operations | systemd unit, deploy guide (Caddy/Tailscale), optional `git push` backup, DB backup command. A local Docker Compose stack and `just docker-test` exist already (added after phase 2) | Running on the real server |
 | Later | Approval provenance (server-stamped `status_changed`/`status_changed_by`, `approve` grant for protected statuses); per-type templates (MCP prompts); documents as MCP resources; backlinks; embedding search; attachments; secret scanning on write | |
@@ -449,7 +456,7 @@ Phase 1 implementation choices, 2026-11-04 (open to revision):
 | File names | Stems are cut to 100 bytes; a title with nothing left becomes `Untitled`. The `(JD-42)` suffix is also used when an unknown file already occupies the path, so foreign files are never overwritten. Archiving removes the emptied type and project folders. |
 | Writes | Files are written atomically (temporary file, then rename). A failure before the history commit restores the files and rolls the database back. |
 | Reads | If a document's file no longer matches the index, `get` logs a warning and serves the committed revision from git; writes still refuse with `integrity`. |
-| Index drift | Before each write the index's `history_head` is compared with git `HEAD`. On a mismatch writes are refused (`OutOfSync`) until `reindex` exists (phase 3); the replay of section 6.6 arrives with it. |
+| Index drift | Before each write the index's `history_head` is compared with git `HEAD`. On a mismatch writes are refused (`OutOfSync`) until the index is rebuilt; phase 3 added `reindex`, which `serve` runs on start. |
 | Git | Commits run with the user's and system's git config ignored and literal pathspecs. The author and committer are the key name with e-mail `<name>@joedocs.invalid`, and the time comes from the injected clock. The history repository is bare apart from the `--work-tree` passed on every call. |
 | Exit codes | `65` (`EX_DATAERR`) for requests the user can fix, `70` (`EX_SOFTWARE`) for database, history or vault faults, alongside the existing `78` and `74`. |
 
@@ -466,3 +473,16 @@ Phase 2 implementation choices, 2026-11-04 (open to revision):
 | Client name | Taken from the per-request `clientInfo` (protocol 2026-07-28) or the `initialize` handshake, tidied to one line; `unknown` if absent. |
 | JSON key order | `front_matter` in tool results is a JSON object, whose key order is not significant (it comes out sorted); the file keeps its order. |
 | Exit codes | `69` (`EX_UNAVAILABLE`) when `serve` cannot bind or run. |
+
+Phase 3 implementation choices, 2026-11-04 (open to revision):
+
+| Topic | Choice |
+| --- | --- |
+| `search_documents` limit | Defaults to 20, not 200, to keep results cheap for agents; at most 200, with `start` paging as in `list_documents`. |
+| Query grammar | Terms are words or `"phrases"`, with a leading `-` to exclude and a trailing `*` for a prefix. Terms joined by upper-case `OR` match if any does; all other terms must match. An unclosed quote runs to the end. Terms with no letter or digit are ignored, and a query of exclusions only is `invalid_argument`. At most 1000 characters and 64 terms. |
+| Ranking | `bm25` with a title (and aliases) weight of 10 against 1 for the body; `score` is its negation, so higher is better. Ties go to the most recently updated. |
+| Filters | Each condition asks whether *some* value of the key (a list has one per item) satisfies it, so `contains` is the same as `eq`, and `ne` means no value equals. Operators on one key must all hold. Text compares without ASCII case; numbers compare as numbers; dates compare as text, which works for RFC 3339 prefixes such as `2026-10-01`. A plain list or `null` is rejected with a hint (`in`, `exists`). At most 32 conditions and 100 `in` values. |
+| `project: "*"` | Searches every project the key holds a grant on, read or write. |
+| `reindex` | Rebuilds documents, revisions and search from `git log` in one transaction; an error leaves the index unchanged. Commits without a `JoeDocs-Document` trailer are skipped and counted. A project missing from the database is recreated from front matter with its name as its title. Vault files that differ from the history are reported; writes to them stay refused by the integrity guard. |
+| `serve` start | Runs `reindex` when the recorded history head or index format differs, and logs the outcome. |
+| Commit dates | Fixed in phase 3: commits made by phases 1 and 2 have a 1970 author date, because the revision time was parsed back with a format jiff rejects. A `reindex` of such a history gives those revisions 1970 times; start such stores afresh. |

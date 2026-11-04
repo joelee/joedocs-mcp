@@ -273,7 +273,8 @@ impl Store {
             &self.settings.statuses,
         )
         .map_err(|e| Error::invalid("front_matter", e.0))?;
-        let now = self.now();
+        let at = self.clock.now();
+        let now = crate::clock::format_timestamp(at);
         let summary = tidy_line(request.summary.as_deref()).unwrap_or_else(|| title.clone());
 
         let Self {
@@ -320,13 +321,13 @@ impl Store {
             archive_reason: None,
         };
         let (row, fields, journal) = write_revision(
+            &tx,
             &paths.home,
             settings,
             row,
             &extra,
             &request.content,
             None,
-            |row| db::insert_document(&tx, row),
         )?;
         let changed = Changed {
             id: row.id.clone(),
@@ -336,6 +337,7 @@ impl Store {
         };
         let commit = Change {
             row: &row,
+            at,
             action: Action::Create,
             summary: &summary,
             actor,
@@ -444,7 +446,8 @@ impl Store {
         let reason =
             tidy_line(Some(reason)).ok_or_else(|| Error::invalid("reason", "must not be empty"))?;
         let id = parse_id(id)?;
-        let now = self.now();
+        let at = self.clock.now();
+        let now = crate::clock::format_timestamp(at);
         let Self {
             paths,
             conn,
@@ -464,12 +467,14 @@ impl Store {
         row.archived_by = Some(actor.name().to_owned());
         row.archive_reason = Some(reason.clone());
         db::save_document(&tx, &row)?;
+        db::unindex_document(&tx, &row)?;
 
         let file = paths.home.join(&row.path);
         let mut journal = Journal::default();
         journal.remove(&file)?;
         let commit = Change {
             row: &row,
+            at,
             action: Action::Archive,
             summary: &reason,
             actor,
@@ -585,7 +590,8 @@ impl Store {
         edit: impl FnOnce(&mut Draft, &Settings) -> Result<(), Error>,
     ) -> Result<Changed, Error> {
         let id = parse_id(id)?;
-        let now = self.now();
+        let at = self.clock.now();
+        let now = crate::clock::format_timestamp(at);
         let Self {
             paths,
             settings,
@@ -634,13 +640,13 @@ impl Store {
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);
         let (row, fields, journal) = write_revision(
+            &tx,
             &paths.home,
             settings,
             row,
             &draft.extra,
             &draft.body,
             Some(&old_path),
-            |row| db::save_document(&tx, row),
         )?;
         let summary = summary.unwrap_or_else(|| match action {
             Action::Rename => format!("{old_title} → {}", row.title),
@@ -654,6 +660,7 @@ impl Store {
         };
         let commit = Change {
             row: &row,
+            at,
             action,
             summary: &summary,
             actor,
@@ -664,18 +671,18 @@ impl Store {
     }
 }
 
-/// Renders `row` with `extra` and `body`, checks the size, saves the row
-/// with `save`, and writes the file (moving it from `old_path` if given and
-/// different). The returned journal undoes the file changes if it is
+/// Renders `row` with `extra` and `body`, checks the size, saves and
+/// indexes the row (inserting it when there is no `old_path`), and writes
+/// the file (moving it from `old_path` if given and different). The returned journal undoes the file changes if it is
 /// dropped before [`finish`] completes it.
 fn write_revision(
+    conn: &Connection,
     home: &Path,
     settings: &Settings,
     mut row: DocumentRow,
     extra: &Fields,
     body: &str,
     old_path: Option<&str>,
-    save: impl FnOnce(&DocumentRow) -> rusqlite::Result<()>,
 ) -> Result<(DocumentRow, Fields, Journal), Error> {
     let header = header(&row);
     let text = front_matter::render(&header, extra, body)
@@ -688,7 +695,14 @@ fn write_revision(
         });
     }
     row.content_sha256 = sha256(text.as_bytes());
-    save(&row)?;
+    if old_path.is_some() {
+        db::save_document(conn, &row)?;
+    } else {
+        db::insert_document(conn, &row)?;
+    }
+    let parsed = front_matter::parse(&text).map_err(|e| Error::invalid("front_matter", e.0))?;
+    db::index_document(conn, &row, &parsed.fields, parsed.body)?;
+    let fields = parsed.fields;
 
     let new_file = home.join(&row.path);
     let mut journal = Journal::default();
@@ -705,15 +719,14 @@ fn write_revision(
         }
         _ => journal.write(&new_file, text.as_bytes())?,
     }
-    let fields = front_matter::parse(&text)
-        .map(|parsed| parsed.fields)
-        .unwrap_or_default();
     Ok((row, fields, journal))
 }
 
 /// One revision about to be committed.
 struct Change<'a> {
     row: &'a DocumentRow,
+    /// Commit time: the revision's `updated` time.
+    at: jiff::Timestamp,
     action: Action,
     summary: &'a str,
     actor: &'a Actor,
@@ -731,6 +744,7 @@ fn finish(
 ) -> Result<(), Error> {
     let Change {
         row,
+        at,
         action,
         summary,
         actor,
@@ -750,8 +764,6 @@ fn finish(
     );
     let mut changed: Vec<String> = paths.iter().map(|p| (*p).to_owned()).collect();
     changed.dedup();
-    let at = jiff::Timestamp::strptime("%Y-%m-%dT%H:%M:%SZ", &row.updated_at)
-        .unwrap_or(jiff::Timestamp::UNIX_EPOCH);
     let commit_id = history.commit(&Commit {
         paths: changed,
         author: actor.name().to_owned(),
@@ -824,7 +836,7 @@ fn live_row(conn: &Connection, id: &DocumentId) -> Result<DocumentRow, Error> {
     Ok(row)
 }
 
-fn integrity(row: &DocumentRow) -> Error {
+pub(super) fn integrity(row: &DocumentRow) -> Error {
     Error::Integrity {
         id: row.id.clone(),
         path: row.path.clone(),
@@ -872,7 +884,11 @@ fn choose_path(
     )))
 }
 
-fn check_member(field: &'static str, value: &str, allowed: &[String]) -> Result<(), Error> {
+pub(super) fn check_member(
+    field: &'static str,
+    value: &str,
+    allowed: &[String],
+) -> Result<(), Error> {
     if allowed.iter().any(|a| a == value) {
         Ok(())
     } else {
@@ -895,7 +911,7 @@ fn tidy_line(text: Option<&str>) -> Option<String> {
     (!line.is_empty()).then_some(line)
 }
 
-fn sha256(bytes: &[u8]) -> Vec<u8> {
+pub(super) fn sha256(bytes: &[u8]) -> Vec<u8> {
     Sha256::digest(bytes).to_vec()
 }
 

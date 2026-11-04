@@ -136,6 +136,7 @@ async fn tools_are_listed_with_schemas_and_hints() {
             "list_projects",
             "new_document",
             "rename_document",
+            "search_documents",
             "update_document",
         ]
     );
@@ -146,8 +147,13 @@ async fn tools_are_listed_with_schemas_and_hints() {
             tool.name
         );
         let read_only = tool.annotations.as_ref().and_then(|a| a.read_only_hint);
-        let expected =
-            ["get_document", "list_documents", "list_projects"].contains(&tool.name.as_ref());
+        let expected = [
+            "get_document",
+            "list_documents",
+            "list_projects",
+            "search_documents",
+        ]
+        .contains(&tool.name.as_ref());
         assert_eq!(read_only, Some(expected), "{}", tool.name);
     }
 
@@ -177,6 +183,27 @@ async fn rename_change_list_and_archive(client: &Client) -> TestResult<()> {
     assert_eq!(changed["revision"], 4);
     assert!(changed["front_matter"].get("owner").is_none());
 
+    let found = ok(
+        client,
+        "search_documents",
+        json!({"project": "*", "query": "plan", "filters": {"due": {"gte": "2026-11-01"}}}),
+    )
+    .await?;
+    assert_eq!(found["total"], 1, "{found}");
+    let hit = &found["items"][0];
+    assert_eq!(hit["id"], "JD-1");
+    assert_eq!(hit["title"], "MCP rollout");
+    assert_eq!(hit["snippet"], "# «Plan» v2\n");
+    assert!(hit["score"].as_f64().is_some_and(|s| s > 0.0), "{hit}");
+    let by_filter = ok(
+        client,
+        "search_documents",
+        json!({"project": "joedocs", "type": "plans", "filters": {"tags": "mcp"}}),
+    )
+    .await?;
+    assert_eq!(by_filter["items"][0]["id"], "JD-1");
+    assert!(by_filter["items"][0].get("snippet").is_none());
+
     let listed = ok(client, "list_documents", json!({"project": "joedocs"})).await?;
     assert_eq!(listed["total"], 1);
     assert_eq!(listed["items"][0]["title"], "MCP rollout");
@@ -199,6 +226,13 @@ async fn rename_change_list_and_archive(client: &Client) -> TestResult<()> {
     assert_eq!(archived["revision"], 5);
     let gone = error(client, "get_document", json!({"document_id": "JD-1"})).await?;
     assert_eq!(gone["code"], "archived");
+    let found = ok(
+        client,
+        "search_documents",
+        json!({"project": "joedocs", "query": "plan"}),
+    )
+    .await?;
+    assert_eq!(found["total"], 0);
 
     Ok(())
 }
@@ -285,6 +319,44 @@ async fn every_tool_round_trips() {
     server.stop().await.unwrap();
 }
 
+/// `search_documents` covers only what the key can read.
+async fn search_respects_grants(writer: &Client, reader: &Client) -> TestResult<()> {
+    // Searching every project covers only the projects the key can read.
+    let everywhere = ok(
+        writer,
+        "search_documents",
+        json!({"project": "*", "query": "hidden OR shared"}),
+    )
+    .await?;
+    assert_eq!(everywhere["items"][0]["id"], "JD-1");
+    assert_eq!(everywhere["total"], 1);
+    let read = ok(
+        reader,
+        "search_documents",
+        json!({"project": "joedocs", "query": "shared"}),
+    )
+    .await?;
+    assert_eq!(read["total"], 1);
+    let hidden = error(
+        writer,
+        "search_documents",
+        json!({"project": "secret", "query": "hidden"}),
+    )
+    .await?;
+    assert_eq!(hidden["code"], "not_found");
+    let bad = error(
+        writer,
+        "search_documents",
+        json!({"project": "*", "query": "-only"}),
+    )
+    .await?;
+    assert_eq!(
+        (bad["code"].as_str(), bad["field"].as_str()),
+        (Some("invalid_argument"), Some("query"))
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn grants_limit_what_a_key_can_see_and_change() {
     let server = start().await.unwrap();
@@ -339,6 +411,8 @@ async fn grants_limit_what_a_key_can_see_and_change() {
         let hidden = error(&writer, tool, args).await.unwrap();
         assert_eq!(hidden["code"], "not_found", "{tool}");
     }
+    search_respects_grants(&writer, &reader).await.unwrap();
+
     let invalid = error(&writer, "get_document", json!({"document_id": "nonsense"}))
         .await
         .unwrap();

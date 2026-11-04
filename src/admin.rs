@@ -1,5 +1,5 @@
-//! Administrator commands run on the server host: `init`, `project` and
-//! `key`. Later phases add `archive`, `reindex` and `check`.
+//! Administrator commands run on the server host: `init`, `project`, `key`
+//! and `reindex`. Phase 4 adds `archive` and `check`.
 //!
 //! Each command calls the [`Store`] and writes a plain-text report.
 
@@ -11,7 +11,7 @@ use crate::Error;
 use crate::auth::{Grant, RandomSource};
 use crate::cli::{KeyCommand, ProjectCommand};
 use crate::db::KeyRow;
-use crate::store::{InitOutcome, Paths, Store};
+use crate::store::{InitOutcome, Paths, Reindexed, Store};
 
 /// Reports what `joedocs init` did.
 ///
@@ -30,6 +30,56 @@ pub fn report_init(paths: &Paths, outcome: InitOutcome, out: &mut dyn Write) -> 
     writeln!(out, "  state: {}", paths.state_dir.display())?;
     if outcome == InitOutcome::Created {
         writeln!(out, "Next: joedocs project add <name> --key <KEY>")?;
+    }
+    Ok(())
+}
+
+/// Runs `joedocs reindex`: rebuilds the index from the history and
+/// reports what it found.
+///
+/// # Errors
+///
+/// Returns store errors and [`Error::Output`].
+pub fn reindex(store: &mut Store, out: &mut dyn Write) -> Result<(), Error> {
+    let report = store.reindex()?;
+    report_reindex(&report, out)
+}
+
+/// Writes a [`Reindexed`] report.
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails.
+pub fn report_reindex(report: &Reindexed, out: &mut dyn Write) -> Result<(), Error> {
+    writeln!(
+        out,
+        "Rebuilt the index from the history: {} documents ({} archived), {} revisions.",
+        report.documents + report.archived,
+        report.archived,
+        report.revisions
+    )?;
+    for (name, key) in &report.projects_created {
+        writeln!(
+            out,
+            "Recreated project {name} (key {key}), which was missing from the database; \
+             its title is its name."
+        )?;
+    }
+    if report.skipped_commits > 0 {
+        writeln!(
+            out,
+            "Ignored {} history commits without JoeDocs trailers.",
+            report.skipped_commits
+        )?;
+    }
+    if !report.drifted.is_empty() {
+        writeln!(
+            out,
+            "Warning: these vault files differ from the history, so writes to them are refused:"
+        )?;
+        for (id, path) in &report.drifted {
+            writeln!(out, "  {id}  {path}")?;
+        }
     }
     Ok(())
 }

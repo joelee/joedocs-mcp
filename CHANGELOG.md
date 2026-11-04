@@ -20,6 +20,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - `Dockerfile` and `compose.yaml` to run `joedocs serve` locally, with the vault and state in volumes.
 - Deployment tests (`tests/deployment.rs`) for a running server, and `just docker-test`, which runs them against a throwaway Compose stack before and after a restart.
 - Config key `server.allowed_hosts`; exit code `69` when the server cannot listen.
+- Search (phase 3): the `search_documents` MCP tool finds documents by text (words, `"phrases"`, `-exclude`, `prefix*`, `OR`, ignoring word endings and accents) and by front matter filters (`eq`, `ne`, `in`, `contains`, `gt`, `gte`, `lt`, `lte`, `exists`) in one project or every readable one, with relevance scores and snippets. Built on SQLite FTS5; the index is kept current by every write.
+- `joedocs reindex` rebuilds the document index and search from the git history, recreates projects missing from the database, and lists vault files that differ from the history. `joedocs serve` runs it on start when the index is behind the history or from an older build.
 - Dependencies: `rmcp`, `axum`, `tokio`, `tokio-util` (MCP server).
 - Dependencies: `rusqlite` (bundled SQLite), `serde-saphyr` (YAML), `serde_json`, `indexmap` (ordered front matter), `jiff` (timestamps), `sha2` and `getrandom` (API keys).
 
@@ -28,6 +30,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - `deny.toml` allows `BSD-3-Clause`, needed by the approved axum and `serde-saphyr` stacks.
 - Running `joedocs` with no command now prints help and exits with code 2.
 - Renamed the crate and binary from `joedocs-mcp` to `joedocs`. The environment prefix is now `JOEDOCS` (for example `JOEDOCS__LOG__LEVEL` and `JOEDOCS_CONFIG_FILE`), and config files are looked up under `joedocs/` (for example `~/.config/joedocs/config.toml`).
+
+### Fixed
+
+- History commits now carry the revision time. Before, every commit made by the store had a 1970 author and committer date.
 
 ### Removed
 

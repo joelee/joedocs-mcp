@@ -10,7 +10,7 @@ use super::*;
 use crate::auth::{CountingRandom, Permission};
 use crate::clock::FixedClock;
 use crate::document::front_matter::Fields;
-use crate::history::{Commit, GitCli};
+use crate::history::{Commit, GitCli, Logged};
 
 /// A history that delegates to git but can be told to fail commits.
 struct Flaky {
@@ -39,6 +39,9 @@ impl History for Flaky {
     }
     fn show(&self, id: &str, path: &str) -> Result<Vec<u8>, HistoryError> {
         self.git.show(id, path)
+    }
+    fn log(&self) -> Result<Vec<Logged>, HistoryError> {
+        self.git.log()
     }
 }
 
@@ -195,6 +198,17 @@ fn create_writes_the_file_commits_and_indexes_it() {
     assert_eq!(
         git_log(&fx),
         "laptop|Create JD-1: Initial plan: v1|create\n"
+    );
+    let dates = Command::new("git")
+        .arg("--git-dir")
+        .arg(fx.paths.git_dir())
+        .args(["log", "--format=%aI %cI"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(dates.stdout).unwrap(),
+        "2026-10-26T07:33:20Z 2026-10-26T07:33:20Z\n",
+        "commits carry the revision time"
     );
 
     let fetched = fx.store.get("jd-1", None).unwrap();

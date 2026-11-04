@@ -2,7 +2,7 @@
 
 JoeDocs: a central MCP server for multi-project documentation, stored as an Obsidian vault with git history and a SQLite index.
 
-**Status:** phases 0 to 2 of [docs/plan.md](docs/plan.md) are done: configuration, the document store with git history and a SQLite index, the admin commands, and the MCP server with eight document tools. Search (`search_documents`) is phase 3.
+**Status:** phases 0 to 3 of [docs/plan.md](docs/plan.md) are done: configuration, the document store with git history and a SQLite index, the admin commands, the MCP server with nine document tools, and full-text and front matter search with `reindex`. History and editing tools are phase 4.
 
 ## Quick start
 
@@ -44,6 +44,8 @@ Commands:
   config paths                        List the config file search order
   init                                Create the vault, state directory, database and history
   serve                               Run the MCP server on server.bind until Ctrl-C or SIGTERM
+                                      (rebuilds the index first if it is behind the history)
+  reindex                             Rebuild the document index and search from the history
   project add NAME --key KEY [--title TITLE]
   project list
   key create NAME [--grant PROJECT:PERMISSION]...
@@ -54,7 +56,9 @@ Commands:
 
 Exit codes: `0` success, `2` usage error, `65` invalid request (bad name, unknown project, not initialised), `69` cannot listen, `70` database, history or vault fault, `74` output error, `78` configuration error.
 
-MCP tools: `list_projects`, `list_documents`, `get_document`, `new_document`, `update_document`, `rename_document`, `change_document_front_matter`, `archive_document`.
+MCP tools: `list_projects`, `list_documents`, `search_documents`, `get_document`, `new_document`, `update_document`, `rename_document`, `change_document_front_matter`, `archive_document`.
+
+`search_documents` takes a `query` (words, `"phrases"`, `-exclude`, `prefix*`, `a OR b`; word endings are ignored) and `filters` on any front matter key, for example `{"tags": {"contains": "security"}, "updated": {"gte": "2026-10-01"}}`, in one project or all of them (`"project": "*"`). See [plan.md section 7](docs/plan.md#7-search-decision-2).
 
 Configuration comes from CLI flags, `JOEDOCS__SECTION__KEY` environment variables, a TOML config file, and built-in defaults, in that order of precedence. See [docs/configuration.md](docs/configuration.md).
 

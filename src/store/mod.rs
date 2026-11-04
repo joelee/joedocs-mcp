@@ -20,6 +20,8 @@
 mod documents;
 mod journal;
 mod registry;
+mod reindex;
+mod search;
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -31,6 +33,8 @@ pub use documents::{
     RevisionInfo, Update,
 };
 pub use registry::CreatedKey;
+pub use reindex::Reindexed;
+pub use search::{MAX_SEARCH_LIMIT, SearchHit, SearchRequest, SearchResults};
 
 use crate::AppId;
 use crate::clock::Clock;
@@ -109,13 +113,22 @@ pub enum Error {
     /// The database index does not match the history.
     #[error(
         "the index records history commit {index} but the history is at {history}; \
-         a previous write was interrupted, so writes are refused until the index is rebuilt"
+         a previous write was interrupted, so writes are refused until the index is rebuilt \
+         (run `joedocs reindex`, or restart `joedocs serve`, which rebuilds it)"
     )]
     OutOfSync {
         /// Commit the index records.
         index: String,
         /// Commit the history is at.
         history: String,
+    },
+    /// The history cannot be replayed into the index.
+    #[error("cannot rebuild the index from history commit {commit}: {message}")]
+    Rebuild {
+        /// The commit at fault.
+        commit: String,
+        /// What is wrong with it.
+        message: String,
     },
     /// The write lock could not be taken.
     #[error("cannot lock {path}: {source}")]
@@ -380,7 +393,11 @@ impl Store {
         }
         fs::create_dir_all(&paths.home).map_err(Error::io("create", &paths.home))?;
         history.init()?;
-        db::open(&paths.db())?;
+        let conn = db::open(&paths.db())?;
+        if history.head()?.is_none() {
+            // An empty history needs no rebuild.
+            db::set_index_format(&conn)?;
+        }
         Ok(if existed {
             InitOutcome::AlreadyInitialised
         } else {

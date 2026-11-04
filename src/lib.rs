@@ -170,15 +170,44 @@ pub fn execute(
             admin::report_init(&paths, outcome, out)?;
         }
         Command::Serve => {
-            let store = open_store(loaded, ctx)?;
+            let mut store = open_store(loaded, ctx)?;
+            catch_up(&mut store)?;
             mcp::run(store, loaded.config(), out)?;
         }
+        Command::Reindex => admin::reindex(&mut open_store(loaded, ctx)?, out)?,
         Command::Project { command } => {
             admin::project(&mut open_store(loaded, ctx)?, command, out)?;
         }
         Command::Key { command } => {
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
+    }
+    Ok(())
+}
+
+/// Rebuilds the index when it is behind the history (an interrupted write,
+/// or a database from an older build), logging what was found.
+///
+/// # Errors
+///
+/// Returns [`Error::Store`] when the rebuild fails.
+pub fn catch_up(store: &mut Store) -> Result<(), Error> {
+    if !store.needs_reindex()? {
+        return Ok(());
+    }
+    tracing::info!("the index is behind the history; rebuilding it");
+    let report = store.reindex()?;
+    tracing::info!(
+        documents = report.documents,
+        archived = report.archived,
+        revisions = report.revisions,
+        "rebuilt the index"
+    );
+    for (name, key) in &report.projects_created {
+        tracing::warn!(%name, %key, "recreated a project missing from the database");
+    }
+    for (id, path) in &report.drifted {
+        tracing::warn!(%id, %path, "the vault file differs from the history; writes to it are refused");
     }
     Ok(())
 }
@@ -411,6 +440,46 @@ mod tests {
             "NAME    ID            CREATED               LAST USED  STATUS   GRANTS\n\
              laptop  000102030405  2026-10-26T07:33:20Z  never      revoked  joedocs:write\n"
         );
+    }
+
+    #[test]
+    fn serve_first_catches_up_an_index_behind_the_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = storage_env(dir.path());
+        let fs = MemFs::new();
+        run(&["app", "init"], &env, &fs).unwrap();
+        run(&["app", "project", "add", "p", "--key", "P"], &env, &fs).unwrap();
+        let cli = Cli::try_parse_from(["app", "serve"]).unwrap();
+        let ctx = context(&env, &fs);
+        let loaded = load(&cli, &ctx).unwrap();
+        let mut store = open_store(&loaded, &ctx).unwrap();
+        store
+            .create(
+                &store::Actor::new("k", "c"),
+                store::NewDocument {
+                    project: "p".into(),
+                    title: "T".into(),
+                    content: "x".into(),
+                    ..store::NewDocument::default()
+                },
+            )
+            .unwrap();
+        drop(store);
+        std::fs::write(dir.path().join("home/p/home/T.md"), "edited").unwrap();
+        for suffix in ["", "-wal", "-shm"] {
+            let file = dir.path().join(format!("state/joedocs.db{suffix}"));
+            std::fs::remove_file(file).unwrap_or_default();
+        }
+        run(&["app", "init"], &env, &fs).unwrap();
+
+        let mut store = open_store(&loaded, &ctx).unwrap();
+        assert!(store.needs_reindex().unwrap());
+        catch_up(&mut store).unwrap();
+        assert!(!store.needs_reindex().unwrap());
+        assert_eq!(store.projects().unwrap()[0].name, "p");
+        catch_up(&mut store).unwrap();
+        let out = run(&["app", "reindex"], &env, &fs).unwrap();
+        assert!(out.starts_with("Rebuilt the index"), "{out}");
     }
 
     #[test]

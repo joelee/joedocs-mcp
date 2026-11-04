@@ -36,40 +36,48 @@
 │   │   ├── resolve.rs      File selection, layering, override parsing
 │   │   ├── show.rs         config show / config paths output
 │   │   └── validate.rs     Rule checks beyond types (slugs, membership, paths)
-│   ├── admin.rs            Reports for init, project and key commands
+│   ├── admin.rs            Reports for init, project, key and reindex commands
 │   ├── auth.rs             API key format, hashing, grants, RandomSource
 │   ├── clock.rs            Clock trait, SystemClock, FixedClock
 │   ├── db/
-│   │   ├── mod.rs          Connection setup, migrations, history head
+│   │   ├── mod.rs          Connection setup, migrations, history head, index format
 │   │   ├── projects.rs     Project queries
 │   │   ├── keys.rs         API key and grant queries
 │   │   ├── documents.rs    Document, listing and revision queries
-│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit)
+│   │   ├── search.rs       Search index upkeep and the search query
+│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search)
 │   ├── document/
 │   │   ├── mod.rs          Slugs and re-exports
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
 │   │   ├── title.rs        Title rules and file stems
 │   │   └── front_matter.rs Key classes, parse, render, change rules
-│   ├── history/mod.rs      History trait and GitCli
+│   ├── history/mod.rs      History trait and GitCli (commit, show, log)
 │   ├── mcp/
 │   │   ├── mod.rs          Router, ServerOptions, serve, run, shutdown signal
 │   │   ├── auth.rs         Bearer key middleware and Caller
 │   │   ├── tools.rs        Tool parameters, results and handlers
 │   │   └── errors.rs       ToolError: codes and structured results
-│   ├── search/             (skeleton) Query grammar, FTS5, filters
+│   ├── search/
+│   │   ├── mod.rs          Re-exports and the Invalid error
+│   │   ├── query.rs        Query grammar and FTS5 expressions
+│   │   └── filter.rs       Front matter filters, SQL, value flattening
 │   └── store/
 │       ├── mod.rs          Store, Paths, Settings, Actor, Error, write lock
 │       ├── documents.rs    Document use cases and the write path
 │       ├── registry.rs     Projects and API keys
+│       ├── search.rs       Store::search
+│       ├── reindex.rs      Rebuilding the index from the history
 │       ├── journal.rs      Undoable vault file writes
 │       └── tests.rs        Store unit tests (temp vault, real git)
 └── tests/
-    ├── admin.rs            init, project and key through the binary
+    ├── admin.rs            init, project, key and reindex through the binary
     ├── common/mod.rs       Shared MCP client and raw HTTP helpers
     ├── deployment.rs       Ignored black-box suite for a running server (just docker-test)
     ├── cli.rs              End-to-end tests of the binary
     ├── config_example.rs   config.example.toml matches the schema
     ├── mcp.rs              Every tool over HTTP, grants, Host/Origin, serve
+    ├── reindex.rs          Rebuilds: identical, after a lost write or database
+    ├── search.rs           Search over a fixture vault
     └── store.rs            A document's lifecycle across files, git and index
 ```
 

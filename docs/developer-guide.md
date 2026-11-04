@@ -38,6 +38,7 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 - Integration tests in `tests/cli.rs` run the binary with `env_clear()`, a temporary `HOME` and working directory, so your own config files and `.env` cannot affect results.
 - Never call `std::env::set_var` or `remove_var`; they are `unsafe` in Rust 2024 and race with parallel tests.
 - `tests/store.rs` and `tests/mcp.rs` drive the store and the MCP server in-process against a temporary vault and real git. `tests/common/` holds the shared MCP client helpers.
+- `tests/search.rs` searches a fixture vault built through the store, and `tests/reindex.rs` checks that rebuilding the index from the history gives the same tables, recovers a lost write or database, and refuses a history it cannot replay.
 - `tests/deployment.rs` is a black-box suite for a running server. It is ignored by `just test` and `just ci`; `just docker-test` runs it against Docker Compose, or set `JOEDOCS_TEST_URL`, `JOEDOCS_TEST_TOKEN` and `JOEDOCS_TEST_PROJECT` and run `cargo nextest run --test deployment --run-ignored only` against any server.
 
 ## Running with Docker
@@ -58,12 +59,14 @@ docker compose down              # keeps the volumes; add --volumes to delete th
 - Other settings go under `environment:` as `JOEDOCS__SECTION__KEY`, e.g. `JOEDOCS__SERVER__ALLOWED_HOSTS: '["localhost", "127.0.0.1", "docs.example.net"]'`, or mount a file at `/etc/joedocs/config.toml`.
 - To look at the vault: `docker compose exec joedocs find /data/vault -name '*.md'`, or copy it out with `docker compose cp joedocs:/data/vault ./vault-copy`.
 - The container runs as uid 10001. If you bind-mount host directories instead of volumes, they must be writable by that uid.
+- After an upgrade, `serve` rebuilds the index from the history if the database is from an older build; `docker compose logs` shows the outcome. To rebuild by hand: `docker compose exec joedocs joedocs reindex`.
 
 ## Debugging
 
 - `cargo run -- --log-level debug` writes debug logs to stderr.
 - `cargo run -- config show` explains where every config value came from.
 - `cargo run -- config paths` shows which config file was picked.
+- `cargo run -- reindex` rebuilds the database index from the history and lists vault files that differ from it.
 
 ## CI
 

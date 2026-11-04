@@ -100,6 +100,19 @@ pub fn allocate_seq(conn: &Connection, project_id: i64) -> rusqlite::Result<u64>
     )
 }
 
+/// Makes sure the project's next sequence number is at least `next`.
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn raise_next_seq(conn: &Connection, project_id: i64, next: u64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE projects SET next_seq = max(next_seq, ?2) WHERE id = ?1",
+        params![project_id, next],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

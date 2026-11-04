@@ -128,7 +128,7 @@ async fn the_key_can_write_its_project() {
     let t = target().unwrap();
     let client = t.client().await.unwrap();
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 9);
     let projects = ok(&client, "list_projects", json!({})).await.unwrap();
     let project = projects["projects"]
         .as_array()
@@ -217,6 +217,15 @@ async fn a_document_lifecycle_works() {
             .any(|d| d["id"] == id.as_str()),
         "{listed}"
     );
+
+    let found = ok(
+        &client,
+        "search_documents",
+        json!({"project": t.project, "query": format!("\"{title}\""), "filters": {"owner": "itest"}}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(found["items"][0]["id"], id.as_str(), "{found}");
 
     let first = ok(
         &client,

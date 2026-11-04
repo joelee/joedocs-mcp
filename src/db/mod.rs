@@ -9,12 +9,13 @@
 mod documents;
 mod keys;
 mod projects;
+mod search;
 
 use std::path::Path;
 
 pub use documents::{
     DocumentRow, ListQuery, RevisionRow, Sort, get_document, get_revision, insert_document,
-    insert_revision, list_documents, path_taken, save_document,
+    insert_revision, list_documents, live_documents, path_taken, save_document,
 };
 pub use keys::{
     KeyRow, find_key_by_id, find_key_by_name, insert_key, key_secret, list_keys, revoke_key,
@@ -22,15 +23,21 @@ pub use keys::{
 };
 pub use projects::{
     ProjectRow, allocate_seq, find_project, find_project_by_id, insert_project, list_projects,
+    raise_next_seq,
 };
 pub use rusqlite::{Connection, Error as SqlError};
 use rusqlite::{OptionalExtension as _, params};
+pub use search::{
+    SearchQuery, SearchRow, clear_documents, fts_rowid, index_document, search_documents,
+    unindex_document,
+};
 
 /// Schema migrations, applied in order. The schema version
 /// (`PRAGMA user_version`) is the number applied.
 const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0001_core.sql"),
     include_str!("migrations/0002_audit.sql"),
+    include_str!("migrations/0003_search.sql"),
 ];
 
 /// The schema version this build expects.
@@ -141,18 +148,38 @@ pub fn insert_audit(conn: &Connection, entry: &AuditEntry<'_>) -> rusqlite::Resu
 /// Meta key holding the history commit the index was last updated to.
 const HISTORY_HEAD: &str = "history_head";
 
+/// Meta key holding the [`INDEX_FORMAT`] the index was last rebuilt with.
+const INDEX_FORMAT_KEY: &str = "index_format";
+
+/// The layout of the rebuildable index (documents, revisions and search).
+/// A database recording another value is rebuilt by `joedocs reindex`,
+/// which `serve` runs on start. Bump it when the index gains data that
+/// only a rebuild can fill in.
+pub const INDEX_FORMAT: &str = "1";
+
+fn meta(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |row| {
+        row.get(0)
+    })
+    .optional()
+}
+
+fn set_meta(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
 /// The history commit the index reflects, or `None` before the first.
 ///
 /// # Errors
 ///
 /// Returns an error when the query fails.
 pub fn history_head(conn: &Connection) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT value FROM meta WHERE key = ?1",
-        [HISTORY_HEAD],
-        |row| row.get(0),
-    )
-    .optional()
+    meta(conn, HISTORY_HEAD)
 }
 
 /// Records the history commit the index now reflects.
@@ -161,12 +188,35 @@ pub fn history_head(conn: &Connection) -> rusqlite::Result<Option<String>> {
 ///
 /// Returns an error when the statement fails.
 pub fn set_history_head(conn: &Connection, commit: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO meta (key, value) VALUES (?1, ?2)
-         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-        params![HISTORY_HEAD, commit],
-    )?;
+    set_meta(conn, HISTORY_HEAD, commit)
+}
+
+/// Forgets the history commit, for an index rebuilt from an empty history.
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn clear_history_head(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM meta WHERE key = ?1", [HISTORY_HEAD])?;
     Ok(())
+}
+
+/// Whether the index was built with this build's [`INDEX_FORMAT`].
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn index_format_current(conn: &Connection) -> rusqlite::Result<bool> {
+    Ok(meta(conn, INDEX_FORMAT_KEY)?.as_deref() == Some(INDEX_FORMAT))
+}
+
+/// Records that the index matches this build's [`INDEX_FORMAT`].
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn set_index_format(conn: &Connection) -> rusqlite::Result<()> {
+    set_meta(conn, INDEX_FORMAT_KEY, INDEX_FORMAT)
 }
 
 #[cfg(test)]
@@ -239,5 +289,18 @@ mod tests {
         set_history_head(&conn, "abc").unwrap();
         set_history_head(&conn, "def").unwrap();
         assert_eq!(history_head(&conn).unwrap().as_deref(), Some("def"));
+        clear_history_head(&conn).unwrap();
+        assert_eq!(history_head(&conn).unwrap(), None);
+    }
+
+    #[test]
+    fn the_index_format_is_recorded() {
+        let conn = open_in_memory().unwrap();
+        assert!(!index_format_current(&conn).unwrap());
+        set_index_format(&conn).unwrap();
+        assert!(index_format_current(&conn).unwrap());
+        conn.execute("UPDATE meta SET value = '0' WHERE key = 'index_format'", [])
+            .unwrap();
+        assert!(!index_format_current(&conn).unwrap());
     }
 }
