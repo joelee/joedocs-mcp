@@ -12,7 +12,8 @@ Phases and design are in [plan.md](plan.md#15-phases), and review decisions are 
 
 - Removing a single grant from a key (`key grant` only adds or changes grants today).
 - Phase 5, operations: deployment and backups.
-- Choose the CI platform and add its pipeline file (runs `just ci`).
+- Publish to crates.io, so users can `cargo install joedocs`. Check the name is free (or pick another), drop `publish = false`, fill in `keywords`, `categories`, `homepage` and `documentation`, choose what to package (`include`), make sure the crate builds from the packaged sources (`cargo package`, `cargo publish --dry-run`), decide the versioning and release steps (CHANGELOG, tag, `cargo publish` from CI with a scoped token), and document `cargo install` in the README.
+- Publish a Homebrew formula, so users can `brew install joedocs`. Likely a tap (`joelee/homebrew-tap`) with a formula that builds from the release tarball or installs prebuilt binaries from GitHub Releases (a release workflow for Linux and macOS, with checksums), `depends_on "git"`, and a `test do` block. Consider homebrew-core once it has users. On macOS a launchd service would be the counterpart of `joedocs systemd`.
 
 ## Future
 
@@ -22,6 +23,7 @@ Phases and design are in [plan.md](plan.md#15-phases), and review decisions are 
 
 ## Done
 
+- `joedocs systemd install|remove` (user or sandboxed system unit, `--dry-run`) and GitHub Actions CI (`just ci` on Linux and macOS, `just docker-test`).
 - `key rotate`: a new token for an existing key, keeping its name and grants.
 - Phase 4, history and editing tools: `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, and the `archive list|restore` and `check` commands. Implementation choices are in [plan.md section 17](plan.md#17-decisions-log).
 - Phase 3, search: `search_documents` with the query grammar (words, phrases, exclusions, prefixes, `OR`), front matter filters, ranking and snippets, in one project or all; `joedocs reindex`, which `serve` runs on start when the index is behind the history. Also fixed commit dates, which phases 1 and 2 recorded as 1970. Implementation choices are in [plan.md section 17](plan.md#17-decisions-log).

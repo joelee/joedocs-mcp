@@ -2,6 +2,9 @@
 
 ```text
 .
+├── .github/
+│   ├── workflows/ci.yml    just ci on Linux and macOS, and just docker-test
+│   └── dependabot.yml      Weekly action and crate update proposals
 ├── AGENTS.md               Instructions for coding agents
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code
 ├── Dockerfile              Two-stage image: build, then debian-slim with git
@@ -57,6 +60,7 @@
 │   │   ├── auth.rs         Bearer key middleware and Caller
 │   │   ├── tools.rs        Tool parameters, results and handlers
 │   │   └── errors.rs       ToolError: codes and structured results
+│   ├── systemd.rs          joedocs systemd install|remove, ServiceManager
 │   ├── search/
 │   │   ├── mod.rs          Re-exports and the Invalid error
 │   │   ├── query.rs        Query grammar and FTS5 expressions

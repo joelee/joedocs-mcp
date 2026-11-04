@@ -1,5 +1,7 @@
 # joedocs
 
+[![CI](https://github.com/joelee/joedocs-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/joelee/joedocs-mcp/actions/workflows/ci.yml)
+
 JoeDocs: a central MCP server for multi-project documentation, stored as an Obsidian vault with git history and a SQLite index.
 
 **Status:** phases 0 to 4 of [docs/plan.md](docs/plan.md) are done: configuration, the document store with git history and a SQLite index, the admin commands, the MCP server with fifteen document tools, full-text and front matter search, and history, diff, restore and in-place editing. Operations (deployment and backups) are phase 5.
@@ -15,6 +17,12 @@ cargo run -- init
 cargo run -- project add joedocs --key JD --title JoeDocs
 cargo run -- key create laptop --grant joedocs:write   # prints the token once
 cargo run -- serve                                     # http://127.0.0.1:8750/mcp
+```
+
+Run it as a systemd service, as you (add `--dry-run` to see the unit first; see [Running as a systemd service](docs/developer-guide.md#running-as-a-systemd-service)):
+
+```bash
+joedocs systemd install
 ```
 
 Or run it in Docker (see [Running with Docker](docs/developer-guide.md#running-with-docker)):
@@ -46,6 +54,9 @@ Commands:
   serve                               Run the MCP server on server.bind until Ctrl-C or SIGTERM
                                       (rebuilds the index first if it is behind the history)
   reindex                             Rebuild the document index and search from the history
+  systemd install [--system --run-as USER] [--dry-run]
+                                      Run serve as a systemd service with the current configuration
+  systemd remove [--system] [--dry-run]
   archive list [--project NAME]       List archived documents
   archive restore DOCUMENT_ID         Bring an archived document back
   check                               Report drift between the vault, the history and the index
@@ -74,7 +85,7 @@ Configuration comes from CLI flags, `JOEDOCS__SECTION__KEY` environment variable
 | Item | Value |
 | --- | --- |
 | MSRV profile | application (see `AGENTS.md`) |
-| CI platform | _decide per project; the pipeline runs `just ci`_ |
+| CI platform | GitHub Actions ([`ci.yml`](.github/workflows/ci.yml): `just ci` on Linux and macOS, and `just docker-test`) |
 | Licence | [Apache-2.0](LICENSE) |
 
 ## Documentation

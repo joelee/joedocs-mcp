@@ -360,3 +360,35 @@ fn archived_documents_are_listed_and_restored_and_check_reports_drift() {
             "The index is behind the history",
         ));
 }
+
+#[test]
+fn systemd_install_dry_run_shows_the_unit_for_this_binary() {
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    let output = cmd(root.path())
+        .args(["systemd", "install", "--dry-run"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(output).unwrap();
+    let exe = std::fs::canonicalize(assert_cmd::cargo::cargo_bin!()).unwrap();
+    assert!(
+        out.contains(&format!("ExecStart=\"{}\" serve\n", exe.display())),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "Environment=\"JOEDOCS__STORAGE__HOME={}\"\n",
+            vault(root.path()).display()
+        )),
+        "{out}"
+    );
+    assert!(!root.path().join(".config/systemd").exists());
+    cmd(root.path())
+        .args(["systemd", "install", "--run-as", "joedocs"])
+        .assert()
+        .code(65)
+        .stderr("error: --run-as needs --system; a user unit runs as you\n");
+}

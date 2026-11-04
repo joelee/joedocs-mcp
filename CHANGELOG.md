@@ -23,6 +23,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - Search (phase 3): the `search_documents` MCP tool finds documents by text (words, `"phrases"`, `-exclude`, `prefix*`, `OR`, ignoring word endings and accents) and by front matter filters (`eq`, `ne`, `in`, `contains`, `gt`, `gte`, `lt`, `lte`, `exists`) in one project or every readable one, with relevance scores and snippets. Built on SQLite FTS5; the index is kept current by every write.
 - `joedocs reindex` rebuilds the document index and search from the git history, recreates projects missing from the database, and lists vault files that differ from the history. `joedocs serve` runs it on start when the index is behind the history or from an older build.
 - History and editing tools (phase 4): `get_document_history`, `diff_document` (unified diff between any two revisions), `restore_document_version`, `move_document` (change type), `edit_document` (exact replacements in the body) and `append_to_document`.
+- Command `systemd install|remove`: a user unit (or, with `--system --run-as USER`, a sandboxed system unit) that runs `joedocs serve` with the configuration in effect at install time; `--dry-run` prints the unit and the commands.
+- GitHub Actions CI: `just ci` on Linux and macOS and `just docker-test`, with pinned actions and tools, and Dependabot updates.
 - Command `key rotate <name>`: prints a new token for the key and invalidates the old one; the name, ID and grants stay.
 - Commands `archive list [--project]` and `archive restore <id>`, and `check`, which reports vault files that differ from the history or belong to no document, and exits `1` when it finds problems.
 - Dependencies: `rmcp`, `axum`, `tokio`, `tokio-util` (MCP server).

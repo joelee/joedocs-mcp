@@ -9,6 +9,7 @@ use joedocs::auth::OsRandom;
 use joedocs::clock::SystemClock;
 use joedocs::env::ProcessEnv;
 use joedocs::fs::RealFs;
+use joedocs::systemd::Systemctl;
 use joedocs::{AppId, Cli, Context, EXIT_CONFIG, Error};
 
 fn main() -> ExitCode {
@@ -27,6 +28,7 @@ fn main() -> ExitCode {
         fs: &RealFs,
         clock: std::sync::Arc::new(SystemClock),
         random: &OsRandom,
+        services: &Systemctl,
     };
 
     let loaded = match joedocs::load(&cli, &ctx) {

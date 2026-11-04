@@ -73,6 +73,27 @@ docker compose down              # stops the stack; the data stays in .local/dat
 - To start afresh: `docker compose down && rm -rf .local/data`.
 - After an upgrade, `serve` rebuilds the index from the history if the database is from an older build; `docker compose logs` shows the outcome. To rebuild by hand: `docker compose exec joedocs joedocs reindex`.
 
+## Running as a systemd service
+
+`joedocs systemd install` writes a unit that runs `joedocs serve`, then reloads systemd, enables the unit and (re)starts it. systemd does not see your shell, so the unit pins the configuration in effect: the config file in use (`JOEDOCS_CONFIG_FILE`), every key set by an environment override or flag, and the absolute storage paths. Rerun it after changing any of them, or after moving the binary. Run `joedocs init` first; install refuses an uninitialised store.
+
+```bash
+joedocs systemd install --dry-run          # show the unit and the commands
+joedocs systemd install                    # user unit: ~/.config/systemd/user/joedocs.service
+loginctl enable-linger "$USER"             # keep it running when you are logged out
+journalctl --user -u joedocs -f
+joedocs systemd remove                     # stop, disable and delete it
+```
+
+On a server, a system unit runs as a dedicated account and is sandboxed so it can write only the vault and the state directory (`ProtectSystem=strict`, `ReadWritePaths=`, and similar):
+
+```bash
+sudo joedocs --config /etc/joedocs/config.toml systemd install --system --run-as joedocs
+sudo joedocs systemd remove --system
+```
+
+`sudo` resets your environment, so give the configuration through `--config` (or `/etc/joedocs/config.toml`, which the lookup finds anyway) rather than environment variables, and check the result with `--dry-run`. The account must be able to write the storage paths. A unit file that `joedocs systemd install` did not write is never overwritten or removed. systemd is Linux only.
+
 ## Debugging
 
 - `cargo run -- --log-level debug` writes debug logs to stderr.
@@ -83,7 +104,12 @@ docker compose down              # stops the stack; the data stays in .local/dat
 
 ## CI
 
-The CI platform is chosen per project. The pipeline should check out full git history, install the tools from Setup, set `NEXTEST_PROFILE=ci`, and run `just ci`. Library-profile projects add a job that installs the MSRV toolchain and runs `just msrv`.
+CI runs on GitHub Actions ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) for pushes to `main` and for pull requests:
+
+- `just ci` on Ubuntu and macOS, with full git history (for the gitleaks scan) and `NEXTEST_PROFILE=ci`; the JUnit report is uploaded as an artifact.
+- `just docker-test`, which builds the image and runs the deployment tests against it.
+
+Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS` and `GITLEAKS_VERSION` variables, with gitleaks checksums per platform). Keep the tool versions in step with what `just setup` installs locally. Dependabot proposes weekly updates for actions and crates; every proposal runs CI, including `cargo deny`.
 
 ## Releasing
 

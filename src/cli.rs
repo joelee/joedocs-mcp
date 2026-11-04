@@ -43,6 +43,12 @@ pub enum Command {
     /// Rebuild the document index and search from the history (safe to
     /// rerun; projects and API keys are kept).
     Reindex,
+    /// Install or remove a systemd unit that runs `joedocs serve`.
+    Systemd {
+        /// What to do.
+        #[command(subcommand)]
+        command: SystemdCommand,
+    },
     /// List and restore archived documents.
     Archive {
         /// What to do.
@@ -82,6 +88,33 @@ pub enum ProjectCommand {
     },
     /// List projects.
     List,
+}
+
+/// `systemd` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum SystemdCommand {
+    /// Write the unit with the current configuration, then enable and
+    /// (re)start it. Safe to rerun after changing the configuration.
+    Install {
+        /// Install a system unit (run as root) instead of a user unit.
+        #[arg(long)]
+        system: bool,
+        /// The account a system unit runs as.
+        #[arg(long, value_name = "USER")]
+        run_as: Option<String>,
+        /// Print the unit and the commands instead of running them.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Stop, disable and delete the unit.
+    Remove {
+        /// Remove the system unit instead of the user unit.
+        #[arg(long)]
+        system: bool,
+        /// Print the commands instead of running them.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// `archive` subcommands.

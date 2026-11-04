@@ -21,12 +21,13 @@ pub mod mcp;
 pub mod search;
 pub mod secrets;
 pub mod store;
+pub mod systemd;
 
 use std::io::{self, Write};
 use std::sync::Arc;
 
 pub use app_id::AppId;
-pub use cli::{ArchiveCommand, Cli, Command, ConfigCommand};
+pub use cli::{ArchiveCommand, Cli, Command, ConfigCommand, SystemdCommand};
 pub use config::{Config, ConfigError, Resolved};
 
 use crate::auth::RandomSource;
@@ -36,6 +37,7 @@ use crate::fs::FileSystem;
 use crate::history::GitCli;
 use crate::secrets::Secrets;
 use crate::store::{Paths, Settings, Store};
+use crate::systemd::ServiceManager;
 
 /// Exit code for invalid requests, such as a bad name or an unknown project
 /// (`EX_DATAERR` from `sysexits.h`).
@@ -65,6 +67,9 @@ pub enum Error {
     /// A store operation failed.
     #[error(transparent)]
     Store(#[from] store::Error),
+    /// A systemd unit could not be installed or removed.
+    #[error(transparent)]
+    Systemd(#[from] systemd::Error),
     /// `check` found problems (already reported on standard output).
     #[error("check found {0} problems")]
     Problems(usize),
@@ -84,10 +89,11 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Config(_) => EXIT_CONFIG,
-            Self::Output(_) => EXIT_IO,
+            Self::Output(_) | Self::Systemd(systemd::Error::Output(_)) => EXIT_IO,
             Self::Store(error) if error.is_user_error() => EXIT_DATA,
+            Self::Systemd(error) if error.is_user_error() => EXIT_DATA,
             Self::Store(_) => EXIT_SOFTWARE,
-            Self::Serve { .. } => EXIT_UNAVAILABLE,
+            Self::Serve { .. } | Self::Systemd(_) => EXIT_UNAVAILABLE,
             Self::Problems(_) => EXIT_PROBLEMS,
         }
     }
@@ -105,6 +111,8 @@ pub struct Context<'a> {
     pub clock: Arc<dyn Clock>,
     /// Randomness for API keys.
     pub random: &'a dyn RandomSource,
+    /// systemd, for `joedocs systemd`.
+    pub services: &'a dyn ServiceManager,
 }
 
 /// Configuration and secrets resolved for one run.
@@ -185,6 +193,7 @@ pub fn execute(
             admin::archive(&mut open_store(loaded, ctx)?, command, out)?;
         }
         Command::Check => admin::check(&open_store(loaded, ctx)?, out)?,
+        Command::Systemd { command } => systemd_command(command, loaded, ctx, out)?,
         Command::Project { command } => {
             admin::project(&mut open_store(loaded, ctx)?, command, out)?;
         }
@@ -218,6 +227,66 @@ pub fn catch_up(store: &mut Store) -> Result<(), Error> {
     }
     for (id, path) in &report.drifted {
         tracing::warn!(%id, %path, "the vault file differs from the history; writes to it are refused");
+    }
+    Ok(())
+}
+
+/// Runs a `systemd` subcommand. `install` requires an initialised store, so
+/// the unit cannot start a server that would fail at once.
+///
+/// # Errors
+///
+/// Returns [`Error::Systemd`], and [`Error::Store`] or [`Error::Config`]
+/// when the store is not set up.
+pub fn systemd_command(
+    command: &SystemdCommand,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    match command {
+        SystemdCommand::Install {
+            system,
+            run_as,
+            dry_run,
+        } => {
+            let scope = systemd::Scope::from_flag(*system);
+            let run_as = scope.run_as(run_as.as_deref())?;
+            let paths = open_store(loaded, ctx)?.paths().clone();
+            let executable = ctx
+                .services
+                .executable()
+                .map_err(|source| systemd::Error::Io {
+                    action: "find",
+                    path: "the joedocs executable".into(),
+                    source,
+                    hint: "",
+                })?;
+            let unit = systemd::Unit {
+                scope,
+                run_as,
+                executable,
+                environment: systemd::environment(&ctx.app, &loaded.resolved, &paths),
+                paths,
+            };
+            systemd::install(
+                &unit,
+                &scope.unit_path(ctx.env)?,
+                ctx.services,
+                *dry_run,
+                out,
+            )?;
+        }
+        SystemdCommand::Remove { system, dry_run } => {
+            let scope = systemd::Scope::from_flag(*system);
+            systemd::remove(
+                scope,
+                &scope.unit_path(ctx.env)?,
+                ctx.services,
+                *dry_run,
+                out,
+            )?;
+        }
     }
     Ok(())
 }
@@ -256,6 +325,19 @@ mod tests {
             fs,
             clock: Arc::new(FixedClock::at(1_793_000_000)),
             random: &CountingRandom(0),
+            services: &NoServices,
+        }
+    }
+
+    /// A service manager that is never expected to run anything.
+    struct NoServices;
+
+    impl ServiceManager for NoServices {
+        fn executable(&self) -> io::Result<std::path::PathBuf> {
+            Ok("/usr/local/bin/joedocs".into())
+        }
+        fn systemctl(&self, _args: &[&str]) -> io::Result<systemd::Ran> {
+            Err(io::Error::other("systemctl must not run in this test"))
         }
     }
 
@@ -490,6 +572,84 @@ mod tests {
         catch_up(&mut store).unwrap();
         let out = run(&["app", "reindex"], &env, &fs).unwrap();
         assert!(out.starts_with("Rebuilt the index"), "{out}");
+    }
+
+    #[test]
+    fn systemd_install_pins_the_effective_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = storage_env(dir.path())
+            .with("HOME", dir.path().join("user").to_str().unwrap())
+            .with("MY_APP__SERVER__BIND", "127.0.0.1:9000");
+        let fs = MemFs::new().with("/etc/my-app/config.toml", "[log]\nlevel = \"warn\"\n");
+        let args = ["app", "systemd", "install", "--dry-run"];
+        let err = run(&args, &env, &fs).unwrap_err();
+        assert!(err.to_string().contains("run `joedocs init`"), "{err}");
+        run(&["app", "init"], &env, &fs).unwrap();
+
+        let out = run(
+            &[
+                "app",
+                "--log-level",
+                "debug",
+                "systemd",
+                "install",
+                "--dry-run",
+            ],
+            &env,
+            &fs,
+        )
+        .unwrap();
+        let unit_path = dir.path().join("user/.config/systemd/user/joedocs.service");
+        assert!(
+            out.starts_with(&format!("Would write {}:", unit_path.display())),
+            "{out}"
+        );
+        for line in [
+            "ExecStart=\"/usr/local/bin/joedocs\" serve\n".to_owned(),
+            "Environment=\"MY_APP_CONFIG_FILE=/etc/my-app/config.toml\"\n".to_owned(),
+            "Environment=\"MY_APP__LOG__LEVEL=debug\"\n".to_owned(),
+            "Environment=\"MY_APP__SERVER__BIND=127.0.0.1:9000\"\n".to_owned(),
+            format!(
+                "Environment=\"MY_APP__STORAGE__HOME={}\"\n",
+                dir.path().join("home").display()
+            ),
+            format!(
+                "Environment=\"MY_APP__STORAGE__STATE_DIR={}\"\n",
+                dir.path().join("state").display()
+            ),
+            "Would run: systemctl --user enable joedocs.service\n".to_owned(),
+        ] {
+            assert!(out.contains(&line), "{line}: {out}");
+        }
+        assert!(!unit_path.exists());
+
+        let out = run(
+            &[
+                "app",
+                "systemd",
+                "install",
+                "--system",
+                "--run-as",
+                "joedocs",
+                "--dry-run",
+            ],
+            &env,
+            &fs,
+        )
+        .unwrap();
+        assert!(
+            out.starts_with("Would write /etc/systemd/system/joedocs.service:"),
+            "{out}"
+        );
+        assert!(out.contains("User=joedocs\n"), "{out}");
+        let err = run(&["app", "systemd", "install", "--system"], &env, &fs).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_DATA, "{err}");
+
+        let out = run(&["app", "systemd", "remove"], &env, &fs).unwrap();
+        assert!(out.contains("nothing to remove"), "{out}");
+        let err = run(&["app", "systemd", "install"], &env, &fs).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_UNAVAILABLE, "{err}");
+        assert!(err.to_string().contains("systemctl must not run"), "{err}");
     }
 
     #[test]

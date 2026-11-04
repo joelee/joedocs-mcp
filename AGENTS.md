@@ -128,7 +128,7 @@ To add a config key: add the field with a default to the schema in `src/config/m
 
 ## CI/CD
 
-The CI platform is chosen per project; every pipeline is a thin wrapper that installs the required tools and runs `just ci` on the pinned toolchain with `NEXTEST_PROFILE=ci`. Library-profile projects add the `just msrv` job. The secret scan uses `gitleaks git` against full history, so CI must check out with full depth. Pre-commit runs `gitleaks git --pre-commit --staged --redact`.
+The CI platform is GitHub Actions (`.github/workflows/ci.yml`, with action updates from `.github/dependabot.yml`). Every pipeline is a thin wrapper that installs the required tools and runs `just ci` on the pinned toolchain with `NEXTEST_PROFILE=ci`. Library-profile projects add the `just msrv` job. The secret scan uses `gitleaks git` against full history, so CI must check out with full depth. Pre-commit runs `gitleaks git --pre-commit --staged --redact`.
 
 ## Documentation
 

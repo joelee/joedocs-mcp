@@ -2,7 +2,7 @@
 
 ## Overview
 
-`joedocs` is a command-line application split into a thin binary (`src/main.rs`) and a library (`src/lib.rs`) that holds all logic. The library never reads the real process environment, clock or random source directly: they are injected through the `Env`, `FileSystem`, `Clock` and `RandomSource` traits. The document store works on configured directories (temporary ones in tests) and keeps its history behind the `History` trait, implemented with the `git` command line. The design and phases are in [plan.md](plan.md).
+`joedocs` is a command-line application split into a thin binary (`src/main.rs`) and a library (`src/lib.rs`) that holds all logic. The library never reads the real process environment, clock or random source directly, nor runs `systemctl`: they are injected through the `Env`, `FileSystem`, `Clock`, `RandomSource` and `ServiceManager` traits. The document store works on configured directories (temporary ones in tests) and keeps its history behind the `History` trait, implemented with the `git` command line. The design and phases are in [plan.md](plan.md).
 
 ```mermaid
 flowchart LR
@@ -43,6 +43,7 @@ flowchart LR
 | `db` | SQLite connection setup, embedded migrations, and queries as free functions over a connection, including the search index (`doc_fields`, `doc_fts`). |
 | `history` | `History` trait and `GitCli`, with the git directory outside the vault: commit, show, log and diff. |
 | `auth` | API key generation, parsing, hashing and verification; `Permission` and `Grant`; `RandomSource`. |
+| `systemd` | `joedocs systemd install|remove`: renders a user or sandboxed system unit that pins the effective configuration, and runs `systemctl` through `ServiceManager`. |
 | `admin` | Text reports for `init`, `project`, `key`, `reindex`, `archive` and `check`. |
 | `mcp` | `joedocs serve`: the axum app (`/mcp` behind bearer authentication, `/health`), rmcp's Streamable HTTP service with `Host`/`Origin` checks, the fifteen tools with JSON schemas, grant checks, audit logging, and error mapping. |
 | `search` | Pure: the forgiving query grammar and its FTS5 translation (`query.rs`), and front matter filters, their SQL translation and value flattening (`filter.rs`). |
