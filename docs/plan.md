@@ -1,6 +1,6 @@
 # JoeDocs: initial plan
 
-Status: **phases 0 to 4 done**. The configuration, the document store, git history, the SQLite index, the admin commands (`init`, `project`, `key`, `reindex`, `archive`, `check`), the MCP server (`joedocs serve`, fifteen tools), search, and the history and editing tools are implemented; phase 5 (operations) is not. Choices made while building phases 1 to 4 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
+Status: **phases 0 to 4 done, phase 5 partly done**; 0.1.0 is released on crates.io and Homebrew. The configuration, the document store, git history, the SQLite index, the admin commands (`init`, `project`, `key`, `reindex`, `archive`, `check`, `systemd`), the MCP server (`joedocs serve`, fifteen tools), search, and the history and editing tools are implemented. Of phase 5, the systemd unit, the Homebrew service and the [deployment guide](deployment.md) are done; backups are not. The [backlog](backlog.md) tracks what is left. Choices made while building phases 1 to 4 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
 
 ## 1. Goal
 
@@ -413,10 +413,10 @@ Time and randomness will be injected (`Clock` and key-generator traits) like `En
 | --- | --- | --- |
 | 0. Foundations | Remove the `greet` example; add the `server`, `storage` and `documents` config; approve dependencies and `deny.toml` | `just ci` is green with the real config schema (done); dependencies approved (done) |
 | 1. Core store (no network) | `Clock` trait (moved from phase 0, so it lands with its first user and the chosen time crate); `document` types and front matter; `db` schema and migrations; `history` via git; `store` create, get, update, rename, front matter (set and remove), archive and list; the integrity guard; `admin init/project/key` | Integration tests drive the store against a temp vault and real git, including a file edited behind the store's back (done) |
-| 2. MCP over HTTP | `serve`, bearer auth, Origin check, the section 3 tools, structured errors | An rmcp client in tests round-trips every tool (done), and Claude Code connects for real (to be confirmed on the server) |
+| 2. MCP over HTTP | `serve`, bearer auth, Origin check, the section 3 tools, structured errors | An rmcp client in tests round-trips every tool (done), and Claude Code connects for real (done 2026-11-05, over Tailscale) |
 | 3. Search | FTS5 index, query grammar, filters, snippets, `reindex` | Search tests over a fixture vault (done) |
 | 4. History and editing tools | `get_document_history`, `diff_document`, `restore_document_version`, `move_document`, `edit_document`, `append_to_document`, `archive list/restore`, `check` (`list_projects` moved to phase 2) | Every tool round-trips over MCP, and each new action replays identically through `reindex` (done) |
-| 5. Operations | systemd unit, deploy guide (Caddy/Tailscale), optional `git push` backup, DB backup command. A local Docker Compose stack and `just docker-test` (after phase 2), and `joedocs systemd install|remove` and GitHub Actions CI (after phase 4), exist already | Running on the real server |
+| 5. Operations | systemd unit (done), deploy guide for Caddy and Tailscale (done: [deployment.md](deployment.md)), optional `git push` backup, DB backup command. A local Docker Compose stack and `just docker-test`, GitHub Actions CI, and the Homebrew formula with `brew services` exist too | Running on the real server (done 2026-11-05); backups remain |
 | Later | Approval provenance (server-stamped `status_changed`/`status_changed_by`, `approve` grant for protected statuses); per-type templates (MCP prompts); documents as MCP resources; backlinks; embedding search; attachments; secret scanning on write | |
 
 ## 16. Risks

@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-05
+
+A documentation release: no change to the command line, the configuration, the MCP tools or what is stored.
+
+### Added
+
+- **Deployment guide** (`docs/deployment.md`): installing with Homebrew or Cargo, configuring a server, running it as a systemd user or system service on Linux or under `brew services` on macOS, reaching it over Tailscale or a TLS proxy, connecting Claude Code, upgrades, backups and troubleshooting.
+- **Reference** (`docs/reference.md`): every command and exit code, every MCP tool with its parameters, error codes, the search syntax and filters, front matter rules and history trailers.
+- **Agent skills** (`docs/skills`): four Claude Code skills that keep their documents in JoeDocs and make a delivery workflow: `joedocs-idea-architect` (pressure-tests ideas), `joedocs-planner` (traceable delivery plans), `joedocs-builder` (executes an approved plan step by step, with evidence in the plan's work log) and `joedocs-code-review` (evidence-backed reviews against the plan), plus the conventions they share and a list of skills to add.
+- Homebrew installation: `brew install joelee/oss/joedocs`, with a `brew services` service.
+
+### Changed
+
+- The README now explains what JoeDocs is for, its features and use cases, and how to install it with Homebrew or Cargo.
 ## [0.1.0] - 2026-11-05
 
 First release: a central MCP server for multi-project documentation, stored as Markdown with YAML front matter, with git history and a SQLite index.
@@ -21,5 +35,6 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/joelee/joedocs-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/joelee/joedocs-mcp/releases/tag/v0.1.0

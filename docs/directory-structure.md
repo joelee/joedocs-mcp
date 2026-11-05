@@ -25,7 +25,10 @@
 ├── .gitleaks.toml          Secret-scan rules and allowlists
 ├── .pre-commit-config.yaml Local hooks: gitleaks, fmt, clippy
 ├── docs/                   Maintained documentation (rules in docs/AGENTS.md)
-│   └── plan.md             JoeDocs design decisions and phased plan
+│   ├── deployment.md       Running a server: systemd, brew services, Tailscale, operations
+│   ├── reference.md        Commands, MCP tools, search, front matter, errors
+│   ├── plan.md             JoeDocs design decisions and phased plan
+│   └── skills/             Agent skills that use JoeDocs (one folder per skill, with SKILL.md)
 ├── src/
 │   ├── main.rs             Thin binary wrapper
 │   ├── lib.rs              load, execute, Error, exit codes

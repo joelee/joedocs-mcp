@@ -73,26 +73,9 @@ docker compose down              # stops the stack; the data stays in .local/dat
 - To start afresh: `docker compose down && rm -rf .local/data`.
 - After an upgrade, `serve` rebuilds the index from the history if the database is from an older build; `docker compose logs` shows the outcome. To rebuild by hand: `docker compose exec joedocs joedocs reindex`.
 
-## Running as a systemd service
+## Running as a service
 
-`joedocs systemd install` writes a unit that runs `joedocs serve`, then reloads systemd, enables the unit and (re)starts it. systemd does not see your shell, so the unit pins the configuration in effect: the config file in use (`JOEDOCS_CONFIG_FILE`), every key set by an environment override or flag, and the absolute storage paths. Rerun it after changing any of them, or after moving the binary. Run `joedocs init` first; install refuses an uninitialised store.
-
-```bash
-joedocs systemd install --dry-run          # show the unit and the commands
-joedocs systemd install                    # user unit: ~/.config/systemd/user/joedocs.service
-loginctl enable-linger "$USER"             # keep it running when you are logged out
-journalctl --user -u joedocs -f
-joedocs systemd remove                     # stop, disable and delete it
-```
-
-On a server, a system unit runs as a dedicated account and is sandboxed so it can write only the vault and the state directory (`ProtectSystem=strict`, `ReadWritePaths=`, and similar):
-
-```bash
-sudo joedocs --config /etc/joedocs/config.toml systemd install --system --run-as joedocs
-sudo joedocs systemd remove --system
-```
-
-`sudo` resets your environment, so give the configuration through `--config` (or `/etc/joedocs/config.toml`, which the lookup finds anyway) rather than environment variables, and check the result with `--dry-run`. The account must be able to write the storage paths. A unit file that `joedocs systemd install` did not write is never overwritten or removed. systemd is Linux only.
+Running JoeDocs as a systemd or `brew services` service, reaching it from other machines, and operating it are in the [deployment guide](deployment.md). When you change `src/systemd.rs`, check the rendered unit with `cargo run -- systemd install --dry-run` (and `--system --run-as USER`).
 
 ## Debugging
 
@@ -132,6 +115,12 @@ Versions number the command line, the configuration and the MCP tools; the Rust 
    git tag -a vX.Y.Z -m "JoeDocs X.Y.Z"
    git push origin vX.Y.Z
    gh release create vX.Y.Z --title "JoeDocs X.Y.Z" --notes "<the CHANGELOG section>"
+   ```
+
+5. Update the Homebrew formula in the tap ([`joelee/homebrew-oss`](https://github.com/joelee/homebrew-oss)): set `url` in `Formula/joedocs.rb` to the new crate and `sha256` to its crates.io checksum, then open a pull request there; its macOS workflow runs `brew install --build-from-source`, `brew test` and `brew audit --strict`.
+
+   ```bash
+   curl -sL https://static.crates.io/crates/joedocs/joedocs-X.Y.Z.crate | shasum -a 256
    ```
 
 `cargo publish` uses the token from `cargo login`: create it on crates.io with only the `publish-update` scope (and `publish-new` for the first release), limited to the `joedocs` crate, with an expiry date. Never commit it.
