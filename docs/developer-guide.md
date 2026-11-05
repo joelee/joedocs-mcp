@@ -113,6 +113,25 @@ Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS` and `
 
 ## Releasing
 
-1. Move the `Unreleased` entries in `CHANGELOG.md` under a new version heading.
-2. Bump `version` in `Cargo.toml`.
-3. Run `just ci`, commit, and tag `vX.Y.Z`.
+Versions number the command line, the configuration and the MCP tools; the Rust library in the crate is internal. A published version can never be replaced (only yanked), so check before publishing.
+
+1. On a release branch, move the `Unreleased` entries in `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, add the compare links at the bottom, and set `version` in `Cargo.toml`.
+2. Check what would be published and that it builds on its own:
+
+   ```bash
+   cargo package --list --locked          # only src/, Cargo.*, README, LICENSE, CHANGELOG, config.example.toml
+   cargo publish --dry-run --locked       # builds the packaged sources
+   cargo install --path . --locked --root /tmp/joedocs-release && /tmp/joedocs-release/bin/joedocs --version
+   ```
+
+3. Run `just ci`, open a pull request, and merge it once CI passes.
+4. From an up-to-date `main`, publish and tag:
+
+   ```bash
+   cargo publish --locked
+   git tag -a vX.Y.Z -m "JoeDocs X.Y.Z"
+   git push origin vX.Y.Z
+   gh release create vX.Y.Z --title "JoeDocs X.Y.Z" --notes "<the CHANGELOG section>"
+   ```
+
+`cargo publish` uses the token from `cargo login`: create it on crates.io with only the `publish-update` scope (and `publish-new` for the first release), limited to the `joedocs` crate, with an expiry date. Never commit it.

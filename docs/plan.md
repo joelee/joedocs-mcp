@@ -372,7 +372,7 @@ Audited with `cargo deny` against the current `deny.toml` (RustSec DB of 2026-11
 
 **YAML.** `serde_yaml` is archived. `serde_yml` and `libyml` are flagged unsound, and `serde_yaml_ng` fails on the unmaintained `unsafe-libyaml`. The two credible candidates are:
 
-| | `serde-saphyr` 2.1.0 (chosen) | `yaml_serde` 0.10.7 |
+| | `serde-saphyr` 2.1.0 (chosen; 2.1.1 since 0.1.0, after 2.1.0 was yanked) | `yaml_serde` 0.10.7 |
 | --- | --- | --- |
 | Maintenance | Most active (about 12M recent downloads) | The YAML organisation's continuation of serde_yaml |
 | Safety | `#![forbid(unsafe_code)]` | Built on `libyaml-rs`: libyaml translated by c2rust, contains `unsafe`, quiet repo |
