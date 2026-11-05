@@ -1,4 +1,9 @@
-//! Library crate holding all application logic.
+//! Library crate holding all application logic of the `joedocs` binary.
+//!
+//! **This library is internal.** It is published only because the binary
+//! is built from it; its API may change in any release. The stable
+//! interfaces are the `joedocs` command line, its configuration, and the MCP
+//! tools. See the [README](https://github.com/joelee/joedocs-mcp).
 //!
 //! `main.rs` is a thin wrapper: it parses arguments, builds a [`Context`]
 //! from the real environment, filesystem, clock and random source, calls

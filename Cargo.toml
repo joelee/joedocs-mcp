@@ -5,11 +5,23 @@ edition = "2024"
 # MSRV: application profile (see AGENTS.md). Bump together with
 # rust-toolchain.toml.
 rust-version = "1.99"
-publish = false
-description = "JoeDocs: a central MCP server for multi-project documentation"
+description = "A central MCP server for multi-project documentation: Markdown with front matter, git history and full-text search"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/joelee/joedocs-mcp"
+homepage = "https://github.com/joelee/joedocs-mcp"
+keywords = ["mcp", "documentation", "markdown", "obsidian", "server"]
+categories = ["command-line-utilities", "development-tools"]
+# Only what is needed to build the binary and read about it.
+include = [
+    "/src/**/*",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/config.example.toml",
+]
 
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json"] }
