@@ -124,7 +124,18 @@ To add a config key: add the field with a default to the schema in `src/config/m
 - Adding `unsafe`, a build script (`build.rs`), or a dependency that needs a `deny.toml` change.
 - Raising the MSRV or changing `rust-toolchain.toml`.
 - Changing CI thresholds, lint levels, `deny.toml`, `.config/nextest.toml`, or `.gitleaks.toml` allowlists.
-- Deleting files, or any change to public API in a released crate.
+- Deleting files, or a breaking change to a stable interface (see Stable Interfaces).
+
+## Stable Interfaces
+
+`joedocs` is published on crates.io, and its version (SemVer) covers these stable interfaces:
+
+- the command line: commands, flags, exit codes, and output that scripts read (such as the token alone on the last line of `key create` and `key rotate`);
+- the configuration: keys, defaults, `JOEDOCS__SECTION__KEY` overrides, and the config file lookup;
+- the MCP tools: names, parameters, results and error codes;
+- what is stored: the vault layout, front matter keys, history commit trailers, and the database (changed only by new migrations).
+
+The Rust library in the crate is internal; its API may change in any release. Record every user-visible change in `CHANGELOG.md`.
 
 ## CI/CD
 
