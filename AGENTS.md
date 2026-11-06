@@ -147,6 +147,9 @@ Follow `docs/AGENTS.md` for documentation rules. The maintained set is:
 
 - `README.md` (including the chosen MSRV profile and CI platform)
 - `CHANGELOG.md` (Keep a Changelog format)
+- `docs/deployment.md`
+- `docs/reference.md`
+- `docs/skills/` (agent skills that use JoeDocs)
 - `docs/architecture.md`
 - `docs/configuration.md`
 - `docs/directory-structure.md`
