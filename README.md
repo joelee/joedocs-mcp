@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/media/joedocs-wide.jpg" alt="JoeDocs: one home for every project's knowledge">
+</p>
+
 # JoeDocs
 
 [![CI](https://github.com/joelee/joedocs-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/joelee/joedocs-mcp/actions/workflows/ci.yml)
@@ -25,6 +29,25 @@ Coding agents write a lot of useful documents: plans, design notes, review findi
 - **in a local notes folder**, which the agent on your other machine cannot see.
 
 JoeDocs gives them one place instead. It is the documentation layer behind your agents: central, versioned, searchable, and readable by both people and models.
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph M["Your machines"]
+        L["Claude Code<br/>on your laptop"]
+        D["OpenAI Codex<br/>on your desktop"]
+        C["Any MCP client<br/>on a server or in CI"]
+    end
+    L & D & C -- "MCP over HTTPS<br/>one key per machine" --> J
+    J["joedocs serve<br/>keys, grants, audit log"]
+    J --> V["Vault<br/>Markdown + front matter"]
+    J --> G["git history<br/>one commit per change"]
+    J --> I["SQLite index<br/>search and filters"]
+    V -. "browse" .-> O["Obsidian<br/>for you"]
+```
+
+One server holds the documents. Each agent connects with its own API key, scoped to the projects it may read or write. Every change lands in three places at once: the Markdown file you can read, a git commit you can roll back to, and the index that makes search fast.
 
 ## Features
 
@@ -113,6 +136,14 @@ Administration stays on the server's command line, so a leaked client key cannot
 ## Skills for agents
 
 [`docs/skills`](https://github.com/joelee/joedocs-mcp/blob/main/docs/skills/README.md) has ready-made Claude Code skills that use JoeDocs as their document store, and together make a delivery workflow:
+
+```mermaid
+flowchart LR
+    I["joedocs-idea-architect<br/>ideas: JD-12"] -- "you accept it" --> P
+    R["joedocs-code-review<br/>reviews: JD-40"] -- "open findings" --> P
+    P["joedocs-planner<br/>plans: JD-31"] -- "you approve it" --> B
+    B["joedocs-builder<br/>feature/jd-31-..."] -- "steps committed" --> R
+```
 
 - **joedocs-idea-architect** pressure-tests a raw idea and records it for you to accept, park or reject.
 - **joedocs-planner** turns an accepted idea, an open review or a request into a traceable, step-by-step delivery plan.
