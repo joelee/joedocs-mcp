@@ -62,7 +62,7 @@ Every tool returns structured JSON. A tool takes only the parameters listed; an 
 
 ### Writing
 
-Every change is one new revision and one git commit. A call that would change nothing is refused with `invalid_argument` and writes nothing: `update_document`, `edit_document` and `change_document_front_matter`, like `rename_document`, `move_document` and `restore_document_version`, do not create empty revisions. `summary`, where accepted, becomes the commit message. `expected_revision` is the revision you last read: the change is refused with `conflict` if the document has moved on since. It is required by `update_document` and optional elsewhere.
+Every change is one new revision and one git commit. `update_document`, `edit_document` and `change_document_front_matter` refuse a call that would change nothing with `invalid_argument`, and write nothing. `rename_document` and `move_document` likewise refuse the current title or type, and `restore_document_version` refuses the latest revision. Restoring an earlier revision whose content equals the latest still writes a revision. `summary`, where accepted, becomes the commit message. `expected_revision` is the revision you last read: the change is refused with `conflict` if the document has moved on since. It is required by `update_document` and optional elsewhere.
 
 | Tool | Parameters | Effect |
 | --- | --- | --- |

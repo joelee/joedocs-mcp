@@ -70,14 +70,16 @@ secrets-staged:
 
 # The checks are the recipes `just ci` uses, so the hook has no versions of its
 # own to pin. gitleaks always scans the staged changes; fmt and clippy run when
-# Rust files or the Cargo manifests are staged, and actionlint when workflows
-# are. fmt and clippy see the working tree, not only the index; CI checks the
-# commit itself.
+# a staged change (including a deletion or rename) touches a Rust file or the
+# Cargo manifests, and actionlint when one touches the workflows. Git matches
+# the pathspecs itself, so unusual file names need no parsing. fmt and clippy
+# see the working tree, not only the index; CI checks the commit itself.
 # Checks before each commit, run by .githooks/pre-commit (enabled by `just setup`)
 pre-commit:
     #!/usr/bin/env bash
     set -euo pipefail
-    staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+    # Exit status 0 means no staged change matches the pathspecs.
+    staged() { ! git diff --cached --quiet -- "$@"; }
     check() {
         echo "pre-commit: $1"
         if ! "{{just_executable()}}" "$1"; then
@@ -86,11 +88,11 @@ pre-commit:
         fi
     }
     check secrets-staged
-    if grep -qE '(\.rs$|^Cargo\.(toml|lock)$)' <<<"$staged"; then
+    if staged '*.rs' Cargo.toml Cargo.lock; then
         check fmt-check
         check lint
     fi
-    if grep -q '^\.github/workflows/' <<<"$staged"; then
+    if staged .github/workflows; then
         check actionlint
     fi
 
