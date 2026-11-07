@@ -406,6 +406,7 @@ impl Store {
         }
         fs::create_dir_all(&paths.home).map_err(Error::io("create", &paths.home))?;
         history.init()?;
+        index_file::exclude_from_history(&paths.git_dir())?;
         let conn = db::open(&paths.db())?;
         if history.head()?.is_none() {
             // An empty history needs no rebuild.
@@ -434,6 +435,10 @@ impl Store {
             return Err(Error::NotInitialised(paths.state_dir));
         }
         let conn = db::open(&paths.db())?;
+        // Older installs predate the rule; it only tidies `git status`.
+        if let Err(error) = index_file::exclude_from_history(&paths.git_dir()) {
+            tracing::warn!(%error, "could not add INDEX.md to the history's exclude file");
+        }
         Ok(Self {
             paths,
             settings,

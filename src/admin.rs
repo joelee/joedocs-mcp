@@ -188,6 +188,15 @@ fn report_check(report: &CheckReport, paths: &Paths, out: &mut dyn Write) -> Res
             writeln!(out, "  {path}")?;
         }
     }
+    if !report.stale_index_files.is_empty() {
+        writeln!(
+            out,
+            "INDEX.md files that are missing or out of date (`joedocs reindex` rewrites them):"
+        )?;
+        for path in &report.stale_index_files {
+            writeln!(out, "  {path}")?;
+        }
+    }
     if report.problems() == 0 {
         writeln!(out, "No problems found.")?;
     }

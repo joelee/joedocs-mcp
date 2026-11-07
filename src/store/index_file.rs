@@ -5,11 +5,96 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use super::{Error, Settings};
+use super::{Error, Settings, Store, lock};
 use crate::db::{self, Connection, DocumentRow, ProjectRow};
 
 /// The file name, in each project folder.
 pub(crate) const FILE_NAME: &str = "INDEX.md";
+
+/// The rule in the history's `info/exclude` that keeps every project's
+/// `INDEX.md` out of `git status` (it is never staged either way).
+const EXCLUDE_RULE: &str = "/*/INDEX.md";
+
+/// Adds [`EXCLUDE_RULE`] to `<git_dir>/info/exclude` unless it is there,
+/// keeping the file's other lines.
+///
+/// # Errors
+///
+/// Returns I/O errors.
+pub(super) fn exclude_from_history(git_dir: &Path) -> Result<(), Error> {
+    let dir = git_dir.join("info");
+    let path = dir.join("exclude");
+    let current = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(Error::io("read", &path)(error)),
+    };
+    if current.lines().any(|line| line.trim() == EXCLUDE_RULE) {
+        return Ok(());
+    }
+    let mut text = current;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(EXCLUDE_RULE);
+    text.push('\n');
+    fs::create_dir_all(&dir).map_err(Error::io("create", &dir))?;
+    fs::write(&path, text).map_err(Error::io("write", &path))
+}
+
+/// Rewrites every project's `INDEX.md` (see [`refresh`]). The caller holds
+/// the write lock.
+pub(super) fn refresh_all(conn: &Connection, home: &Path, settings: &Settings) {
+    if !settings.index_file {
+        return;
+    }
+    match db::list_projects(conn) {
+        Ok(projects) => {
+            for project in projects {
+                refresh(conn, home, settings, &project.name);
+            }
+        }
+        Err(error) => tracing::warn!(%error, "could not list projects to write {FILE_NAME}"),
+    }
+}
+
+/// The vault-relative paths of the `INDEX.md` files that are missing or
+/// differ from what the store would write; empty when `index_file` is off.
+///
+/// # Errors
+///
+/// Returns database errors.
+pub(super) fn stale(
+    conn: &Connection,
+    home: &Path,
+    settings: &Settings,
+) -> Result<Vec<String>, Error> {
+    if !settings.index_file {
+        return Ok(Vec::new());
+    }
+    let mut stale = Vec::new();
+    for project in db::list_projects(conn)? {
+        let text = expected(conn, &project.name)?;
+        let path = format!("{}/{FILE_NAME}", project.name);
+        if fs::read_to_string(home.join(&path)).ok().as_deref() != Some(text.as_str()) {
+            stale.push(path);
+        }
+    }
+    Ok(stale)
+}
+
+impl Store {
+    /// Rewrites every project's `INDEX.md` under the write lock, as `serve`
+    /// does when it starts. Failures are logged, not returned.
+    pub fn refresh_index_files(&self) {
+        match lock(&self.paths) {
+            Ok(_lock) => refresh_all(&self.conn, &self.paths.home, &self.settings),
+            Err(error) => {
+                tracing::warn!(%error, "could not take the write lock to write {FILE_NAME}");
+            }
+        }
+    }
+}
 
 /// Rewrites `project`'s `INDEX.md` when `settings.index_file` is on. A
 /// failure is logged, not returned: the document change that led here has

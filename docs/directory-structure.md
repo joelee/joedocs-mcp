@@ -76,6 +76,7 @@
 │       ├── revisions.rs    History pages and diffs
 │       ├── archive.rs      Archive list and restore
 │       ├── check.rs        Drift report for joedocs check
+│       ├── index_file.rs   Each project's generated INDEX.md
 │       ├── registry.rs     Projects and API keys
 │       ├── search.rs       Store::search
 │       ├── reindex.rs      Rebuilding the index from the history

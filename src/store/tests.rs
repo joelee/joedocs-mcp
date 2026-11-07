@@ -1205,3 +1205,72 @@ fn a_failed_index_write_warns_and_keeps_the_change() {
     assert!(logs.contains("WARN"), "{logs}");
     assert!(logs.contains("INDEX.md"), "{logs}");
 }
+
+#[test]
+fn the_history_ignores_index_files_from_init_and_on_open() {
+    let mut fx = fixture();
+    let exclude = fx.paths.git_dir().join("info/exclude");
+    let lines = |text: &str| text.lines().filter(|l| *l == "/*/INDEX.md").count();
+    assert_eq!(lines(&fs::read_to_string(&exclude).unwrap()), 1);
+
+    fx.store.create(&actor(), new_doc("Plan")).unwrap();
+    let status = Command::new("git")
+        .arg("--git-dir")
+        .arg(fx.paths.git_dir())
+        .arg("--work-tree")
+        .arg(&fx.paths.home)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+        .unwrap();
+    let status = String::from_utf8(status.stdout).unwrap();
+    assert!(!status.contains("INDEX.md"), "{status}");
+
+    // An older install: the line is missing, other lines are kept.
+    fs::write(&exclude, "# local rules\n*.swp").unwrap();
+    drop(reopen_with_index_file(&fx, true));
+    let text = fs::read_to_string(&exclude).unwrap();
+    assert!(text.starts_with("# local rules\n*.swp\n"), "{text}");
+    assert_eq!(lines(&text), 1, "{text}");
+    drop(reopen_with_index_file(&fx, true));
+    assert_eq!(fs::read_to_string(&exclude).unwrap(), text, "added once");
+}
+
+#[test]
+fn reindex_and_refresh_rewrite_every_index_file() {
+    let mut fx = fixture();
+    fx.store.create(&actor(), new_doc("Plan")).unwrap();
+    let path = fx.paths.home.join("joedocs/INDEX.md");
+    fs::remove_file(&path).unwrap();
+    fx.store.reindex().unwrap();
+    assert_eq!(index_text(&fx).unwrap(), expected_index(&fx));
+
+    fs::write(&path, "edited by hand\n").unwrap();
+    fx.store.refresh_index_files();
+    assert_eq!(index_text(&fx).unwrap(), expected_index(&fx));
+}
+
+#[test]
+fn check_reports_a_missing_or_stale_index_file() {
+    let mut fx = fixture();
+    fx.store.create(&actor(), new_doc("Plan")).unwrap();
+    assert_eq!(fx.store.check().unwrap().problems(), 0);
+
+    let path = fx.paths.home.join("joedocs/INDEX.md");
+    fs::write(&path, "edited by hand\n").unwrap();
+    let report = fx.store.check().unwrap();
+    assert_eq!(report.stale_index_files, ["joedocs/INDEX.md"]);
+    assert!(report.unknown_files.is_empty(), "{report:?}");
+    assert_eq!(report.problems(), 1);
+
+    fs::remove_file(&path).unwrap();
+    assert_eq!(
+        fx.store.check().unwrap().stale_index_files,
+        ["joedocs/INDEX.md"]
+    );
+
+    // With index_file off, INDEX.md is neither expected nor unknown.
+    let off = reopen_with_index_file(&fx, false);
+    assert_eq!(off.check().unwrap().problems(), 0);
+    fs::write(&path, "left over\n").unwrap();
+    assert_eq!(off.check().unwrap().problems(), 0);
+}

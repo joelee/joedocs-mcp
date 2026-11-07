@@ -19,13 +19,19 @@ pub struct CheckReport {
     pub drifted: Vec<(String, String)>,
     /// Vault files that belong to no live document, vault-relative.
     pub unknown_files: Vec<String>,
+    /// Projects' `INDEX.md` files that are missing or out of date,
+    /// vault-relative (`reindex` rewrites them).
+    pub stale_index_files: Vec<String>,
 }
 
 impl CheckReport {
     /// How many problems were found.
     #[must_use]
     pub fn problems(&self) -> usize {
-        usize::from(self.index_behind) + self.drifted.len() + self.unknown_files.len()
+        usize::from(self.index_behind)
+            + self.drifted.len()
+            + self.unknown_files.len()
+            + self.stale_index_files.len()
     }
 }
 
@@ -52,6 +58,7 @@ impl Store {
                 .into_iter()
                 .filter(|f| !known.contains(f) && !is_index_file(f))
                 .collect(),
+            stale_index_files: index_file::stale(&self.conn, &self.paths.home, &self.settings)?,
         })
     }
 }
