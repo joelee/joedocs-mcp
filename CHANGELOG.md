@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-11-05
+## [0.1.1] - 2026-11-07
 
 A documentation release: no change to the command line, the configuration, the MCP tools or what is stored.
 
@@ -18,6 +18,7 @@ A documentation release: no change to the command line, the configuration, the M
 ### Changed
 
 - The README now explains what JoeDocs is for, its features and use cases, and how to install it with Homebrew or Cargo, with a banner and diagrams of how the server and the skills fit together.
+
 ## [0.1.0] - 2026-11-05
 
 First release: a central MCP server for multi-project documentation, stored as Markdown with YAML front matter, with git history and a SQLite index.
