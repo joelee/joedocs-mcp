@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - **No empty revisions.** `edit_document`, `update_document` and `change_document_front_matter` now refuse a call that would leave the document unchanged, with `invalid_argument` (field `edits`, `content` or `front_matter`), instead of writing a revision and a git commit that change nothing. This matches `rename_document`, `move_document` and `restore_document_version`. A stale `expected_revision` is still reported as `conflict` first. The skills in `docs/skills` say to treat this refusal as already done.
+- The deployment guide shows how to connect OpenCode and Codex with the API key read from an environment variable (`JOEDOCS_API_KEY`), how to fill it from a password manager such as `pass`, and warns against keys in project-level client config.
 - The `joedocs-planner` skill can rename a draft plan with `rename_document` when the user asks, then updates the plan's heading and change log to match.
 
 ## [0.1.1] - 2026-11-07
