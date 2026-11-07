@@ -13,21 +13,23 @@ This Rust project targets Linux and macOS and was generated from the team's carg
 | Format | `just fmt` |
 | Full local gate (same as CI) | `just ci` |
 | Lint only | `just lint` |
+| Lint the GitHub Actions workflows | `just actionlint` |
 | Tests only (nextest) | `just test` |
 | Coverage (fails under 80% lines) | `just coverage` |
 | Secret scan of staged changes | `just secrets-staged` |
+| Pre-commit checks (what the git hook runs) | `just pre-commit` |
 | Check the MSRV builds (library profile) | `just msrv` |
 | Start the local Docker Compose stack (data in `.local/data`) | `just docker-up` |
 | Deployment tests against Docker Compose (needs Docker) | `just docker-test` |
 
-`just ci` runs, in order: `fetch` → `fmt-check` → `lint` → `coverage` → `doctest` → `doc` → `deny` → `secrets` → `build`. Never weaken a gate (threshold, lint level, `--locked`) to make it pass.
+`just ci` runs, in order: `fetch` → `fmt-check` → `lint` → `actionlint` → `coverage` → `doctest` → `doc` → `deny` → `secrets` → `build`. Never weaken a gate (threshold, lint level, `--locked`) to make it pass.
 
 ## Toolchain And Tools
 
 - The toolchain is pinned in `rust-toolchain.toml` (channel, plus `rustfmt`, `clippy`, `llvm-tools`). Do not change it unless the task is a toolchain bump.
 - Edition: Rust 2024. Resolver 3 is implied by the edition; do not set an older resolver.
 - `Cargo.lock` is committed. All CI commands use `--locked`.
-- Required external tools: `just`, `cargo-nextest`, `cargo-llvm-cov`, `cargo-deny`, `gitleaks`, `pre-commit`, and `git` (the history store runs it, and so do the tests).
+- Required external tools: `just`, `cargo-nextest`, `cargo-llvm-cov`, `cargo-deny`, `gitleaks`, `actionlint`, and `git` (the history store runs it, and so do the tests).
 - Optional per project: `cargo-hack` (if the crate has Cargo features, to check the feature powerset), `cargo-semver-checks` (for published libraries), `insta` (snapshot tests for CLI output).
 
 ### MSRV policy
@@ -139,7 +141,7 @@ The Rust library in the crate is internal; its API may change in any release. Re
 
 ## CI/CD
 
-The CI platform is GitHub Actions (`.github/workflows/ci.yml`, with action updates from `.github/dependabot.yml`). Every pipeline is a thin wrapper that installs the required tools and runs `just ci` on the pinned toolchain with `NEXTEST_PROFILE=ci`. Library-profile projects add the `just msrv` job. The secret scan uses `gitleaks git` against full history, so CI must check out with full depth. Pre-commit runs `gitleaks git --pre-commit --staged --redact`.
+The CI platform is GitHub Actions (`.github/workflows/ci.yml`, with action updates from `.github/dependabot.yml`). Every pipeline is a thin wrapper that installs the required tools and runs `just ci` on the pinned toolchain with `NEXTEST_PROFILE=ci`. Library-profile projects add the `just msrv` job. The secret scan uses `gitleaks git` against full history, so CI must check out with full depth. The git hook `.githooks/pre-commit` (enabled by `just setup` through `core.hooksPath`) runs `just pre-commit`: `gitleaks git --pre-commit --staged --redact` on every commit, plus `fmt-check` and `lint` when Rust files or the Cargo manifests are staged and `actionlint` when workflows are.
 
 ## Documentation
 

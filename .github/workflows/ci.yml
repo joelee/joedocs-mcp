@@ -21,6 +21,7 @@ env:
   NEXTEST_PROFILE: ci
   TOOLS: just@1.59.0,cargo-nextest@0.9.145,cargo-llvm-cov@0.9.1,cargo-deny@0.20.2
   GITLEAKS_VERSION: 8.30.1
+  ACTIONLINT_VERSION: 1.7.12
 
 jobs:
   ci:
@@ -34,9 +35,13 @@ jobs:
           - os: ubuntu-24.04
             gitleaks_asset: linux_x64
             gitleaks_sha256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+            actionlint_asset: linux_amd64
+            actionlint_sha256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
           - os: macos-15
             gitleaks_asset: darwin_arm64
             gitleaks_sha256: b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5
+            actionlint_asset: darwin_arm64
+            actionlint_sha256: aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,6 +72,20 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           tar -xzf "$RUNNER_TEMP/$archive" -C "$HOME/.local/bin" gitleaks
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # taiki-e/install-action has no actionlint manifest, so download the
+      # release and check it like gitleaks.
+      - name: Install actionlint
+        env:
+          ASSET: ${{ matrix.actionlint_asset }}
+          SHA256: ${{ matrix.actionlint_sha256 }}
+        run: |
+          archive="actionlint_${ACTIONLINT_VERSION}_${ASSET}.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "$SHA256  $RUNNER_TEMP/$archive" | shasum -a 256 -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$HOME/.local/bin" actionlint
 
       - name: just ci
         run: just ci

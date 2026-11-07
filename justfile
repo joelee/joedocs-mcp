@@ -7,12 +7,12 @@ msrv := `sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml`
 default:
     @just --list
 
-# One-off setup: cargo tools, canonical Cargo.lock, git hooks (gitleaks and pre-commit come from your package manager)
+# One-off setup: cargo tools, canonical Cargo.lock, the git hook in .githooks (gitleaks and actionlint come from your package manager)
 setup:
     rustup show active-toolchain
     cargo install --locked cargo-nextest cargo-llvm-cov cargo-deny
     cargo fetch
-    pre-commit install
+    git config core.hooksPath .githooks
 
 # Download dependencies exactly as pinned in Cargo.lock
 fetch:
@@ -29,6 +29,12 @@ fmt-check:
 # Clippy with every warning as an error
 lint:
     cargo clippy --all-targets --all-features --locked -- -D warnings
+
+# shellcheck and pyflakes are off, so the result does not depend on what else
+# is installed.
+# Lint the GitHub Actions workflows
+actionlint:
+    actionlint -shellcheck= -pyflakes=
 
 # Run tests with nextest (set NEXTEST_PROFILE=ci in CI)
 test:
@@ -62,6 +68,32 @@ secrets:
 secrets-staged:
     gitleaks git --pre-commit --staged --redact .
 
+# The checks are the recipes `just ci` uses, so the hook has no versions of its
+# own to pin. gitleaks always scans the staged changes; fmt and clippy run when
+# Rust files or the Cargo manifests are staged, and actionlint when workflows
+# are. fmt and clippy see the working tree, not only the index; CI checks the
+# commit itself.
+# Checks before each commit, run by .githooks/pre-commit (enabled by `just setup`)
+pre-commit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+    check() {
+        echo "pre-commit: $1"
+        if ! "{{just_executable()}}" "$1"; then
+            echo "pre-commit: '$1' failed; the commit was stopped" >&2
+            exit 1
+        fi
+    }
+    check secrets-staged
+    if grep -qE '(\.rs$|^Cargo\.(toml|lock)$)' <<<"$staged"; then
+        check fmt-check
+        check lint
+    fi
+    if grep -q '^\.github/workflows/' <<<"$staged"; then
+        check actionlint
+    fi
+
 # Optimised release build
 build:
     cargo build --release --locked
@@ -71,7 +103,7 @@ msrv:
     cargo +{{msrv}} check --all-targets --all-features --locked
 
 # Full gate, identical locally and in CI
-ci: fetch fmt-check lint coverage doctest doc deny secrets build
+ci: fetch fmt-check lint actionlint coverage doctest doc deny secrets build
 
 # Start the local Docker Compose stack as you, with its data in .local/data (or $JOEDOCS_DATA)
 docker-up:

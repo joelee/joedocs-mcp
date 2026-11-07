@@ -2,13 +2,13 @@
 
 ## Setup
 
-Install `rustup`, `just`, `git`, `gitleaks` and `pre-commit` with your package manager (on macOS: `brew install rustup just git gitleaks pre-commit`), then run:
+Install `rustup`, `just`, `git`, `gitleaks` and `actionlint` with your package manager (on macOS: `brew install rustup just git gitleaks actionlint`), then run:
 
 ```bash
 just setup
 ```
 
-This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Cargo.lock`, and installs the git hooks. The history tests run the real `git` from `PATH`, isolated from your own git configuration. `rustup` installs the toolchain pinned in `rust-toolchain.toml` on first use. Commit `Cargo.lock` if `just setup` changed it.
+This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Cargo.lock`, and turns on the git hook in `.githooks/` (`git config core.hooksPath .githooks`). Before each commit the hook runs `just pre-commit`: gitleaks on the staged changes, `cargo fmt --check` and clippy when Rust files or the Cargo manifests are staged, and `actionlint` when workflows are. A clone set up before 0.1.2 used the `pre-commit` framework; run `pre-commit uninstall` there if it is installed, then `just setup`. The history tests run the real `git` from `PATH`, isolated from your own git configuration. `rustup` installs the toolchain pinned in `rust-toolchain.toml` on first use. Commit `Cargo.lock` if `just setup` changed it.
 
 ## Workflow
 
@@ -27,6 +27,8 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 | `just doctest` | Run doc-tests (nextest skips them). |
 | `just doc` | Build API docs with warnings as errors. |
 | `just deny` | Advisories, licences, bans and sources. |
+| `just actionlint` | Lint the GitHub Actions workflows (shellcheck and pyflakes integrations off). |
+| `just pre-commit` | The checks the git hook runs before each commit. |
 | `just secrets` | Scan git history for secrets: gitleaks' built-in rules plus a `.gitleaks.toml` rule for JoeDocs API keys (checked by `tests/secrets.rs`). |
 | `just msrv` | Check the declared MSRV builds (library profile). |
 | `just docker-test [port]` | Build a throwaway Compose stack, run the deployment tests against it before and after a restart, then remove it (default port 18750). |
@@ -92,7 +94,7 @@ CI runs on GitHub Actions ([`.github/workflows/ci.yml`](../.github/workflows/ci.
 - `just ci` on Ubuntu and macOS, with full git history (for the gitleaks scan) and `NEXTEST_PROFILE=ci`; the JUnit report is uploaded as an artifact.
 - `just docker-test`, which builds the image and runs the deployment tests against it.
 
-Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS` and `GITLEAKS_VERSION` variables, with gitleaks checksums per platform). Keep the tool versions in step with what `just setup` installs locally. Dependabot proposes weekly updates for actions and crates; every proposal runs CI, including `cargo deny`.
+Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS`, `GITLEAKS_VERSION` and `ACTIONLINT_VERSION` variables, with gitleaks and actionlint checksums per platform). Keep the tool versions in step with what `just setup` installs locally. Dependabot proposes weekly updates for actions and crates; every proposal runs CI, including `cargo deny`.
 
 ## Releasing
 

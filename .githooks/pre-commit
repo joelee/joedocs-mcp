@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs `just pre-commit` before each commit. Enabled by `just setup`
+# (git config core.hooksPath .githooks).
+set -eu
+exec just pre-commit
