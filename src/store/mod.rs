@@ -266,6 +266,8 @@ pub struct Settings {
     pub default_status: String,
     /// Largest serialised document, in bytes.
     pub max_document_bytes: u64,
+    /// Whether each project folder gets a generated `INDEX.md`.
+    pub index_file: bool,
 }
 
 impl Settings {
@@ -278,6 +280,7 @@ impl Settings {
             default_type: config.documents.default_type.clone(),
             default_status: config.documents.default_status.clone(),
             max_document_bytes: config.server.max_document_bytes,
+            index_file: config.documents.index_file,
         }
     }
 }

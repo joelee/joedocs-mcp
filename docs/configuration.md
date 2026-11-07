@@ -42,6 +42,7 @@ Run `joedocs config paths` to see the search order and the selected file.
 | `documents.statuses` | array of slugs | `["draft", "review", "approved", "rejected", "superseded", "done"]` | `JOEDOCS__DOCUMENTS__STATUSES` | | Allowed values of the `status` front matter key. |
 | `documents.default_type` | string | `"home"` | `JOEDOCS__DOCUMENTS__DEFAULT_TYPE` | | Type for new documents that name none; must be in `documents.types`. |
 | `documents.default_status` | string | `"draft"` | `JOEDOCS__DOCUMENTS__DEFAULT_STATUS` | | Status for new documents that name none; must be in `documents.statuses`. |
+| `documents.index_file` | boolean | `true` | `JOEDOCS__DOCUMENTS__INDEX_FILE` | | Write `INDEX.md`, a table of the live documents sorted by ID, in each project folder (see [reference](reference.md#documents)). When `false`, JoeDocs neither writes nor checks it, and leaves existing files in place. |
 
 A slug is 1 to 64 characters of `a-z`, `0-9` and `-`, starting with a letter or digit. Lists of slugs must be non-empty and have no duplicates.
 

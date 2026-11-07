@@ -199,6 +199,9 @@ pub struct DocumentsConfig {
     pub default_type: String,
     /// Status used when a new document names none; must be in `statuses`.
     pub default_status: String,
+    /// Whether to write `INDEX.md`, a table of the live documents, in
+    /// each project folder.
+    pub index_file: bool,
 }
 
 impl Default for DocumentsConfig {
@@ -218,6 +221,7 @@ impl Default for DocumentsConfig {
             ]),
             default_type: "home".to_owned(),
             default_status: "draft".to_owned(),
+            index_file: true,
         }
     }
 }

@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(resolved.config, Config::default());
         assert_eq!(resolved.file, None);
         assert!(resolved.sources.values().all(|s| *s == Source::Default));
-        assert_eq!(resolved.sources.len(), 11);
+        assert_eq!(resolved.sources.len(), 12);
     }
 
     #[test]
@@ -571,6 +571,21 @@ mod tests {
         assert_eq!(resolved.config.server.bind, "0.0.0.0:9000".parse().unwrap());
         assert_eq!(resolved.config.server.max_document_bytes, 2);
         assert_eq!(resolved.config.documents.types, vec!["home", "plans"]);
+    }
+
+    #[test]
+    fn index_file_is_on_by_default_and_a_boolean_override_turns_it_off() {
+        let resolved = resolve_with(&MapEnv::new(), &MemFs::new()).unwrap();
+        assert!(resolved.config.documents.index_file);
+        let env = MapEnv::new().with("MY_APP__DOCUMENTS__INDEX_FILE", "false");
+        let resolved = resolve_with(&env, &MemFs::new()).unwrap();
+        assert!(!resolved.config.documents.index_file);
+        let env = MapEnv::new().with("MY_APP__DOCUMENTS__INDEX_FILE", "no");
+        let err = resolve_with(&env, &MemFs::new()).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidOverride { var: ref v, .. } if v == "MY_APP__DOCUMENTS__INDEX_FILE"),
+            "{err}"
+        );
     }
 
     #[test]
