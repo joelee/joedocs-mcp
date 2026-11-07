@@ -22,6 +22,7 @@ mod archive;
 mod check;
 mod documents;
 mod editing;
+mod index_file;
 mod journal;
 mod registry;
 mod reindex;
