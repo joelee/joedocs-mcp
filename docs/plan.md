@@ -331,7 +331,7 @@ sequenceDiagram
     W->>F: write front matter (revision 4, updated, updated_by) + body
     W->>G: add + commit (author laptop, trailers)
     G-->>W: sha
-    W->>D: BEGIN; update documents, revisions, doc_fields, doc_fts; COMMIT
+    W->>D: BEGIN#59; update documents, revisions, doc_fields, doc_fts#59; COMMIT
     W-->>M: revision 4
     M-->>C: { revision: 4 }
 ```

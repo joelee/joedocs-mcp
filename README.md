@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/joedocs-wide.jpg" alt="JoeDocs: one home for every project's knowledge">
+  <img src="https://raw.githubusercontent.com/joelee/joedocs-mcp/main/docs/media/joedocs-wide.jpg" alt="JoeDocs: one home for every project's knowledge">
 </p>
 
 # JoeDocs
@@ -22,13 +22,14 @@ Agent:  Draft plan JD-31 is ready for review: 6 steps, no open decisions.
 
 ## Why
 
-Coding agents write a lot of useful documents: plans, design notes, review findings, research. Usually they end up in one of three places:
+Coding agents write a lot of useful documents: plans, design notes, review findings, research. Usually they end up in one of four places:
 
 - **in the repository**, mixed in with the code, cluttering pull requests, and tied to one checkout on one machine;
 - **in a chat transcript**, gone when the session ends;
-- **in a local notes folder**, which the agent on your other machine cannot see.
+- **in a local notes folder**, which the agent on your other machine cannot see;
+- **in a proprietary SaaS** such as Jira or Confluence, where agents and scripts can reach the content only through the vendor's authenticated API or an export, you cannot grep it, diff it or keep it under your own version control, and moving away means a migration.
 
-JoeDocs gives them one place instead. It is the documentation layer behind your agents: central, versioned, searchable, and readable by both people and models.
+JoeDocs gives them one place instead. It is the documentation layer behind your agents: central, versioned, searchable, and readable by both people and models. Everything is plain Markdown files and a git history on a server you run, so you can open, search or back up your documents with ordinary tools, with or without JoeDocs.
 
 ## How it works
 
