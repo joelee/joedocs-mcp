@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-07
+
+Three MCP tools stop writing empty revisions, and the deployment guide shows how to keep API keys out of client config files.
+
 ### Changed
 
 - **No empty revisions.** `edit_document`, `update_document` and `change_document_front_matter` now refuse a call that would leave the document unchanged, with `invalid_argument` (field `edits`, `content` or `front_matter`), instead of writing a revision and a git commit that change nothing. This matches `rename_document`, `move_document` and `restore_document_version`. A stale `expected_revision` is still reported as `conflict` first. The skills in `docs/skills` say to treat this refusal as already done.
@@ -42,6 +46,7 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/joelee/joedocs-mcp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/joelee/joedocs-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/joelee/joedocs-mcp/releases/tag/v0.1.0
