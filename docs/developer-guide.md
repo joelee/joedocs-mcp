@@ -110,11 +110,12 @@ Versions number the command line, the configuration and the MCP tools; the Rust 
    ```
 
 3. Run `just ci`, open a pull request, and merge it once CI passes.
-4. From an up-to-date `main`, publish and tag:
+4. From an up-to-date `main`, publish, then tag. Publish first: a published version cannot be replaced, so the tag should point at exactly what was published. Release tags are signed, so git needs a signing key (`user.signingkey`, GPG or SSH with `gpg.format`):
 
    ```bash
    cargo publish --locked
-   git tag -a vX.Y.Z -m "JoeDocs X.Y.Z"
+   git tag -s vX.Y.Z -m "JoeDocs X.Y.Z"
+   git tag -v vX.Y.Z                  # check the signature before pushing
    git push origin vX.Y.Z
    gh release create vX.Y.Z --title "JoeDocs X.Y.Z" --notes "<the CHANGELOG section>"
    ```
