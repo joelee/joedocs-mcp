@@ -141,7 +141,7 @@ The Rust library in the crate is internal; its API may change in any release. Re
 
 ## CI/CD
 
-The CI platform is GitHub Actions (`.github/workflows/ci.yml`, with action updates from `.github/dependabot.yml`). Every pipeline is a thin wrapper that installs the required tools and runs `just ci` on the pinned toolchain with `NEXTEST_PROFILE=ci`. Library-profile projects add the `just msrv` job. The secret scan uses `gitleaks git` against full history, so CI must check out with full depth. The git hook `.githooks/pre-commit` (enabled by `just setup` through `core.hooksPath`) runs `just pre-commit`: `gitleaks git --pre-commit --staged --redact` on every commit, plus `fmt-check` and `lint` when Rust files or the Cargo manifests are staged and `actionlint` when workflows are.
+The CI platform is GitHub Actions (`.github/workflows/ci.yml`, with action updates from `.github/dependabot.yml`). Every pipeline is a thin wrapper that installs the required tools and runs `just ci` on the pinned toolchain with `NEXTEST_PROFILE=ci`. Library-profile projects add the `just msrv` job. The secret scan uses `gitleaks git` against full history, so CI must check out with full depth. The git hook `.githooks/pre-commit` (enabled by `just setup` through `core.hooksPath`) runs `just pre-commit`: `gitleaks git --pre-commit --staged --redact` on every commit, plus `fmt-check` and `lint` when Rust files or the Cargo manifests are staged and `actionlint` when workflows are. Releases run `.github/workflows/release.yml` on a signed `vX.Y.Z` tag: it reuses `ci.yml` (`workflow_call`) on the tagged commit, then publishes to crates.io with Trusted Publishing after approval in the `release` environment (see `docs/developer-guide.md` § Releasing).
 
 ## Documentation
 
