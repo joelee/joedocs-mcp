@@ -4,6 +4,15 @@
 [extend]
 useDefault = true
 
+# JoeDocs API keys (`jd_<12 hex id>_<64 hex secret>`, see src/auth.rs). The
+# built-in rules do not recognise the format. tests/secrets.rs checks this
+# rule.
+[[rules]]
+id = "joedocs-api-key"
+description = "JoeDocs API key"
+regex = '''\bjd_[0-9a-fA-F]{12}_[0-9a-fA-F]{64}\b'''
+keywords = ["jd_"]
+
 # Allowlist a known false positive only with a reason, for example:
 #
 # [[allowlists]]

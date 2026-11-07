@@ -27,7 +27,7 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 | `just doctest` | Run doc-tests (nextest skips them). |
 | `just doc` | Build API docs with warnings as errors. |
 | `just deny` | Advisories, licences, bans and sources. |
-| `just secrets` | Scan git history for secrets. |
+| `just secrets` | Scan git history for secrets: gitleaks' built-in rules plus a `.gitleaks.toml` rule for JoeDocs API keys (checked by `tests/secrets.rs`). |
 | `just msrv` | Check the declared MSRV builds (library profile). |
 | `just docker-test [port]` | Build a throwaway Compose stack, run the deployment tests against it before and after a restart, then remove it (default port 18750). |
 | `just ci` | Everything above, in CI order. |
