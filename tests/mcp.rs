@@ -506,6 +506,54 @@ async fn history_and_editing_tools_round_trip() {
 }
 
 #[tokio::test]
+async fn changes_that_change_nothing_are_refused() {
+    let server = start().await.unwrap();
+    let client = server.client(&server.writer).await.unwrap();
+    ok(
+        &client,
+        "new_document",
+        json!({"project": "joedocs", "title": "Note", "content": "Same.\n",
+               "front_matter": {"owner": "joel"}}),
+    )
+    .await
+    .unwrap();
+
+    let refusals = [
+        (
+            "edit_document",
+            json!({"document_id": "JD-1", "edits": [{"old": "Same.", "new": "Same."}]}),
+            "edits",
+        ),
+        (
+            "update_document",
+            json!({"document_id": "JD-1", "content": "Same.\n", "expected_revision": 1,
+                   "front_matter": {"owner": "joel"}}),
+            "content",
+        ),
+        (
+            "change_document_front_matter",
+            json!({"document_id": "JD-1", "set": {"owner": "joel"}}),
+            "front_matter",
+        ),
+    ];
+    for (tool, args, field) in refusals {
+        let refused = error(&client, tool, args).await.unwrap();
+        assert_eq!(
+            (refused["code"].as_str(), refused["field"].as_str()),
+            (Some("invalid_argument"), Some(field)),
+            "{tool}: {refused}"
+        );
+    }
+    let current = ok(&client, "get_document", json!({"document_id": "JD-1"}))
+        .await
+        .unwrap();
+    assert_eq!(current["document"]["revision"], 1, "{current}");
+
+    client.cancel().await.unwrap();
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn grants_limit_what_a_key_can_see_and_change() {
     let server = start().await.unwrap();
     let writer = server.client(&server.writer).await.unwrap();

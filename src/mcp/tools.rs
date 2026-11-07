@@ -928,7 +928,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Replace a document's body. expected_revision must be the revision you last read; on a conflict error, read it again and merge. front_matter keys given here are set as in change_document_front_matter.",
+        description = "Replace a document's body. expected_revision must be the revision you last read; on a conflict error, read it again and merge. front_matter keys given here are set as in change_document_front_matter. A call that changes neither the body nor the front matter is refused with invalid_argument (field content), and no revision is written.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -996,7 +996,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Set and remove front matter keys without touching the body. status, tags and aliases can be set but not removed; server keys (id, title, type, revision, ...) cannot be changed here.",
+        description = "Set and remove front matter keys without touching the body. status, tags and aliases can be set but not removed; server keys (id, title, type, revision, ...) cannot be changed here. A call that would change nothing is refused with invalid_argument (field front_matter).",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1029,7 +1029,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Change a document's body with exact replacements, without resending it: each `old` must occur exactly once in the body (not the front matter). Edits apply in order; if any fails, nothing changes and the error names it.",
+        description = "Change a document's body with exact replacements, without resending it: each `old` must occur exactly once in the body (not the front matter). Edits apply in order; if any fails, nothing changes and the error names it. Edits that leave the body as it was are refused with invalid_argument (field edits).",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
