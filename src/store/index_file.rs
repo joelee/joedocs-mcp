@@ -2,8 +2,62 @@
 //! the project folder so a person can find and open a document by its ID.
 
 use std::fmt::Write as _;
+use std::fs;
+use std::path::Path;
 
-use crate::db::{DocumentRow, ProjectRow};
+use super::{Error, Settings};
+use crate::db::{self, Connection, DocumentRow, ProjectRow};
+
+/// The file name, in each project folder.
+pub(crate) const FILE_NAME: &str = "INDEX.md";
+
+/// Rewrites `project`'s `INDEX.md` when `settings.index_file` is on. A
+/// failure is logged, not returned: the document change that led here has
+/// already been committed, and the next write, `serve` or `reindex`
+/// repairs the file.
+pub(super) fn refresh(conn: &Connection, home: &Path, settings: &Settings, project: &str) {
+    if !settings.index_file {
+        return;
+    }
+    if let Err(error) = write(conn, home, project) {
+        tracing::warn!(%project, %error, "could not write {project}/{FILE_NAME}");
+    }
+}
+
+/// The text `project`'s `INDEX.md` should hold.
+///
+/// # Errors
+///
+/// Returns database errors, and [`Error::ProjectNotFound`].
+pub(super) fn expected(conn: &Connection, project: &str) -> Result<String, Error> {
+    let row = db::find_project(conn, project)?
+        .ok_or_else(|| Error::ProjectNotFound(project.to_owned()))?;
+    let entries: Vec<Entry> = db::live_documents_in(conn, row.id)?
+        .iter()
+        .map(|doc| Entry::from_row(&row, doc))
+        .collect();
+    Ok(render(&row, &entries))
+}
+
+/// Writes `project`'s `INDEX.md` unless it already holds the right text,
+/// through a temporary file renamed into place.
+fn write(conn: &Connection, home: &Path, project: &str) -> Result<(), Error> {
+    let text = expected(conn, project)?;
+    let dir = home.join(project);
+    let path = dir.join(FILE_NAME);
+    if fs::read_to_string(&path).is_ok_and(|current| current == text) {
+        return Ok(());
+    }
+    fs::create_dir_all(&dir).map_err(Error::io("create", &dir))?;
+    // A dot name, so `check` and Obsidian skip it if a crash leaves it.
+    let temp = dir.join(format!(".{FILE_NAME}.tmp"));
+    fs::write(&temp, text).map_err(Error::io("write", &temp))?;
+    if let Err(error) = fs::rename(&temp, &path) {
+        let _ = fs::remove_file(&temp);
+        return Err(Error::io("write", &path)(error));
+    }
+    Ok(())
+}
 
 /// One document's row in the table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,10 +80,6 @@ pub(super) struct Entry {
 
 impl Entry {
     /// The entry for a live document of `project`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used once the store writes INDEX.md")
-    )]
     pub(super) fn from_row(project: &ProjectRow, row: &DocumentRow) -> Self {
         let prefix = format!("{}/", project.name);
         let path = row.path.strip_prefix(&prefix).unwrap_or(&row.path);
@@ -55,10 +105,6 @@ const NOTICE: &str =
 
 /// The text of `INDEX.md` for `project` and its live documents, sorted by
 /// the number in their IDs whatever order `entries` is in.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used once the store writes INDEX.md")
-)]
 pub(super) fn render(project: &ProjectRow, entries: &[Entry]) -> String {
     let name = if project.title.is_empty() {
         &project.name

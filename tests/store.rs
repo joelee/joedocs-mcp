@@ -49,6 +49,25 @@ fn log(root: &Path) -> std::io::Result<Vec<String>> {
         .collect())
 }
 
+/// Every file under `dir`, relative to it and sorted.
+fn vault_files(dir: &Path) -> std::io::Result<Vec<String>> {
+    let mut files = Vec::new();
+    let mut pending = vec![(dir.to_owned(), String::new())];
+    while let Some((dir, prefix)) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            if entry.file_type()?.is_dir() {
+                pending.push((entry.path(), format!("{name}/")));
+            } else {
+                files.push(name);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 fn fields(value: &serde_json::Value) -> Fields {
     value
         .as_object()
@@ -153,10 +172,11 @@ fn a_document_lifecycle_is_recorded_in_files_history_and_index() {
         })
         .unwrap();
     assert_eq!(listing.total, 0);
-    let vault: Vec<_> = std::fs::read_dir(root.path().join("vault"))
-        .unwrap()
-        .collect();
-    assert!(vault.is_empty(), "the vault holds only live documents");
+    assert_eq!(
+        vault_files(&root.path().join("vault")).unwrap(),
+        ["joedocs/INDEX.md"],
+        "the vault holds only live documents and each project's INDEX.md"
+    );
 }
 
 #[test]

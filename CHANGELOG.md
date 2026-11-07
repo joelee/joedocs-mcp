@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **`INDEX.md` in each project folder** (`<storage.home>/<project>/INDEX.md`): a table of the project's live documents sorted by ID, with each title linked to its file and its type, status and updated date, so a document can be found and opened by ID in Obsidian or any Markdown viewer. JoeDocs rewrites it after every change, never commits it to the history, and `check` treats the path as reserved. Turn it off with `documents.index_file = false` (`JOEDOCS__DOCUMENTS__INDEX_FILE`).
+
 ## [0.1.2] - 2026-11-07
 
 Three MCP tools stop writing empty revisions, and the deployment guide shows how to keep API keys out of client config files.

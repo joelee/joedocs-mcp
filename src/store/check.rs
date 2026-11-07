@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use super::reindex::drifted;
-use super::{Error, Store};
+use super::{Error, Store, index_file};
 use crate::db;
 
 /// What [`Store::check`] found.
@@ -48,9 +48,19 @@ impl Store {
         Ok(CheckReport {
             index_behind,
             drifted,
-            unknown_files: files.into_iter().filter(|f| !known.contains(f)).collect(),
+            unknown_files: files
+                .into_iter()
+                .filter(|f| !known.contains(f) && !is_index_file(f))
+                .collect(),
         })
     }
+}
+
+/// Whether `path` (vault-relative) is a project's `INDEX.md`, a reserved
+/// path that is never reported as unknown.
+fn is_index_file(path: &str) -> bool {
+    path.split_once('/')
+        .is_some_and(|(project, rest)| !project.is_empty() && rest == index_file::FILE_NAME)
 }
 
 /// Collects the files under `dir`, skipping names that start with a dot.

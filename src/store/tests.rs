@@ -123,6 +123,25 @@ fn read(fx: &Fixture, path: &str) -> String {
     fs::read_to_string(fx.paths.home.join(path)).unwrap()
 }
 
+/// Every file under `dir`, vault-relative and sorted.
+fn vault_files(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, prefix: &str, files: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            if entry.file_type().unwrap().is_dir() {
+                walk(&entry.path(), &format!("{name}/"), files);
+            } else {
+                files.push(name);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, "", &mut files);
+    files.sort();
+    files
+}
+
 fn git_log(fx: &Fixture) -> String {
     let output = Command::new("git")
         .arg("--git-dir")
@@ -283,7 +302,8 @@ fn create_validates_its_arguments() {
     assert!(invalid(&mut fx, r).contains("server.max_document_bytes"));
 
     assert_eq!(git_log(&fx), "");
-    assert_eq!(fs::read_dir(&fx.paths.home).unwrap().count(), 0);
+    // Only the project's generated INDEX.md, no document.
+    assert_eq!(vault_files(&fx.paths.home), ["joedocs/INDEX.md"]);
 }
 
 #[test]
@@ -504,8 +524,13 @@ fn archive_removes_the_file_but_keeps_the_history() {
     assert_eq!(archived.revision, 2);
     assert_eq!(archived.archived_at, "2026-10-26T07:33:20Z");
     assert!(
-        !fx.paths.home.join("joedocs").exists(),
+        !fx.paths.home.join("joedocs/plans").exists(),
         "empty folders are removed"
+    );
+    assert_eq!(
+        vault_files(&fx.paths.home),
+        ["joedocs/INDEX.md"],
+        "the project folder keeps only its INDEX.md"
     );
     assert!(git_log(&fx).starts_with("laptop|Archive JD-1: superseded by JD-2|archive\n"));
     assert_eq!(fx.store.projects().unwrap()[0].documents, 0);
@@ -996,4 +1021,187 @@ fn a_stale_revision_is_reported_before_a_no_op() {
         fx.store.update(&actor(), update("JD-1", "Text\n", 1)),
         Err(Error::Conflict { current: 2, .. })
     ));
+}
+
+// --- INDEX.md --------------------------------------------------------------
+
+/// What `<home>/joedocs/INDEX.md` should hold for the live documents.
+fn expected_index(fx: &Fixture) -> String {
+    let project = db::find_project(&fx.store.conn, "joedocs")
+        .unwrap()
+        .unwrap();
+    let entries: Vec<index_file::Entry> = db::live_documents(&fx.store.conn)
+        .unwrap()
+        .iter()
+        .filter(|row| row.project == "joedocs")
+        .map(|row| index_file::Entry::from_row(&project, row))
+        .collect();
+    index_file::render(&project, &entries)
+}
+
+fn index_text(fx: &Fixture) -> Option<String> {
+    fs::read_to_string(fx.paths.home.join("joedocs/INDEX.md")).ok()
+}
+
+#[test]
+fn index_file_follows_every_kind_of_change() {
+    let mut fx = fixture();
+    // Adding the project wrote the empty index.
+    assert!(
+        index_text(&fx).unwrap().ends_with("No documents yet.\n"),
+        "{:?}",
+        index_text(&fx)
+    );
+
+    let created = fx.store.create(&actor(), new_doc("Plan")).unwrap();
+    assert_eq!(index_text(&fx).unwrap(), expected_index(&fx));
+    assert!(
+        index_text(&fx)
+            .unwrap()
+            .contains("| JD-1 | [Plan](plans/Plan.md) |")
+    );
+    fx.store.create(&actor(), new_doc("Second")).unwrap();
+
+    fx.clock.advance(86_400);
+    fx.store
+        .update(&actor(), update("JD-1", "New\n", created.revision))
+        .unwrap();
+    assert_eq!(index_text(&fx).unwrap(), expected_index(&fx));
+    fx.store
+        .edit(&actor(), "JD-1", &[replacement("New", "Newer")], None, None)
+        .unwrap();
+    fx.store
+        .append(&actor(), "JD-1", "More.", None, None)
+        .unwrap();
+    fx.store
+        .rename(&actor(), "JD-1", "Renamed plan", None)
+        .unwrap();
+    assert!(
+        index_text(&fx)
+            .unwrap()
+            .contains("[Renamed plan](plans/Renamed%20plan.md)")
+    );
+    fx.store
+        .move_document(&actor(), "JD-1", "ideas", None)
+        .unwrap();
+    assert!(
+        index_text(&fx)
+            .unwrap()
+            .contains("](ideas/Renamed%20plan.md) | ideas |")
+    );
+    let status = fields(json!({"status": "review"}));
+    fx.store
+        .change_front_matter(&actor(), "JD-1", &status, &[], None)
+        .unwrap();
+    assert!(index_text(&fx).unwrap().contains("| ideas | review |"));
+    fx.store
+        .restore_version(&actor(), "JD-1", 1, None, None)
+        .unwrap();
+    assert_eq!(index_text(&fx).unwrap(), expected_index(&fx));
+
+    fx.store.archive(&actor(), "JD-2", "done with it").unwrap();
+    assert!(!index_text(&fx).unwrap().contains("JD-2"));
+    fx.store.unarchive(&actor(), "JD-2").unwrap();
+    assert!(index_text(&fx).unwrap().contains("| JD-2 |"));
+    assert_eq!(index_text(&fx).unwrap(), expected_index(&fx));
+
+    // INDEX.md is never part of a commit.
+    let output = Command::new("git")
+        .arg("--git-dir")
+        .arg(fx.paths.git_dir())
+        .args(["log", "--name-only", "--format="])
+        .output()
+        .unwrap();
+    let names = String::from_utf8(output.stdout).unwrap();
+    assert!(!names.contains("INDEX.md"), "{names}");
+}
+
+#[test]
+fn an_unchanged_index_file_is_not_rewritten() {
+    let mut fx = fixture();
+    fx.store.create(&actor(), new_doc("Plan")).unwrap();
+    let path = fx.paths.home.join("joedocs/INDEX.md");
+    let long_ago = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(long_ago)
+        .unwrap();
+    // Same day, same title, type and status: the table does not change.
+    fx.store
+        .update(&actor(), update("JD-1", "Other body\n", 1))
+        .unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), long_ago);
+    // A new title does change it.
+    fx.store
+        .rename(&actor(), "JD-1", "New title", None)
+        .unwrap();
+    assert_ne!(fs::metadata(&path).unwrap().modified().unwrap(), long_ago);
+}
+
+/// A store over `fx`'s vault and history with `index_file` set to `on`.
+fn reopen_with_index_file(fx: &Fixture, on: bool) -> Store {
+    let settings = Settings {
+        index_file: on,
+        ..Settings::from_config(&Config::default())
+    };
+    Store::open(
+        fx.paths.clone(),
+        settings,
+        Box::new(git_for(&fx.paths)),
+        Arc::clone(&fx.clock) as Arc<dyn Clock>,
+    )
+    .unwrap()
+}
+
+#[test]
+fn with_index_file_off_no_index_is_written_and_old_ones_stay() {
+    let fx = fixture();
+    let mut store = reopen_with_index_file(&fx, false);
+    store.add_project("other", "OT", None).unwrap();
+    assert!(!fx.paths.home.join("other/INDEX.md").exists());
+    let before = index_text(&fx).unwrap();
+    store.create(&actor(), new_doc("Plan")).unwrap();
+    assert_eq!(index_text(&fx).unwrap(), before);
+}
+
+/// Everything `tracing` writes while `f` runs, as text.
+fn captured_logs(f: impl FnOnce()) -> String {
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, f);
+    let bytes = buffer.0.lock().unwrap().clone();
+    String::from_utf8(bytes).unwrap()
+}
+
+#[test]
+fn a_failed_index_write_warns_and_keeps_the_change() {
+    let mut fx = fixture();
+    let path = fx.paths.home.join("joedocs/INDEX.md");
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    let mut changed = None;
+    let logs = captured_logs(|| changed = Some(fx.store.create(&actor(), new_doc("Plan"))));
+    let changed = changed.unwrap().unwrap();
+    assert_eq!(changed.revision, 1);
+    assert!(fx.paths.home.join(&changed.path).is_file());
+    assert!(git_log(&fx).contains("Create JD-1"), "{}", git_log(&fx));
+    assert!(logs.contains("WARN"), "{logs}");
+    assert!(logs.contains("INDEX.md"), "{logs}");
 }

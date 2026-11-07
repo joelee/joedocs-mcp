@@ -171,6 +171,18 @@ pub fn live_documents(conn: &Connection) -> rusqlite::Result<Vec<DocumentRow>> {
     stmt.query_map([], from_row)?.collect()
 }
 
+/// The live documents of one project, by sequence number.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn live_documents_in(conn: &Connection, project_id: i64) -> rusqlite::Result<Vec<DocumentRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE d.archived_at IS NULL AND d.project_id = ?1 ORDER BY d.seq"
+    ))?;
+    stmt.query_map([project_id], from_row)?.collect()
+}
+
 /// Whether a live document other than `except` uses `path`, compared
 /// without ASCII case so that case-insensitive file systems cannot clash.
 ///

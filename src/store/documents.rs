@@ -8,7 +8,7 @@ use rusqlite::Transaction;
 use sha2::{Digest as _, Sha256};
 
 use super::journal::Journal;
-use super::{Actor, Error, Settings, Store, begin_write};
+use super::{Actor, Error, Settings, Store, begin_write, index_file};
 use crate::db::{self, Connection, DocumentRow, ListQuery, RevisionRow, Sort};
 use crate::document::front_matter::{self, Fields};
 use crate::document::{DocumentId, Header, check_title, file_stem};
@@ -384,6 +384,7 @@ impl Store {
             paths: &[&row.path],
         };
         finish(tx, history.as_ref(), journal, &commit)?;
+        index_file::refresh(conn, &paths.home, settings, &row.project);
         Ok(changed)
     }
 
@@ -504,6 +505,7 @@ impl Store {
         let now = crate::clock::format_timestamp(at);
         let Self {
             paths,
+            settings,
             conn,
             history,
             ..
@@ -536,6 +538,7 @@ impl Store {
         };
         finish(tx, history.as_ref(), journal, &commit)?;
         remove_empty_parent(&file);
+        index_file::refresh(conn, &paths.home, settings, &row.project);
         Ok(Archived {
             id: row.id,
             revision: row.revision,
@@ -725,6 +728,7 @@ impl Store {
         if old_path != row.path {
             remove_empty_parent(&paths.home.join(&old_path));
         }
+        index_file::refresh(conn, &paths.home, settings, &row.project);
         Ok(changed)
     }
 }
