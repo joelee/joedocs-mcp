@@ -62,15 +62,15 @@ Every tool returns structured JSON. A tool takes only the parameters listed; an 
 
 ### Writing
 
-Every change is one new revision and one git commit. `summary`, where accepted, becomes the commit message. `expected_revision` is the revision you last read: the change is refused with `conflict` if the document has moved on since. It is required by `update_document` and optional elsewhere.
+Every change is one new revision and one git commit. `update_document`, `edit_document` and `change_document_front_matter` refuse a call that would change nothing with `invalid_argument`, and write nothing. `rename_document` and `move_document` likewise refuse the current title or type, and `restore_document_version` refuses the latest revision. Restoring an earlier revision whose content equals the latest still writes a revision. `summary`, where accepted, becomes the commit message. `expected_revision` is the revision you last read: the change is refused with `conflict` if the document has moved on since. It is required by `update_document` and optional elsewhere.
 
 | Tool | Parameters | Effect |
 | --- | --- | --- |
 | `new_document` | `project`, `title`, `content` (the body), `type`, `status`, `front_matter` (custom keys, `tags`, `aliases`), `summary` | Creates revision 1 and returns the new ID and path. |
-| `update_document` | `document_id`, `content`, `expected_revision`, `front_matter`, `summary` | Replaces the body; `front_matter` keys are set as in `change_document_front_matter`. |
-| `edit_document` | `document_id`, `edits` (1 to 64 of `{old, new}`), `expected_revision`, `summary` | Exact replacements in the body, in order. Each `old` must occur exactly once; if any edit fails, nothing changes and the error names it. |
+| `update_document` | `document_id`, `content`, `expected_revision`, `front_matter`, `summary` | Replaces the body; `front_matter` keys are set as in `change_document_front_matter`. Refused (`field: content`) if neither the body nor the front matter would change. |
+| `edit_document` | `document_id`, `edits` (1 to 64 of `{old, new}`), `expected_revision`, `summary` | Exact replacements in the body, in order. Each `old` must occur exactly once; if any edit fails, nothing changes and the error names it. Refused (`field: edits`) if the edits leave the body as it was. |
 | `append_to_document` | `document_id`, `content`, `expected_revision`, `summary` | Adds Markdown to the end of the body, after a blank line. |
-| `change_document_front_matter` | `document_id`, `set` (object), `remove` (list of keys), `expected_revision` | Sets and removes front matter keys without touching the body. |
+| `change_document_front_matter` | `document_id`, `set` (object), `remove` (list of keys), `expected_revision` | Sets and removes front matter keys without touching the body. Refused (`field: front_matter`) if the keys already have these values, or a removed key is not set. |
 | `rename_document` | `document_id`, `title`, `expected_revision` | Changes the title and the file name; the old title is added to `aliases`. |
 | `move_document` | `document_id`, `type`, `expected_revision` | Changes the type (folder). The ID, title and content stay the same. |
 | `restore_document_version` | `document_id`, `version`, `expected_revision`, `summary` | Makes an earlier revision's body, status, tags and custom keys the new latest revision. Title, type and aliases stay current. |

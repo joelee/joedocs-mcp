@@ -383,6 +383,7 @@ edits reliable:
 - Send several related replacements in one `edit_document` call (one revision),
   with a `summary` such as `Build JD-31 STEP-02: awaiting review`.
 - Keep earlier entries; never rewrite them.
+- Set only builder keys whose value changes (on resume, for example, `implementation_status` may already be `in-progress`). JoeDocs refuses a `change_document_front_matter` or `edit_document` call that would change nothing, with `invalid_argument`; that refusal means the plan already holds the value, so carry on without retrying.
 
 ## Continuous execution
 

@@ -483,7 +483,8 @@ When an earlier review is given or clearly related:
 6. Then mark the earlier review with `change_document_front_matter`
    (`expected_revision` set to the revision you read):
    `set: {"status": "superseded", "superseded_by": "<new ID>"}`. Its body
-   stays as written.
+   stays as written. If it already has exactly these values, JoeDocs refuses
+   the call with `invalid_argument` because nothing would change; skip it.
 
 ## Quality check before publishing
 

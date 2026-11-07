@@ -254,12 +254,30 @@ impl Action {
 pub(super) const ARCHIVE: &str = "archive";
 
 /// The editable parts of a document during a change.
+#[derive(Clone, PartialEq)]
 pub(super) struct Draft {
     pub(super) title: String,
     pub(super) doc_type: String,
     pub(super) status: String,
     pub(super) extra: Fields,
     pub(super) body: String,
+}
+
+impl Draft {
+    /// Refuses a change that left the draft as it was, so that no empty
+    /// revision is written.
+    pub(super) fn changed_from(
+        &self,
+        before: &Self,
+        field: &'static str,
+        message: &'static str,
+    ) -> Result<(), Error> {
+        if self == before {
+            Err(Error::invalid(field, message))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Store {
@@ -375,7 +393,8 @@ impl Store {
     ///
     /// Returns [`Error::Conflict`] when `expected_revision` is stale,
     /// [`Error::Integrity`] when the file changed behind the store's back,
-    /// and the errors of [`Store::create`].
+    /// [`Error::Invalid`] when neither the body nor the front matter would
+    /// change, and the errors of [`Store::create`].
     pub fn update(&mut self, actor: &Actor, request: Update) -> Result<Changed, Error> {
         let summary = tidy_line(request.summary.as_deref());
         self.revise(
@@ -385,9 +404,14 @@ impl Store {
             Action::Update,
             summary,
             |draft, settings| {
+                let before = draft.clone();
                 apply_front_matter(draft, &request.front_matter, &[], settings)?;
                 draft.body = request.content;
-                Ok(())
+                draft.changed_from(
+                    &before,
+                    "content",
+                    "the content and front matter are unchanged",
+                )
             },
         )
     }
@@ -453,7 +477,15 @@ impl Store {
             expected_revision,
             Action::FrontMatter,
             None,
-            |draft, settings| apply_front_matter(draft, set, remove, settings),
+            |draft, settings| {
+                let before = draft.clone();
+                apply_front_matter(draft, set, remove, settings)?;
+                draft.changed_from(
+                    &before,
+                    "front_matter",
+                    "nothing would change; the keys already have these values",
+                )
+            },
         )
     }
 

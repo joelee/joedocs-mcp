@@ -856,3 +856,144 @@ fn documents_map_to_projects_by_key() {
         .audit("k", &actor(), "archive_document", Some("JD-1"), "ok")
         .unwrap();
 }
+
+/// The field and message of an `Error::Invalid`, or a description of what
+/// came back instead.
+fn invalid_parts<T: std::fmt::Debug>(result: Result<T, Error>) -> (String, String) {
+    match result {
+        Err(Error::Invalid { field, message }) => (field.to_owned(), message),
+        other => (format!("not invalid: {other:?}"), String::new()),
+    }
+}
+
+fn replacement(old: &str, new: &str) -> Replacement {
+    Replacement {
+        old: old.into(),
+        new: new.into(),
+    }
+}
+
+#[test]
+fn changes_that_change_nothing_are_refused() {
+    let mut fx = fixture();
+    let mut request = new_doc("Plan");
+    request.front_matter = fields(json!({"owner": "joel"}));
+    let created = fx.store.create(&actor(), request).unwrap();
+    let file = read(&fx, &created.path);
+    let log = git_log(&fx);
+
+    let edits = [
+        vec![replacement("Body", "Body")],
+        vec![replacement("Body", "Text"), replacement("Text", "Body")],
+    ];
+    for edits in edits {
+        assert_eq!(
+            invalid_parts(fx.store.edit(&actor(), "JD-1", &edits, Some(1), None)),
+            ("edits".into(), "the edits leave the body unchanged".into())
+        );
+    }
+    let same = [
+        update("JD-1", "Body\n", 1),
+        Update {
+            front_matter: fields(json!({"owner": "joel", "status": "draft"})),
+            ..update("JD-1", "Body\n", 1)
+        },
+    ];
+    for change in same {
+        assert_eq!(
+            invalid_parts(fx.store.update(&actor(), change)),
+            (
+                "content".into(),
+                "the content and front matter are unchanged".into()
+            )
+        );
+    }
+    let current = fields(json!({"owner": "joel", "status": "draft"}));
+    assert_eq!(
+        invalid_parts(
+            fx.store
+                .change_front_matter(&actor(), "JD-1", &current, &[], Some(1))
+        ),
+        (
+            "front_matter".into(),
+            "nothing would change; the keys already have these values".into()
+        )
+    );
+    // Removing a key that is not set was already refused.
+    let (field, message) = invalid_parts(fx.store.change_front_matter(
+        &actor(),
+        "JD-1",
+        &Fields::new(),
+        &["due".to_owned()],
+        None,
+    ));
+    assert_eq!(field, "front_matter");
+    assert!(message.contains("is not set"), "{message}");
+
+    assert_eq!(fx.store.get("JD-1", None).unwrap().document.revision, 1);
+    assert_eq!(fx.store.history("JD-1", 1, 10).unwrap().revisions.len(), 1);
+    assert_eq!(read(&fx, &created.path), file);
+    assert_eq!(git_log(&fx), log);
+}
+
+#[test]
+fn changes_to_only_the_body_or_only_the_front_matter_still_succeed() {
+    let mut fx = fixture();
+    let mut request = new_doc("Plan");
+    request.front_matter = fields(json!({"owner": "joel"}));
+    fx.store.create(&actor(), request).unwrap();
+
+    let body_only = Update {
+        front_matter: fields(json!({"owner": "joel"})),
+        ..update("JD-1", "New body\n", 1)
+    };
+    assert_eq!(fx.store.update(&actor(), body_only).unwrap().revision, 2);
+    let front_matter_only = Update {
+        front_matter: fields(json!({"owner": "ana"})),
+        ..update("JD-1", "New body\n", 2)
+    };
+    assert_eq!(
+        fx.store
+            .update(&actor(), front_matter_only)
+            .unwrap()
+            .revision,
+        3
+    );
+    let set = fields(json!({"owner": "ana", "status": "review"}));
+    assert_eq!(
+        fx.store
+            .change_front_matter(&actor(), "JD-1", &set, &[], Some(3))
+            .unwrap()
+            .revision,
+        4
+    );
+    let edits = [
+        replacement("New", "Old"),
+        replacement("Old body", "Final body"),
+    ];
+    assert_eq!(
+        fx.store
+            .edit(&actor(), "JD-1", &edits, Some(4), None)
+            .unwrap()
+            .revision,
+        5
+    );
+}
+
+#[test]
+fn a_stale_revision_is_reported_before_a_no_op() {
+    let mut fx = fixture();
+    fx.store.create(&actor(), new_doc("Plan")).unwrap();
+    fx.store
+        .update(&actor(), update("JD-1", "Text\n", 1))
+        .unwrap();
+    let no_op = [replacement("Text", "Text")];
+    assert!(matches!(
+        fx.store.edit(&actor(), "JD-1", &no_op, Some(1), None),
+        Err(Error::Conflict { current: 2, .. })
+    ));
+    assert!(matches!(
+        fx.store.update(&actor(), update("JD-1", "Text\n", 1)),
+        Err(Error::Conflict { current: 2, .. })
+    ));
+}

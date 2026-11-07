@@ -23,7 +23,7 @@
 ├── .config/nextest.toml    Test runner profiles (default, ci)
 ├── .env.example            Supported secret variables with placeholders
 ├── .gitleaks.toml          Secret-scan rules and allowlists
-├── .pre-commit-config.yaml Local hooks: gitleaks, fmt, clippy
+├── .githooks/pre-commit    Git hook running `just pre-commit` (enabled by just setup)
 ├── docs/                   Maintained documentation (rules in docs/AGENTS.md)
 │   ├── deployment.md       Running a server: systemd, brew services, Tailscale, operations
 │   ├── reference.md        Commands, MCP tools, search, front matter, errors

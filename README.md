@@ -163,10 +163,10 @@ flowchart LR
 
 ## Development
 
-From a clone, on Linux or macOS with `rustup`, `just`, `git`, `gitleaks` and `pre-commit`:
+From a clone, on Linux or macOS with `rustup`, `just`, `git`, `gitleaks` and `actionlint`:
 
 ```bash
-just setup          # once: cargo tools, Cargo.lock, git hooks
+just setup          # once: cargo tools, Cargo.lock, the git hook
 just ci             # the full quality gate, same as CI
 just docker-up      # a local server in Docker; data persists in .local/data
 ```

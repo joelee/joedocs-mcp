@@ -148,7 +148,45 @@ To create a key from the client machine without copying it by hand, run `key cre
 TOKEN=$(ssh you@server '~/.cargo/bin/joedocs key create laptop --grant my-app:write' | tail -n 1)
 ```
 
-**Other MCP clients** need the Streamable HTTP URL (`https://<host>/mcp`) and the header `Authorization: Bearer <token>`.
+**Keep the key out of files you might commit.** Put it in an environment variable, or in a client's user-level config outside any repository. Never put it in a project-level client config, such as an `opencode.json` or `.codex/config.toml` inside a repository: one `git add .` commits it. The examples below read the key from `JOEDOCS_API_KEY`. Fill that variable from a password manager when you start the client, for example with [`pass`](https://www.passwordstore.org/):
+
+```bash
+export JOEDOCS_API_KEY="$(pass show joedocs/token)"
+```
+
+The same substitution works for Claude Code: `--header "Authorization: Bearer $(pass show joedocs/token)"` stores the key in your user-level `~/.claude.json`, not in the project.
+
+**OpenCode** replaces `{env:NAME}` in its config. In the global config, `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "joedocs": {
+        "type": "remote",
+        "url": "https://docs.example.ts.net/mcp",
+        "oauth": false,
+        "headers": {
+          "Authorization": "Bearer {env:JOEDOCS_API_KEY}"
+        }
+      }
+    }
+  }
+}
+```
+
+`"oauth": false` stops OpenCode trying OAuth, which JoeDocs does not offer. If the variable is not set, OpenCode sends an empty value and the server answers `401 Unauthorized`.
+
+**Codex** sends the variable named by `bearer_token_env_var` as the bearer token. In `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.joedocs]
+url = "https://docs.example.ts.net/mcp"
+bearer_token_env_var = "JOEDOCS_API_KEY"
+```
+
+**Other MCP clients** need the Streamable HTTP URL (`https://<host>/mcp`) and the header `Authorization: Bearer <token>`. If the client can read the header or token from the environment, use that rather than writing the key into its config.
 
 ## 7. Operate
 

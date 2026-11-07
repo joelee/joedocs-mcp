@@ -57,8 +57,8 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] naming the edit that failed, and the
-    /// errors of [`Store::update`].
+    /// Returns [`Error::Invalid`] naming the edit that failed, or when the
+    /// edits leave the body unchanged, and the errors of [`Store::update`].
     pub fn edit(
         &mut self,
         actor: &Actor,
@@ -80,7 +80,14 @@ impl Store {
             Action::Edit,
             tidy_line(summary),
             |draft, _| {
-                draft.body = apply_edits(&draft.body, edits)?;
+                let body = apply_edits(&draft.body, edits)?;
+                if body == draft.body {
+                    return Err(Error::invalid(
+                        "edits",
+                        "the edits leave the body unchanged",
+                    ));
+                }
+                draft.body = body;
                 Ok(())
             },
         )
