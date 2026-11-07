@@ -16,7 +16,8 @@ allowed-tools: >-
   mcp__joedocs__search_documents, mcp__joedocs__get_document,
   mcp__joedocs__get_document_history, mcp__joedocs__diff_document,
   mcp__joedocs__new_document, mcp__joedocs__update_document,
-  mcp__joedocs__edit_document, mcp__joedocs__change_document_front_matter
+  mcp__joedocs__edit_document, mcp__joedocs__change_document_front_matter,
+  mcp__joedocs__rename_document
 ---
 
 # JoeDocs Delivery Planner
@@ -63,8 +64,8 @@ tools and adjust `allowed-tools`.
   git commands in `allowed-tools`.
 - **JoeDocs writes are limited to plan documents** of type `plans` in the
   resolved project. Never change idea, review or other documents. Never call
-  `archive_document`, `rename_document`, `move_document` or
-  `restore_document_version`.
+  `archive_document`, `move_document` or `restore_document_version`. Call
+  `rename_document` only as described in Renaming a plan.
 - **Every write passes `expected_revision`**, the revision you last read. On a
   `conflict` error, read the document again, check what changed with
   `diff_document`, and merge, or ask the user if the change touches planning
@@ -492,6 +493,36 @@ When the user asks for changes to a plan whose status is `draft` or `review`:
 4. Add a row to the planning change log, and pass a `summary` describing the
    change. The JoeDocs history (`get_document_history`) keeps every earlier
    revision, so nothing is lost.
+
+## Renaming a plan
+
+Rename a plan only when the user asks, or when you propose it because a
+revision changed the outcome and the user agrees. Rename only plans whose
+status is `draft` or `review` and whose work log has no execution entry. The
+heading is part of the body, and the body of an approved plan is fixed, so for
+any other plan tell the user they can rename it themselves.
+
+1. `get_document` and note the revision.
+2. Choose the new title with the rules in Step 7: `Delivery plan - <Outcome in
+   at most eight words>`, none of the characters listed there, and not a title
+   already in use.
+3. `rename_document` with the new title and `expected_revision`. JoeDocs moves
+   the file, adds the old title to `aliases` (so `[[Old title]]` links in
+   Obsidian still resolve), and records a `rename` revision. The document ID
+   stays the same, so references by ID, such as `source_ideas` and the
+   builder's branch name, are unaffected.
+4. One `edit_document` call with the revision the rename returned: change the
+   `# Delivery plan - ...` heading to the new title, and add a planning change
+   log row giving the old title and the reason.
+
+The history follows the document across the rename. `get_document_history`
+and `diff_document` work by ID and revision, and every commit carries a
+`JoeDocs-Document: <ID>` trailer. In `history.git` the rename is a single
+commit that removes the old path and adds the new one, which is what `git mv`
+does. `git log --follow` traces the file to its old name while git still sees
+the two versions as at least 50% similar, which holds for all but very short
+documents. `git log --grep 'JoeDocs-Document: <ID>'` always finds every
+revision.
 
 ## Approving a plan
 

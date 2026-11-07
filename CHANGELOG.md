@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The `joedocs-planner` skill can rename a draft plan with `rename_document` when the user asks, then updates the plan's heading and change log to match.
+
 ## [0.1.1] - 2026-11-07
 
 A documentation release: no change to the command line, the configuration, the MCP tools or what is stored.
