@@ -168,7 +168,7 @@ fn ask_health(target: SocketAddr) -> io::Result<String> {
 }
 
 /// The state of the unit in the user (`user`) or system manager.
-fn unit_state(services: &dyn ServiceManager, user: bool) -> UnitState {
+pub(crate) fn unit_state(services: &dyn ServiceManager, user: bool) -> UnitState {
     let mut args = Vec::new();
     if user {
         args.push("--user");

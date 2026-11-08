@@ -12,6 +12,7 @@
 //! external dependencies as parameters, so it is unit-testable.
 
 pub mod admin;
+pub mod agents;
 pub mod app_id;
 pub mod auth;
 pub mod cli;
@@ -211,6 +212,7 @@ pub fn execute(
         Command::Key { command } => {
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
+        Command::Agents => agents::run(loaded, ctx, out)?,
         Command::Status => {
             let store = open_store(loaded, ctx)?;
             let report = status::collect(&store, loaded, ctx.services)?;

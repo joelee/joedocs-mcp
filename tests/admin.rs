@@ -618,3 +618,28 @@ fn status_describes_the_installation_without_secrets() {
         .success()
         .stdout(predicate::str::contains("health: ok"));
 }
+
+#[test]
+fn agents_prints_the_guide_for_this_installation() {
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    let output = cmd(root.path())
+        .env("JOEDOCS__SERVER__BIND", "127.0.0.1:9911")
+        .env("JOEDOCS_API_TOKEN", "jd_0123456789ab_secretvalue")
+        .env("JOEDOCS_ADMIN_TOKEN", "jda_0123456789ab_secretvalue")
+        .arg("agents")
+        .assert()
+        .success();
+    let text = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(text.starts_with("# AGENTS.md"), "{text}");
+    for expected in [
+        vault(root.path()).display().to_string(),
+        root.path().join("state").display().to_string(),
+        "127.0.0.1:9911".to_owned(),
+        env!("CARGO_PKG_VERSION").to_owned(),
+    ] {
+        assert!(text.contains(&expected), "{expected:?} missing");
+    }
+    assert!(!text.contains("{{"), "unfilled placeholder:\n{text}");
+    assert!(!text.contains("secretvalue"), "{text}");
+}

@@ -70,6 +70,9 @@ pub enum Command {
         #[command(subcommand)]
         command: KeyCommand,
     },
+    /// Print an AGENTS.md-style guide for AI agents that maintain this
+    /// server, filled in with this installation's paths (no secrets).
+    Agents,
     /// Show where the service runs, the storage sizes, and the state of the
     /// store (changes nothing).
     Status,
