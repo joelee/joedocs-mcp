@@ -370,6 +370,8 @@ mod tests {
             archived_at: None,
             archived_by: None,
             archive_reason: None,
+            multifile: false,
+            main_revision: 3,
         };
         let entry = Entry::from_row(&project("JoeDocs"), &row);
         assert_eq!(

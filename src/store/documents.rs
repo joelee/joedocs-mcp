@@ -359,6 +359,8 @@ impl Store {
             archived_at: None,
             archived_by: None,
             archive_reason: None,
+            multifile: false,
+            main_revision: 1,
         };
         let (row, fields, journal) = write_revision(
             &tx,
@@ -516,6 +518,7 @@ impl Store {
         read_verified(&paths.home, &row)?;
 
         row.revision += 1;
+        row.main_revision = row.revision;
         row.updated_at.clone_from(&now);
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);
@@ -693,6 +696,7 @@ impl Store {
         }
         row.status = draft.status;
         row.revision += 1;
+        row.main_revision = row.revision;
         row.updated_at = now;
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);

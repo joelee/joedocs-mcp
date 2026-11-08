@@ -238,6 +238,8 @@ fn rebuild(history: &dyn History, id: &str, replay: Replay) -> Result<Rebuilt, E
         archived_at,
         archived_by,
         archive_reason,
+        multifile: false,
+        main_revision: last.revision,
     };
     let body = parsed.body.to_owned();
     Ok(Rebuilt {

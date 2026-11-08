@@ -92,6 +92,7 @@ impl Store {
             None,
         )?;
         row.revision += 1;
+        row.main_revision = row.revision;
         row.updated_at = now;
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);

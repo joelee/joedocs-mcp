@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::DocumentRow;
 use super::documents::{SELECT_COLUMNS, from_row};
+use super::files::FileRow;
 use crate::document::front_matter::Fields;
 use crate::search::{Condition, flatten};
 
@@ -22,7 +23,14 @@ pub fn fts_rowid(project_id: i64, seq: u64) -> i64 {
     (project_id << 32) | seq
 }
 
-/// Replaces the document's search entries with `fields` (its whole front
+/// The `doc_fts` rowid of a sub-file: minus its `document_files` row ID, so
+/// it never meets a main file's rowid.
+#[must_use]
+pub fn file_fts_rowid(file_id: i64) -> i64 {
+    -file_id
+}
+
+/// Replaces the main file's search entries with `fields` (its whole front
 /// matter) and `body`.
 ///
 /// # Errors
@@ -42,27 +50,27 @@ pub fn index_document(
             insert.execute(params![row.id, key, text, num])?;
         }
     }
-    let mut title = row.title.clone();
-    if let Some(Value::Array(aliases)) = fields.get("aliases") {
-        for alias in aliases.iter().filter_map(Value::as_str) {
-            title.push('\n');
-            title.push_str(alias);
-        }
-    }
     conn.execute(
         "INSERT INTO doc_fts (rowid, title, body) VALUES (?1, ?2, ?3)",
-        params![fts_rowid(row.project_id, row.seq), title, body],
+        params![
+            fts_rowid(row.project_id, row.seq),
+            fts_title(&row.title, fields),
+            body
+        ],
     )?;
     Ok(())
 }
 
-/// Removes the document from the search index.
+/// Removes the main file from the search index; sub-files keep theirs.
 ///
 /// # Errors
 ///
 /// Returns an error when a statement fails.
 pub fn unindex_document(conn: &Connection, row: &DocumentRow) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM doc_fields WHERE document_id = ?1", [&row.id])?;
+    conn.execute(
+        "DELETE FROM doc_fields WHERE document_id = ?1 AND file_id IS NULL",
+        [&row.id],
+    )?;
     conn.execute(
         "DELETE FROM doc_fts WHERE rowid = ?1",
         [fts_rowid(row.project_id, row.seq)],
@@ -70,15 +78,72 @@ pub fn unindex_document(conn: &Connection, row: &DocumentRow) -> rusqlite::Resul
     Ok(())
 }
 
-/// Deletes every document, revision and search entry, before a rebuild.
-/// Projects, keys and the audit log are kept.
+/// Replaces a sub-file's search entries with `fields` (its whole front
+/// matter) and `body`. Its full-text title is its path and aliases.
+///
+/// # Errors
+///
+/// Returns an error when a statement fails.
+pub fn index_file(
+    conn: &Connection,
+    file: &FileRow,
+    fields: &Fields,
+    body: &str,
+) -> rusqlite::Result<()> {
+    unindex_file(conn, file.id)?;
+    let mut insert = conn.prepare(
+        "INSERT INTO doc_fields (document_id, key, value, num, file_id)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for (key, value) in fields {
+        for (text, num) in flatten(value) {
+            insert.execute(params![file.document_id, key, text, num, file.id])?;
+        }
+    }
+    conn.execute(
+        "INSERT INTO doc_fts (rowid, title, body) VALUES (?1, ?2, ?3)",
+        params![file_fts_rowid(file.id), fts_title(&file.path, fields), body],
+    )?;
+    Ok(())
+}
+
+/// Removes a sub-file from the search index.
+///
+/// # Errors
+///
+/// Returns an error when a statement fails.
+pub fn unindex_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM doc_fields WHERE file_id = ?1", [file_id])?;
+    conn.execute(
+        "DELETE FROM doc_fts WHERE rowid = ?1",
+        [file_fts_rowid(file_id)],
+    )?;
+    Ok(())
+}
+
+/// `name` and the `aliases` in `fields`, one per line, for the full-text
+/// title column.
+fn fts_title(name: &str, fields: &Fields) -> String {
+    let mut title = name.to_owned();
+    if let Some(Value::Array(aliases)) = fields.get("aliases") {
+        for alias in aliases.iter().filter_map(Value::as_str) {
+            title.push('\n');
+            title.push_str(alias);
+        }
+    }
+    title
+}
+
+/// Deletes every document, file, revision and search entry, before a
+/// rebuild. Projects, keys and the audit log are kept.
 ///
 /// # Errors
 ///
 /// Returns an error when a statement fails.
 pub fn clear_documents(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
-        "DELETE FROM doc_fields; DELETE FROM doc_fts; DELETE FROM revisions; DELETE FROM documents;",
+        "DELETE FROM doc_fields; DELETE FROM doc_fts; DELETE FROM revision_files;
+         DELETE FROM document_files; DELETE FROM revisions; DELETE FROM documents;",
     )
 }
 
@@ -177,10 +242,116 @@ pub fn search_documents(
         .query_map(params_from_iter(&params), |row| {
             Ok(SearchRow {
                 document: from_row(row)?,
-                score: row.get(18)?,
-                snippet: row.get(19)?,
+                score: row.get(20)?,
+                snippet: row.get(21)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok((rows, total))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::db::{FileRow, get_document, insert_file, open_in_memory};
+
+    fn fields(value: Value) -> Fields {
+        match value {
+            Value::Object(map) => map.into_iter().collect(),
+            _ => Fields::new(),
+        }
+    }
+
+    #[test]
+    fn sub_file_entries_are_kept_apart_from_the_main_file() {
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO projects (id, name, key, title, created_at)
+                 VALUES (1, 'joedocs', 'JD', 'JoeDocs', 't');
+             INSERT INTO documents (id, project_id, seq, type, title, path, status, revision,
+                 created_at, created_by, updated_at, updated_by, client, content_sha256,
+                 multifile, main_revision)
+                 VALUES ('JD-1', 1, 1, 'plans', 'Roadmap', 'joedocs/plans/Roadmap/Roadmap.md',
+                 'draft', 2, 't', 'laptop', 't', 'laptop', 'test', x'00', 1, 1);",
+        )
+        .unwrap();
+        let row = get_document(&conn, "JD-1").unwrap().unwrap();
+        index_document(
+            &conn,
+            &row,
+            &fields(json!({"status": "draft"})),
+            "main words",
+        )
+        .unwrap();
+        let mut file = FileRow {
+            id: 0,
+            document_id: "JD-1".into(),
+            path: "backlog/item".into(),
+            revision: 2,
+            created_at: "t".into(),
+            created_by: "laptop".into(),
+            updated_at: "t".into(),
+            updated_by: "laptop".into(),
+            client: "test".into(),
+            content_sha256: vec![1],
+            archived_at: None,
+            archived_by: None,
+        };
+        file.id = insert_file(&conn, &file).unwrap();
+        index_file(
+            &conn,
+            &file,
+            &fields(json!({"status": "planned", "aliases": ["Item one"]})),
+            "sub words",
+        )
+        .unwrap();
+
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(
+            count("SELECT count(*) FROM doc_fields WHERE file_id IS NOT NULL"),
+            2
+        );
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM doc_fts WHERE rowid = ?1",
+                [file_fts_rowid(file.id)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "backlog/item\nItem one");
+
+        // Until sub-files are searchable, searches see main files only.
+        let Value::Object(filter) = json!({"status": "planned"}) else {
+            unreachable!()
+        };
+        let planned = crate::search::filter::parse(&filter).unwrap();
+        let query = SearchQuery {
+            project_ids: &[1],
+            doc_type: None,
+            text: None,
+            conditions: &planned,
+            offset: 0,
+            limit: 10,
+        };
+        assert_eq!(search_documents(&conn, &query).unwrap().1, 0);
+        let words = SearchQuery {
+            text: Some("sub"),
+            conditions: &[],
+            ..query
+        };
+        assert_eq!(search_documents(&conn, &words).unwrap().1, 0);
+
+        // Re-indexing the main file leaves the sub-file's entries alone.
+        unindex_document(&conn, &row).unwrap();
+        assert_eq!(count("SELECT count(*) FROM doc_fields"), 2);
+        unindex_file(&conn, file.id).unwrap();
+        assert_eq!(count("SELECT count(*) FROM doc_fields"), 0);
+        assert_eq!(count("SELECT count(*) FROM doc_fts"), 0);
+
+        clear_documents(&conn).unwrap();
+        assert_eq!(count("SELECT count(*) FROM document_files"), 0);
+        assert_eq!(count("SELECT count(*) FROM documents"), 0);
+    }
 }

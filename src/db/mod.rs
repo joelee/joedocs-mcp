@@ -8,6 +8,7 @@
 
 mod admin;
 mod documents;
+mod files;
 mod keys;
 mod projects;
 mod search;
@@ -24,6 +25,10 @@ pub use documents::{
     get_revision, insert_document, insert_revision, last_change_at, list_documents, list_revisions,
     live_documents, live_documents_in, path_taken, save_document,
 };
+pub use files::{
+    FileChange, FileRow, RevisionFileRow, count_live_files, file_by_id, files_of, find_live_file,
+    insert_file, insert_revision_file, live_files, revision_files, save_file,
+};
 pub use keys::{
     KeyRow, find_key_by_id, find_key_by_name, insert_key, key_secret, list_keys, revoke_key,
     set_grant, set_key_secret, touch_key,
@@ -35,8 +40,8 @@ pub use projects::{
 pub use rusqlite::{Connection, Error as SqlError};
 use rusqlite::{OptionalExtension as _, params};
 pub use search::{
-    SearchQuery, SearchRow, clear_documents, fts_rowid, index_document, search_documents,
-    unindex_document,
+    SearchQuery, SearchRow, clear_documents, file_fts_rowid, fts_rowid, index_document, index_file,
+    search_documents, unindex_document, unindex_file,
 };
 
 /// Schema migrations, applied in order. The schema version
@@ -46,6 +51,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0002_audit.sql"),
     include_str!("migrations/0003_search.sql"),
     include_str!("migrations/0004_admin.sql"),
+    include_str!("migrations/0005_files.sql"),
 ];
 
 /// The schema version this build expects.
@@ -163,7 +169,7 @@ const INDEX_FORMAT_KEY: &str = "index_format";
 /// A database recording another value is rebuilt by `joedocs reindex`,
 /// which `serve` runs on start. Bump it when the index gains data that
 /// only a rebuild can fill in.
-pub const INDEX_FORMAT: &str = "1";
+pub const INDEX_FORMAT: &str = "2";
 
 fn meta(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
     conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |row| {
@@ -246,6 +252,49 @@ mod tests {
         assert_eq!(mode, "wal");
         drop(conn);
         open(&path).unwrap();
+    }
+
+    #[test]
+    fn a_version_4_database_migrates_to_multi_file_documents_with_its_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("joedocs.db");
+        let mut conn = Connection::open(&path).unwrap();
+        let tx = conn.transaction().unwrap();
+        for sql in &MIGRATIONS[..4] {
+            tx.execute_batch(sql).unwrap();
+        }
+        tx.pragma_update(None, "user_version", 4).unwrap();
+        tx.execute_batch(
+            "INSERT INTO projects (id, name, key, title, created_at)
+                 VALUES (1, 'joedocs', 'JD', 'JoeDocs', 't');
+             INSERT INTO documents (id, project_id, seq, type, title, path, status, revision,
+                 created_at, created_by, updated_at, updated_by, client, content_sha256)
+                 VALUES ('JD-1', 1, 1, 'plans', 'Plan', 'joedocs/plans/Plan.md', 'draft', 3,
+                 't', 'laptop', 'u', 'laptop', 'test', x'00');
+             INSERT INTO doc_fields (document_id, key, value) VALUES ('JD-1', 'status', 'draft');",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        drop(conn);
+
+        let conn = open(&path).unwrap();
+        let version: usize = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 5);
+        let row = get_document(&conn, "JD-1").unwrap().unwrap();
+        assert_eq!(
+            (row.revision, row.main_revision, row.multifile),
+            (3, 3, false)
+        );
+        let fields: (String, Option<i64>) = conn
+            .query_row("SELECT value, file_id FROM doc_fields", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(fields, ("draft".to_owned(), None));
+        assert_eq!(live_files(&conn, "JD-1").unwrap(), []);
+        assert!(!index_format_current(&conn).unwrap(), "a reindex follows");
     }
 
     #[test]

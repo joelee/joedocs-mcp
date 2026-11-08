@@ -250,6 +250,9 @@ Server keys come first in a fixed order, then custom keys in the order they were
 | 2 | `0002_audit` | the audit log |
 | 3 | `0003_search` | the search index |
 | 4 | `0004_admin` (0.3.0) | admin tokens, with their TOTP secrets, and admin sessions |
+| 5 | `0005_files` (0.4.0) | multi-file documents: the sub-files of each document, the files each revision changed, and sub-file search entries |
+
+The index (documents, files, revisions and search) is rebuilt from the history whenever it was built by a build with another index layout: 0.4.0 changes the layout, so its first `serve` runs `reindex` once.
 
 Only SHA-256 hashes of API keys, admin tokens and session tokens are stored. TOTP secrets are stored as they are, because checking a code needs them, so the state directory is kept private: `init` creates it with mode `0700`, and the database and its `-wal` and `-shm` files are `0600`. Every start (and `init`) tightens a state directory or database that group or other can read, logging each change; if it cannot (for example, the files belong to another account), it logs the `chmod` to run and carries on. The vault keeps its own permissions.
 

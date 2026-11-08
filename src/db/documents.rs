@@ -41,6 +41,11 @@ pub struct DocumentRow {
     pub archived_by: Option<String>,
     /// Why it was archived.
     pub archive_reason: Option<String>,
+    /// Whether the document is a folder of files (a multi-file document).
+    pub multifile: bool,
+    /// The revision at which the main file last changed (equal to
+    /// `revision` for single-file documents).
+    pub main_revision: u64,
 }
 
 /// The columns [`from_row`] reads, from `documents d` joined to `projects p`.
@@ -48,7 +53,7 @@ macro_rules! columns {
     () => {
         "d.id, d.project_id, p.name, d.seq, d.type, d.title, d.path, d.status, d.revision,
         d.created_at, d.created_by, d.updated_at, d.updated_by, d.client, d.content_sha256,
-        d.archived_at, d.archived_by, d.archive_reason"
+        d.archived_at, d.archived_by, d.archive_reason, d.multifile, d.main_revision"
     };
 }
 
@@ -81,6 +86,8 @@ pub(super) fn from_row(row: &Row<'_>) -> rusqlite::Result<DocumentRow> {
         archived_at: row.get(15)?,
         archived_by: row.get(16)?,
         archive_reason: row.get(17)?,
+        multifile: row.get(18)?,
+        main_revision: row.get(19)?,
     })
 }
 
@@ -94,8 +101,9 @@ pub fn insert_document(conn: &Connection, doc: &DocumentRow) -> rusqlite::Result
     conn.execute(
         "INSERT INTO documents (id, project_id, seq, type, title, path, status, revision,
             created_at, created_by, updated_at, updated_by, client, content_sha256,
-            archived_at, archived_by, archive_reason)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            archived_at, archived_by, archive_reason, multifile, main_revision)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+            ?18, ?19)",
         params![
             doc.id,
             doc.project_id,
@@ -114,6 +122,8 @@ pub fn insert_document(conn: &Connection, doc: &DocumentRow) -> rusqlite::Result
             doc.archived_at,
             doc.archived_by,
             doc.archive_reason,
+            doc.multifile,
+            doc.main_revision,
         ],
     )?;
     Ok(())
@@ -128,7 +138,8 @@ pub fn save_document(conn: &Connection, doc: &DocumentRow) -> rusqlite::Result<(
     conn.execute(
         "UPDATE documents SET type = ?2, title = ?3, path = ?4, status = ?5, revision = ?6,
             updated_at = ?7, updated_by = ?8, client = ?9, content_sha256 = ?10,
-            archived_at = ?11, archived_by = ?12, archive_reason = ?13
+            archived_at = ?11, archived_by = ?12, archive_reason = ?13, multifile = ?14,
+            main_revision = ?15
          WHERE id = ?1",
         params![
             doc.id,
@@ -144,6 +155,8 @@ pub fn save_document(conn: &Connection, doc: &DocumentRow) -> rusqlite::Result<(
             doc.archived_at,
             doc.archived_by,
             doc.archive_reason,
+            doc.multifile,
+            doc.main_revision,
         ],
     )?;
     Ok(())
@@ -454,6 +467,8 @@ mod tests {
             archived_at: None,
             archived_by: None,
             archive_reason: None,
+            multifile: false,
+            main_revision: 1,
         }
     }
 
