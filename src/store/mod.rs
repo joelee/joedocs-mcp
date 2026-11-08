@@ -28,6 +28,7 @@ mod registry;
 mod reindex;
 mod revisions;
 mod search;
+mod summary;
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -45,6 +46,7 @@ pub use registry::CreatedKey;
 pub use reindex::Reindexed;
 pub use revisions::{Diff, HistoryPage, MAX_DIFF_CONTEXT, MAX_HISTORY_LIMIT};
 pub use search::{MAX_SEARCH_LIMIT, SearchHit, SearchRequest, SearchResults};
+pub use summary::{ProjectCount, Summary};
 
 use crate::AppId;
 use crate::clock::Clock;

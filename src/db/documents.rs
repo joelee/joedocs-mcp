@@ -399,6 +399,36 @@ pub fn get_revision(
     .optional()
 }
 
+/// Live and archived document counts per project, by project name.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn document_counts(conn: &Connection) -> rusqlite::Result<Vec<(String, String, u64, u64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.name, p.key,
+                COUNT(d.id) FILTER (WHERE d.archived_at IS NULL),
+                COUNT(d.id) FILTER (WHERE d.archived_at IS NOT NULL)
+         FROM projects p LEFT JOIN documents d ON d.project_id = p.id
+         GROUP BY p.id ORDER BY p.name",
+    )?;
+    stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })?
+    .collect()
+}
+
+/// When the latest revision was recorded, if any.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn last_change_at(conn: &Connection) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT MAX(created_at) FROM revisions", [], |row| {
+        row.get(0)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

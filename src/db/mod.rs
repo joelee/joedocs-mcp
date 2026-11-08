@@ -14,9 +14,9 @@ mod search;
 use std::path::Path;
 
 pub use documents::{
-    DocumentRow, ListQuery, RevisionRow, Sort, archived_documents, get_document, get_revision,
-    insert_document, insert_revision, list_documents, list_revisions, live_documents,
-    live_documents_in, path_taken, save_document,
+    DocumentRow, ListQuery, RevisionRow, Sort, archived_documents, document_counts, get_document,
+    get_revision, insert_document, insert_revision, last_change_at, list_documents, list_revisions,
+    live_documents, live_documents_in, path_taken, save_document,
 };
 pub use keys::{
     KeyRow, find_key_by_id, find_key_by_name, insert_key, key_secret, list_keys, revoke_key,

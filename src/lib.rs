@@ -25,6 +25,7 @@ pub mod history;
 pub mod mcp;
 pub mod search;
 pub mod secrets;
+pub mod status;
 pub mod store;
 pub mod systemd;
 
@@ -210,6 +211,11 @@ pub fn execute(
         Command::Key { command } => {
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
+        Command::Status => {
+            let store = open_store(loaded, ctx)?;
+            let report = status::collect(&store, loaded, ctx.services)?;
+            status::render(&report, out)?;
+        }
         Command::Get {
             document_id,
             version,
@@ -365,6 +371,9 @@ mod tests {
         }
         fn systemctl(&self, _args: &[&str]) -> io::Result<systemd::Ran> {
             Err(io::Error::other("systemctl must not run in this test"))
+        }
+        fn host_name(&self) -> io::Result<String> {
+            Ok("testhost".into())
         }
     }
 

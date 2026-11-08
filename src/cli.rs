@@ -70,6 +70,9 @@ pub enum Command {
         #[command(subcommand)]
         command: KeyCommand,
     },
+    /// Show where the service runs, the storage sizes, and the state of the
+    /// store (changes nothing).
+    Status,
     /// Print a document: its front matter and body, or one of them.
     Get {
         /// Document ID, e.g. JD-42.

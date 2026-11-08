@@ -88,6 +88,8 @@ impl Error {
 pub struct Ran {
     /// Whether it exited successfully.
     pub success: bool,
+    /// Its standard output.
+    pub stdout: String,
     /// Its error output.
     pub stderr: String,
 }
@@ -107,6 +109,13 @@ pub trait ServiceManager {
     ///
     /// Returns an error when `systemctl` cannot be started.
     fn systemctl(&self, args: &[&str]) -> io::Result<Ran>;
+
+    /// This host's name, for `joedocs status`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when it cannot be read.
+    fn host_name(&self) -> io::Result<String>;
 }
 
 /// The real service manager: `systemctl` from `PATH`.
@@ -122,8 +131,18 @@ impl ServiceManager for Systemctl {
         let output = Command::new("systemctl").args(args).output()?;
         Ok(Ran {
             success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         })
+    }
+
+    fn host_name(&self) -> io::Result<String> {
+        let output = Command::new("uname").arg("-n").output()?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        } else {
+            Err(io::Error::other("uname -n failed"))
+        }
     }
 }
 
@@ -573,8 +592,12 @@ mod tests {
                 .unwrap_or_default();
             Ok(Ran {
                 success: !self.failing.contains(&verb),
+                stdout: String::new(),
                 stderr: format!("{verb} refused"),
             })
+        }
+        fn host_name(&self) -> io::Result<String> {
+            Ok("fakehost".into())
         }
     }
 

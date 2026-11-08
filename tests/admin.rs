@@ -522,3 +522,99 @@ fn get_prints_a_document_or_one_part_of_it() {
         .code(65)
         .stderr(predicate::str::contains("joedocs archive restore JD-1"));
 }
+
+/// Answers one `GET /health` with `ok`, on a free loopback port.
+fn health_responder() -> std::io::Result<std::net::SocketAddr> {
+    use std::io::{Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut seen = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !seen.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap_or(0) == 1 {
+                seen.push(byte[0]);
+            }
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok");
+        }
+    });
+    Ok(addr)
+}
+
+#[test]
+fn status_describes_the_installation_without_secrets() {
+    use joedocs::store::{Actor, NewDocument};
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    cmd(root.path())
+        .args(["key", "create", "laptop", "--grant", "joedocs:write"])
+        .assert()
+        .success();
+    let mut store = library_store(root.path()).unwrap();
+    let actor = Actor::new("laptop", "test");
+    for title in ["One", "Two"] {
+        store
+            .create(
+                &actor,
+                NewDocument {
+                    project: "joedocs".into(),
+                    title: title.into(),
+                    content: "x".into(),
+                    ..NewDocument::default()
+                },
+            )
+            .unwrap();
+    }
+    store.archive(&actor, "JD-2", "done").unwrap();
+    drop(store);
+
+    // Nothing listens on the bind address.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let output = cmd(root.path())
+        .env("JOEDOCS__SERVER__BIND", format!("127.0.0.1:{port}"))
+        .env("JOEDOCS_API_TOKEN", "jd_0123456789ab_secretvalue")
+        .arg("status")
+        .assert()
+        .success();
+    let text = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    for expected in [
+        "JoeDocs ",
+        &format!("bind: 127.0.0.1:{port}"),
+        "health: not reachable",
+        &vault(root.path()).display().to_string(),
+        &root.path().join("state").display().to_string(),
+        "database:",
+        "history:",
+        "index: current",
+        "API keys: 1 active, 0 revoked",
+        "joedocs",
+    ] {
+        assert!(
+            text.contains(expected),
+            "{expected:?} missing from:\n{text}"
+        );
+    }
+    assert!(
+        text.lines()
+            .any(|l| l.split_whitespace().collect::<Vec<_>>() == ["joedocs", "JD", "1", "1"]),
+        "{text}"
+    );
+    for secret in ["secretvalue", "jd_", "jda_", "jds_"] {
+        assert!(!text.contains(secret), "{secret} leaked:\n{text}");
+    }
+
+    let addr = health_responder().unwrap();
+    cmd(root.path())
+        .env("JOEDOCS__SERVER__BIND", addr.to_string())
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("health: ok"));
+}
