@@ -189,10 +189,12 @@ fn operator(key: &str, op: &str, operand: &Value) -> Result<Test, Invalid> {
 }
 
 impl Condition {
-    /// A SQL condition on documents aliased `d`, pushing its parameters.
+    /// A SQL condition on the search entry: document `d` and, for a
+    /// sub-file, `document_files` row `df` (NULL for a main file). Pushes
+    /// its parameters.
     pub fn to_sql(&self, params: &mut Vec<SqlValue>) -> String {
         params.push(SqlValue::Text(self.key.clone()));
-        let rows = "SELECT 1 FROM doc_fields f WHERE f.document_id = d.id AND f.file_id IS NULL AND f.key = ?";
+        let rows = "SELECT 1 FROM doc_fields f WHERE f.document_id = d.id AND f.file_id IS df.id AND f.key = ?";
         match &self.test {
             Test::Exists(true) => format!("EXISTS ({rows})"),
             Test::Exists(false) => format!("NOT EXISTS ({rows})"),
@@ -256,8 +258,7 @@ mod tests {
         sql(filters).unwrap_err().0
     }
 
-    const ROWS: &str =
-        "SELECT 1 FROM doc_fields f WHERE f.document_id = d.id AND f.file_id IS NULL AND f.key = ?";
+    const ROWS: &str = "SELECT 1 FROM doc_fields f WHERE f.document_id = d.id AND f.file_id IS df.id AND f.key = ?";
 
     #[test]
     fn plain_values_mean_equality() {

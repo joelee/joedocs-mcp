@@ -91,7 +91,7 @@ After the database commit, still holding the write lock, the change rewrites its
 
 ## Search
 
-`search_documents` parses `query` into a quoted FTS5 expression (so no input is a syntax error) and `filters` into `EXISTS` conditions over `doc_fields`, then runs one SQL query: driven by the FTS5 match when there is text (ranked by `bm25`, title ten times body, with a snippet), otherwise by the documents table, newest first. `"*"` searches every project the key holds a grant on.
+`search_documents` parses `query` into a quoted FTS5 expression (so no input is a syntax error) and `filters` into `EXISTS` conditions over `doc_fields`, then runs one SQL query: driven by the FTS5 match when there is text (ranked by `bm25`, title ten times body, with a snippet), otherwise by the documents table, newest first. `"*"` searches every project the key holds a grant on. Each file of a multi-file document is its own search entry: its `doc_fts` row has rowid `-document_files.id` (a main file's is `project_id * 2^32 + seq`), and its `doc_fields` rows carry its `file_id`, so filters test the front matter of the entry that matched and main files and sub-files rank in one query.
 
 ## Rebuilding the index
 

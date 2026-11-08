@@ -79,7 +79,7 @@ Every tool returns structured JSON. A tool takes only the parameters listed; an 
 | --- | --- | --- |
 | `list_projects` | none | The projects this key can use, with `permission` and document count, plus the allowed `types`, `statuses`, `default_type` and `default_status`. Call it first. |
 | `list_documents` | `project`, `type` (default `all`), `status`, `limit` (1 to 1000, default 200), `start` (default 1), `sort` (`updated_desc` (default), `updated_asc`, `created_desc`, `created_asc`, `title`) | Metadata only: `items`, `total`, `next_start`. |
-| `search_documents` | `project` (a name, or `"*"` for every project the key can read), `type` (default `all`), `query`, `filters`, `limit` (1 to 200, default 20), `start` | `items` with metadata, `score` and `snippet`, best first; `total`, `next_start`. See [Search](#search). |
+| `search_documents` | `project` (a name, or `"*"` for every project the key can read), `type` (default `all`), `query`, `filters`, `limit` (1 to 200, default 20), `start`, `document_id` (only that document's files) | `items` with metadata, `score` and `snippet`, and `file` for a hit on a file of a multi-file document, best first; `total`, `next_start`. See [Search](#search). |
 | `get_document` | `document_id`, `version` (omit for the latest), `file` (a file of a multi-file document; omit for the main file) | `markdown` (front matter and body), `document` (metadata) and `revision`. For a multi-file document also `files` (its other files at that revision) and, when `file` was given, `file`. |
 | `list_document_files` | `document_id`, `version` (omit for the latest) | `document_id`, `revision` and `files`: the main file first, then the other files by path, each with `file`, `main`, `revision` (the document revision at which it last changed) and `updated`. |
 | `get_document_history` | `document_id`, `limit` (1 to 1000, default 50), `start`, `file` (a file of a multi-file document) | Revisions newest first: number, action, author key, client, summary and time. With `file`, only the revisions that changed that file, following it back through its renames to its creation, each with `file`, its path then; an archived file's history can still be read. Naming the main file lists the revisions that changed it. |
@@ -191,6 +191,8 @@ No query is a syntax error: an unclosed quote runs to the end, and terms with no
 | `exists` | `{"approved_by": {"exists": true}}` |
 
 Every key works the same way, server keys and custom keys alike. Text compares ignoring case, numbers compare as numbers, and dates compare as text, so RFC 3339 prefixes such as `2026-10-01` work. Without a `query`, results are newest first.
+
+**Multi-file documents.** Each file of a multi-file document is searched on its own, ranked in the same list as main files: its path (and `aliases`) counts as its title. A hit on such a file carries `file`, and its snippet comes from that file; `filters` apply to the front matter of the file that matched, so `{"status": "planned"}` finds backlog items by their own status. `document_id` restricts the search to one document's files, its main file included. Archived files and archived documents are left out.
 
 ## Documents
 

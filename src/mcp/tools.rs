@@ -179,6 +179,10 @@ pub struct SearchDocumentsParams {
     /// 1-based position of the first result; use `next_start` from the previous page.
     #[serde(default = "one")]
     pub start: u64,
+    /// Search only this document's files (its main file included), e.g.
+    /// the items of a multi-file backlog.
+    #[serde(default)]
+    pub document_id: Option<String>,
 }
 
 /// Arguments of `get_document_history`.
@@ -744,6 +748,10 @@ pub struct SearchHitOut {
     /// absent without a query.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
+    /// For a hit on a file of a multi-file document, the file (read it with
+    /// `get_document` and `file`); absent for a main file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 impl From<SearchHit> for SearchHitOut {
@@ -752,6 +760,7 @@ impl From<SearchHit> for SearchHitOut {
             document: hit.document.into(),
             score: hit.score,
             snippet: hit.snippet,
+            file: hit.file,
         }
     }
 }
@@ -1062,6 +1071,9 @@ impl JoeDocsServer {
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<SearchDocumentsOut>, CallToolResult> {
         self.read(&ctx, move |store, caller| {
+            if let Some(id) = &params.document_id {
+                require_document(store, caller, id, Permission::Read)?;
+            }
             let projects = if params.project == "*" {
                 caller.grants.iter().map(|g| g.project.clone()).collect()
             } else {
@@ -1075,6 +1087,7 @@ impl JoeDocsServer {
                 filters: params.filters.unwrap_or_default(),
                 start: params.start,
                 limit: params.limit,
+                document_id: params.document_id.clone(),
             })?;
             Ok(SearchDocumentsOut {
                 items: results.items.into_iter().map(SearchHitOut::from).collect(),

@@ -1331,3 +1331,105 @@ fn diffs_cover_one_file_or_every_file_that_changed() {
     );
     assert_eq!(single.files, Vec::<String>::new());
 }
+
+// --- Search over sub-files (STEP-09) ----------------------------------------
+
+fn search(
+    store: &Store,
+    query: &str,
+    filters: serde_json::Value,
+    document_id: Option<&str>,
+) -> Vec<(String, Option<String>)> {
+    let serde_json::Value::Object(filters) = filters else {
+        return Vec::new();
+    };
+    store
+        .search(&joedocs::store::SearchRequest {
+            projects: vec!["joedocs".into()],
+            doc_type: None,
+            query: query.into(),
+            filters,
+            start: 1,
+            limit: 50,
+            document_id: document_id.map(str::to_owned),
+        })
+        .map(|results| {
+            results
+                .items
+                .into_iter()
+                .map(|hit| (hit.document.id, hit.file))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn search_finds_sub_files_with_their_own_front_matter() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    let hit = |id: &str, file: Option<&str>| (id.to_owned(), file.map(str::to_owned));
+
+    assert_eq!(
+        search(&store, "item", json!({}), None),
+        [hit("JD-1", Some("backlog/item-1"))]
+    );
+    let results = store
+        .search(&joedocs::store::SearchRequest {
+            projects: vec!["joedocs".into()],
+            doc_type: None,
+            query: "item".into(),
+            filters: serde_json::Map::new(),
+            start: 1,
+            limit: 10,
+            document_id: None,
+        })
+        .unwrap();
+    assert!(
+        results.items[0]
+            .snippet
+            .as_deref()
+            .unwrap_or("")
+            .contains("«Item»")
+    );
+    assert_eq!(
+        search(&store, "", json!({"status": "planned"}), None),
+        [hit("JD-1", Some("backlog/item-1"))]
+    );
+    let mut drafts = search(&store, "", json!({"status": "draft"}), None);
+    drafts.sort();
+    assert_eq!(drafts, [hit("JD-1", None), hit("JD-2", None)]);
+    let mut everything = search(&store, "", json!({}), Some("JD-1"));
+    everything.sort();
+    assert_eq!(
+        everything,
+        [
+            hit("JD-1", None),
+            hit("JD-1", Some("backlog/item-1")),
+            hit("JD-1", Some("notes"))
+        ]
+    );
+    assert_eq!(search(&store, "plan", json!({}), Some("JD-1")), []);
+    assert_eq!(search(&store, "plan", json!({}), None), [hit("JD-2", None)]);
+
+    let before = (
+        search(&store, "notes", json!({}), None),
+        search(&store, "", json!({"status": "planned"}), None),
+    );
+    store.reindex().unwrap();
+    assert_eq!(
+        (
+            search(&store, "notes", json!({}), None),
+            search(&store, "", json!({"status": "planned"}), None)
+        ),
+        before
+    );
+
+    store
+        .archive_file(&actor(), "JD-1", "backlog/item-1", None, None)
+        .unwrap();
+    assert_eq!(search(&store, "item", json!({}), None), []);
+    assert_eq!(search(&store, "", json!({"status": "planned"}), None), []);
+    store.archive(&actor(), "JD-1", "done").unwrap();
+    assert_eq!(search(&store, "notes", json!({}), None), []);
+}

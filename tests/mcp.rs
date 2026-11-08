@@ -692,6 +692,31 @@ async fn file_history_and_diffs_round_trip() {
     .unwrap();
     assert_eq!(all["files"], json!(["b"]));
     assert_eq!(all["changed"], true);
+
+    let found = ok(
+        &client,
+        "search_documents",
+        json!({"project": "joedocs", "query": "more", "document_id": "JD-1"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(found["total"], 1);
+    assert_eq!(found["items"][0]["id"], "JD-1");
+    assert_eq!(found["items"][0]["file"], "b");
+    assert!(
+        found["items"][0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("«more»")
+    );
+    let other = error(
+        &client,
+        "search_documents",
+        json!({"project": "joedocs", "query": "more", "document_id": "SC-1"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(other["code"], "not_found");
     client.cancel().await.unwrap();
     server.stop().await.unwrap();
 }

@@ -156,8 +156,11 @@ pub struct SearchQuery<'a> {
     pub doc_type: Option<&'a str>,
     /// FTS5 match expression, if there is text to find.
     pub text: Option<&'a str>,
-    /// Front matter conditions, all of which must hold.
+    /// Front matter conditions, all of which must hold for the file that
+    /// matched.
     pub conditions: &'a [Condition],
+    /// Only this document's files (its main file included), if set.
+    pub document_id: Option<&'a str>,
     /// Rows to skip.
     pub offset: u64,
     /// Most rows to return.
@@ -173,6 +176,9 @@ pub struct SearchRow {
     pub score: Option<f64>,
     /// The best-matching part of the body, when there was text to find.
     pub snippet: Option<String>,
+    /// The sub-file that matched, for a file of a multi-file document; the
+    /// main file when `None`.
+    pub file: Option<String>,
 }
 
 /// One page of results, best first, and the total number matching.
@@ -188,17 +194,29 @@ pub fn search_documents(
         return Ok((Vec::new(), 0));
     }
     let mut params: Vec<SqlValue> = Vec::new();
-    let mut filters = vec!["d.archived_at IS NULL".to_owned()];
+    let mut filters = vec![
+        "d.archived_at IS NULL".to_owned(),
+        "df.archived_at IS NULL".to_owned(),
+    ];
+    // Every entry is a main file (no `df` row) or a live sub-file (`df`);
+    // front matter conditions look at the entry's own `doc_fields` rows.
     let from = if let Some(text) = query.text {
         filters.push("doc_fts MATCH ?".to_owned());
         params.push(SqlValue::Text(text.to_owned()));
-        // The full-text match drives the query; each hit finds its document
-        // by the (project_id, seq) its rowid encodes.
-        "FROM doc_fts CROSS JOIN documents d \
-         ON d.project_id = (doc_fts.rowid >> 32) AND d.seq = (doc_fts.rowid & 4294967295) \
+        // The full-text match drives the query. A main file's rowid encodes
+        // its document's (project_id, seq); a sub-file's is minus its row ID.
+        "FROM doc_fts \
+         LEFT JOIN document_files df ON doc_fts.rowid < 0 AND df.id = -doc_fts.rowid \
+         CROSS JOIN documents d ON d.id = CASE WHEN doc_fts.rowid < 0 THEN df.document_id \
+             ELSE (SELECT m.id FROM documents m \
+                   WHERE m.project_id = (doc_fts.rowid >> 32) AND m.seq = (doc_fts.rowid & 4294967295)) END \
          JOIN projects p ON p.id = d.project_id"
     } else {
-        "FROM documents d JOIN projects p ON p.id = d.project_id"
+        "FROM (SELECT id AS document_id, NULL AS file_id FROM documents \
+               UNION ALL SELECT document_id, id FROM document_files WHERE archived_at IS NULL) e \
+         JOIN documents d ON d.id = e.document_id \
+         LEFT JOIN document_files df ON df.id = e.file_id \
+         JOIN projects p ON p.id = d.project_id"
     };
     let ids = vec!["?"; query.project_ids.len()].join(", ");
     filters.push(format!("d.project_id IN ({ids})"));
@@ -206,6 +224,10 @@ pub fn search_documents(
     if let Some(doc_type) = query.doc_type {
         filters.push("d.type = ?".to_owned());
         params.push(SqlValue::Text(doc_type.to_owned()));
+    }
+    if let Some(id) = query.document_id {
+        filters.push("d.id = ?".to_owned());
+        params.push(SqlValue::Text(id.to_owned()));
     }
     for condition in query.conditions {
         filters.push(condition.to_sql(&mut params));
@@ -220,13 +242,13 @@ pub fn search_documents(
     let rank = format!("bm25(doc_fts, {TITLE_WEIGHT:.1}, 1.0)");
     let (extra, order) = if query.text.is_some() {
         (
-            format!(", -{rank}, snippet(doc_fts, 1, '«', '»', '…', {SNIPPET_TOKENS})"),
-            format!("{rank}, d.updated_at DESC, d.seq DESC"),
+            format!(", -{rank}, snippet(doc_fts, 1, '«', '»', '…', {SNIPPET_TOKENS}), df.path"),
+            format!("{rank}, coalesce(df.updated_at, d.updated_at) DESC, d.seq DESC, df.path"),
         )
     } else {
         (
-            ", NULL, NULL".to_owned(),
-            "d.updated_at DESC, d.seq DESC".to_owned(),
+            ", NULL, NULL, df.path".to_owned(),
+            "coalesce(df.updated_at, d.updated_at) DESC, d.seq DESC, df.path".to_owned(),
         )
     };
     params.push(SqlValue::Integer(
@@ -244,6 +266,7 @@ pub fn search_documents(
                 document: from_row(row)?,
                 score: row.get(20)?,
                 snippet: row.get(21)?,
+                file: row.get(22)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -322,7 +345,7 @@ mod tests {
             .unwrap();
         assert_eq!(title, "backlog/item\nItem one");
 
-        // Until sub-files are searchable, searches see main files only.
+        // The sub-file is found by its own front matter and text.
         let Value::Object(filter) = json!({"status": "planned"}) else {
             unreachable!()
         };
@@ -332,16 +355,19 @@ mod tests {
             doc_type: None,
             text: None,
             conditions: &planned,
+            document_id: None,
             offset: 0,
             limit: 10,
         };
-        assert_eq!(search_documents(&conn, &query).unwrap().1, 0);
+        let (rows, total) = search_documents(&conn, &query).unwrap();
+        assert_eq!((total, rows[0].file.as_deref()), (1, Some("backlog/item")));
         let words = SearchQuery {
             text: Some("sub"),
             conditions: &[],
             ..query
         };
-        assert_eq!(search_documents(&conn, &words).unwrap().1, 0);
+        let (rows, total) = search_documents(&conn, &words).unwrap();
+        assert_eq!((total, rows[0].file.as_deref()), (1, Some("backlog/item")));
 
         // Re-indexing the main file leaves the sub-file's entries alone.
         unindex_document(&conn, &row).unwrap();
