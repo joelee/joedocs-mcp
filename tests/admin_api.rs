@@ -14,10 +14,43 @@ use secrecy::ExposeSecret as _;
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket};
 use tokio::sync::oneshot;
 
 type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+/// Sends `request` on a new connection and reads the whole reply. The send
+/// buffer is small, so a large body is still being written when the server
+/// answers, as on a busy network.
+///
+/// The server refuses an oversized body, or a bad `Host`, without reading
+/// the rest of the body, and closes the connection. Writing on then fails
+/// with a broken pipe or a reset, and reading may end with a reset, but the
+/// reply has already arrived: that is what a client sees, so it is the
+/// reply returned here.
+async fn exchange(addr: std::net::SocketAddr, request: &[u8]) -> TestResult<Vec<u8>> {
+    let closed_early = |e: &std::io::Error| {
+        matches!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+        )
+    };
+    let socket = TcpSocket::new_v4()?;
+    socket.set_send_buffer_size(4096)?;
+    let mut stream = socket.connect(addr).await?;
+    if let Err(e) = stream.write_all(request).await
+        && !closed_early(&e)
+    {
+        return Err(e.into());
+    }
+    let mut raw = Vec::new();
+    if let Err(e) = stream.read_to_end(&mut raw).await
+        && (raw.is_empty() || !closed_early(&e))
+    {
+        return Err(e.into());
+    }
+    Ok(raw)
+}
 
 struct Server {
     dir: TempDir,
@@ -94,15 +127,12 @@ impl Server {
         headers: &str,
         body: &str,
     ) -> TestResult<Response> {
-        let mut stream = TcpStream::connect(self.addr).await?;
         let request = format!(
             "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n{headers}content-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
             self.addr.port(),
             body.len()
         );
-        stream.write_all(request.as_bytes()).await?;
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).await?;
+        let raw = exchange(self.addr, request.as_bytes()).await?;
         let text = String::from_utf8_lossy(&raw).into_owned();
         let (head, body) = text.split_once("\r\n\r\n").ok_or("no header end")?;
         let status = head.split(' ').nth(1).ok_or("no status")?.parse()?;
@@ -327,14 +357,11 @@ async fn wrong_codes_are_refused_and_lock_the_token() -> TestResult<()> {
 async fn foreign_hosts_and_origins_are_refused() -> TestResult<()> {
     let server = start(true).await?;
     let session = server.login().await?;
-    let mut stream = TcpStream::connect(server.addr).await?;
     let request = format!(
         "GET /admin/v1/status HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n{}\r\n",
         server.auth(Some(&session))
     );
-    stream.write_all(request.as_bytes()).await?;
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).await?;
+    let raw = exchange(server.addr, request.as_bytes()).await?;
     assert!(
         String::from_utf8_lossy(&raw).starts_with("HTTP/1.1 403"),
         "{}",
@@ -396,16 +423,13 @@ async fn rejected_requests_are_audited_too() -> TestResult<()> {
         assert_eq!(add.status, 413);
     }
     // A bad Host is refused first, even with a huge body.
-    let mut stream = TcpStream::connect(server.addr).await?;
     let big = "1".repeat(70 * 1024);
     let request = format!(
         "POST /admin/v1/session HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n{}content-length: {}\r\n\r\n{big}",
         server.auth(None),
         big.len()
     );
-    stream.write_all(request.as_bytes()).await?;
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).await?;
+    let raw = exchange(server.addr, request.as_bytes()).await?;
     assert!(String::from_utf8_lossy(&raw).starts_with("HTTP/1.1 403"));
     let unknown = server
         .send("GET", "/admin/v1/nope", &server.auth(Some(&session)), "")
