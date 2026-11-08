@@ -43,6 +43,8 @@ Run `joedocs config paths` to see the search order and the selected file.
 | `documents.default_type` | string | `"home"` | `JOEDOCS__DOCUMENTS__DEFAULT_TYPE` | | Type for new documents that name none; must be in `documents.types`. |
 | `documents.default_status` | string | `"draft"` | `JOEDOCS__DOCUMENTS__DEFAULT_STATUS` | | Status for new documents that name none; must be in `documents.statuses`. |
 | `documents.index_file` | boolean | `true` | `JOEDOCS__DOCUMENTS__INDEX_FILE` | | Write `INDEX.md`, a table of the live documents sorted by ID, in each project folder (see [reference](reference.md#documents)). When `false`, JoeDocs neither writes nor checks it, and leaves existing files in place. |
+| `admin.enabled` | boolean | `false` | `JOEDOCS__ADMIN__ENABLED` | `true` | Serve the remote admin API under `/admin/v1/`, so `joedocs` on another machine can run admin commands with an admin token and a TOTP code (see [deployment](deployment.md)). Off by default. |
+| `admin.session_hours` | integer | `8` | `JOEDOCS__ADMIN__SESSION_HOURS` | `12` | How long a session opened by `joedocs login` lasts, in hours: 1 to 168. |
 
 A slug is 1 to 64 characters of `a-z`, `0-9` and `-`, starting with a letter or digit. Lists of slugs must be non-empty and have no duplicates.
 

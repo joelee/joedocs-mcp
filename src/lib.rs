@@ -206,7 +206,7 @@ pub fn execute(
             let mut store = open_store(loaded, ctx)?;
             catch_up(&mut store)?;
             store.refresh_index_files();
-            mcp::run(store, loaded.config(), out)?;
+            mcp::run(store, loaded.config(), loaded.resolved.file.as_deref(), out)?;
         }
         Command::Reindex => admin::reindex(&mut open_store(loaded, ctx)?, out)?,
         Command::Archive { command } => {

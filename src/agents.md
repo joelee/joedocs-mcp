@@ -12,6 +12,7 @@ You are maintaining a JoeDocs server: an MCP server that stores project document
 | State (`storage.state_dir`: `joedocs.db`, `history.git`, `joedocs.lock`) | {{state_dir}} |
 | Listen address (`server.bind`) | {{bind}} |
 | Service | {{service}} |
+| Remote admin API | {{admin}} |
 
 Run `joedocs status` for the current state, sizes and health, and `joedocs config show` for every setting and where it came from.
 
@@ -35,6 +36,7 @@ These change the store or what clients can do. Explain what you intend and why, 
 - `joedocs archive restore DOCUMENT_ID`.
 - `joedocs project add`, `joedocs key create`, `key grant`, `key rotate` and `key revoke`. A rotated or revoked key stops working at once, on every machine that uses it.
 - `joedocs backup --restore`, which needs empty target directories and a stopped service.
+- `joedocs admin-token create`, `list` and `revoke`, and turning the remote admin API on or off.
 - Upgrading, restarting or stopping the service, and `joedocs systemd install` or `remove`.
 - Any change to the config file.
 

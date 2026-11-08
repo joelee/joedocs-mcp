@@ -37,6 +37,8 @@ pub struct Config {
     pub storage: StorageConfig,
     /// Allowed document types and statuses (`[documents]`).
     pub documents: DocumentsConfig,
+    /// The remote admin API (`[admin]`).
+    pub admin: AdminConfig,
 }
 
 /// Logging settings.
@@ -222,6 +224,26 @@ impl Default for DocumentsConfig {
             default_type: "home".to_owned(),
             default_status: "draft".to_owned(),
             index_file: true,
+        }
+    }
+}
+
+/// The remote admin API, served by `joedocs serve` under `/admin/v1/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AdminConfig {
+    /// Whether to serve the admin API. Off by default.
+    pub enabled: bool,
+    /// How long a session opened by `joedocs login` lasts, in hours (1 to
+    /// 168).
+    pub session_hours: u32,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            session_hours: 8,
         }
     }
 }

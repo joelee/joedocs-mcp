@@ -56,6 +56,12 @@ impl Config {
                 ));
             }
         }
+        if !(1..=168).contains(&self.admin.session_hours) {
+            return Err(Violation::new(
+                "admin.session_hours",
+                "must be from 1 to 168 (a week)",
+            ));
+        }
         if self.server.max_document_bytes == 0 {
             return Err(Violation::new(
                 "server.max_document_bytes",
@@ -191,6 +197,17 @@ mod tests {
         let mut config = Config::default();
         config.server.allowed_hosts = vec!["docs.example.net".into(), "localhost:8750".into()];
         assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn admin_sessions_last_one_hour_to_a_week() {
+        for hours in [0, 169] {
+            let v = violation(|c| c.admin.session_hours = hours);
+            assert_eq!(v.key, "admin.session_hours");
+        }
+        let mut config = Config::default();
+        config.admin.session_hours = 168;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

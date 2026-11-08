@@ -37,6 +37,8 @@ pub struct StatusReport {
     pub user_unit: UnitState,
     /// The systemd system unit.
     pub system_unit: UnitState,
+    /// Whether the remote admin API is served (`admin.enabled`).
+    pub admin_enabled: bool,
     /// `storage.home`.
     pub vault: DirSize,
     /// `storage.state_dir`.
@@ -97,8 +99,29 @@ pub fn collect(
     loaded: &Loaded,
     services: &dyn ServiceManager,
 ) -> Result<StatusReport, Error> {
+    collect_parts(
+        store,
+        loaded.resolved.file.clone(),
+        loaded.config().server.bind,
+        loaded.config().admin.enabled,
+        services,
+    )
+}
+
+/// Gathers the report from its parts (for the admin API, which has no
+/// [`Loaded`]).
+///
+/// # Errors
+///
+/// Returns storage errors.
+pub fn collect_parts(
+    store: &Store,
+    config_file: Option<PathBuf>,
+    bind: SocketAddr,
+    admin_enabled: bool,
+    services: &dyn ServiceManager,
+) -> Result<StatusReport, Error> {
     let paths = store.paths();
-    let bind = loaded.config().server.bind;
     let database_bytes = ["joedocs.db", "joedocs.db-wal", "joedocs.db-shm"]
         .iter()
         .filter_map(|name| std::fs::metadata(paths.state_dir.join(name)).ok())
@@ -111,11 +134,12 @@ pub fn collect(
             .ok()
             .filter(|h| !h.is_empty())
             .unwrap_or_else(|| "unknown".to_owned()),
-        config_file: loaded.resolved.file.clone(),
+        config_file,
         bind,
         health: probe(bind),
         user_unit: unit_state(services, true),
         system_unit: unit_state(services, false),
+        admin_enabled,
         vault: dir_size(&paths.home),
         state: dir_size(&paths.state_dir),
         database_bytes,
@@ -300,6 +324,12 @@ pub fn render(report: &StatusReport, out: &mut dyn Write) -> Result<(), Error> {
         "  systemd system unit {UNIT_NAME}: {}",
         describe_unit(&report.system_unit)
     );
+    let admin = if report.admin_enabled {
+        "enabled, under /admin/v1/"
+    } else {
+        "disabled ([admin] enabled = false)"
+    };
+    let _ = writeln!(text, "  admin API: {admin}");
     let _ = writeln!(text, "\nStorage");
     let _ = writeln!(text, "  vault: {}", describe_dir(&report.vault));
     let _ = writeln!(text, "  state: {}", describe_dir(&report.state));
@@ -523,6 +553,7 @@ mod tests {
                 pid: Some(12),
             },
             system_unit: UnitState::NotInstalled,
+            admin_enabled: false,
             vault: DirSize {
                 path: "/v".into(),
                 bytes: 2048,
@@ -560,6 +591,7 @@ mod tests {
             "health: unexpected answer (HTTP/1.1 500)",
             "user unit joedocs.service: active, MainPID 12",
             "system unit joedocs.service: not installed",
+            "admin API: disabled",
             "vault: /v (2.0 KiB, 2048 bytes, 3 files)",
             "history head: none (no commits yet)",
             "index: behind the history",

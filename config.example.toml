@@ -40,3 +40,11 @@ default_status = "draft"
 # Write INDEX.md, a table of the live documents sorted by ID, in each project
 # folder. When false, existing INDEX.md files are left in place.
 index_file = true
+
+[admin]
+# Serve the remote admin API under /admin/v1/ so `joedocs` on another
+# machine can run admin commands. Off by default. Callers need an admin token
+# (`joedocs admin-token create`) and a TOTP code from their authenticator.
+enabled = false
+# How long a session opened by `joedocs login` lasts, in hours (1 to 168).
+session_hours = 8

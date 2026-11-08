@@ -27,6 +27,8 @@ pub struct Facts {
     pub bind: String,
     /// How the service is run.
     pub service: String,
+    /// Whether the remote admin API is served.
+    pub admin: String,
 }
 
 impl Facts {
@@ -47,6 +49,11 @@ impl Facts {
             state_dir: format!("`{}`", paths.state_dir.display()),
             bind: format!("`{}`", loaded.config().server.bind),
             service: service(ctx.services, ctx),
+            admin: if loaded.config().admin.enabled {
+                "enabled (`[admin] enabled = true`): admin commands can also come from other machines, with an admin token and a TOTP code".to_owned()
+            } else {
+                "disabled (`[admin] enabled = false`)".to_owned()
+            },
         })
     }
 }
@@ -93,6 +100,7 @@ pub fn render(facts: &Facts) -> String {
         .replace("{{state_dir}}", &facts.state_dir)
         .replace("{{bind}}", &facts.bind)
         .replace("{{service}}", &facts.service)
+        .replace("{{admin}}", &facts.admin)
 }
 
 /// Runs `joedocs agents`.
@@ -117,6 +125,7 @@ mod tests {
             state_dir: "`/srv/state`".into(),
             bind: "`127.0.0.1:8750`".into(),
             service: "systemd user unit, active".into(),
+            admin: "disabled".into(),
         }
     }
 

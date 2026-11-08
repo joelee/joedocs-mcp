@@ -11,6 +11,7 @@
 //! store keeps a single writer and SQLite and git never block the async
 //! runtime.
 
+mod admin_api;
 mod auth;
 mod errors;
 mod tools;
@@ -27,6 +28,7 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+pub use admin_api::{AdminOptions, SESSION_HEADER};
 pub use auth::Caller;
 pub use errors::ToolError;
 pub use tools::JoeDocsServer;
@@ -51,6 +53,8 @@ pub struct ServerOptions {
     /// several times, so this is `4 × max_document_bytes` plus slack; the
     /// store still enforces `max_document_bytes` on the result.
     pub max_request_bytes: usize,
+    /// The admin API, when `admin.enabled` is on.
+    pub admin: Option<AdminOptions>,
 }
 
 impl ServerOptions {
@@ -72,6 +76,10 @@ impl ServerOptions {
                 .map(|o| with_default_port(o))
                 .collect(),
             max_request_bytes: usize::try_from(max).unwrap_or(usize::MAX),
+            admin: config.admin.enabled.then_some(AdminOptions {
+                session_hours: config.admin.session_hours,
+                config_file: None,
+            }),
         }
     }
 }
@@ -156,9 +164,22 @@ pub fn router(shared: &Arc<Shared>, options: &ServerOptions, ct: &CancellationTo
                 Arc::clone(shared),
                 auth::require_key,
             ));
-    Router::new()
+    let app = Router::new()
         .route("/health", get(|| async { "ok" }))
-        .merge(mcp)
+        .merge(mcp);
+    match &options.admin {
+        Some(admin) => app.nest("/admin/v1", admin_api::routes(shared, admin, options)),
+        // Without this, the MCP router's key check would answer these paths
+        // with 401, as for any other unknown path; a disabled admin API is
+        // simply not there.
+        None => app
+            .route("/admin/v1", axum::routing::any(not_found))
+            .route("/admin/v1/{*rest}", axum::routing::any(not_found)),
+    }
+}
+
+async fn not_found() -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
 }
 
 /// Serves on `listener` until `shutdown` completes, then closes every MCP
@@ -192,8 +213,16 @@ pub async fn serve(
 /// Returns [`crate::Error::Serve`] when the runtime cannot start, the
 /// address cannot be bound, or the server fails, and
 /// [`crate::Error::Output`] when writing to `out` fails.
-pub fn run(store: Store, config: &Config, out: &mut dyn Write) -> Result<(), crate::Error> {
-    let options = ServerOptions::from_config(config);
+pub fn run(
+    store: Store,
+    config: &Config,
+    config_file: Option<&std::path::Path>,
+    out: &mut dyn Write,
+) -> Result<(), crate::Error> {
+    let mut options = ServerOptions::from_config(config);
+    if let Some(admin) = &mut options.admin {
+        admin.config_file = config_file.map(std::path::Path::to_path_buf);
+    }
     let addr = options.bind;
     let failed = |source| crate::Error::Serve { addr, source };
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -204,6 +233,9 @@ pub fn run(store: Store, config: &Config, out: &mut dyn Write) -> Result<(), cra
         let listener = TcpListener::bind(addr).await.map_err(failed)?;
         let local = listener.local_addr().map_err(failed)?;
         writeln!(out, "JoeDocs MCP endpoint: http://{local}/mcp")?;
+        if options.admin.is_some() {
+            writeln!(out, "JoeDocs admin API: http://{local}/admin/v1/")?;
+        }
         out.flush()?;
         tracing::info!(%local, "listening");
         serve(listener, Shared::new(store), &options, shutdown_signal())
