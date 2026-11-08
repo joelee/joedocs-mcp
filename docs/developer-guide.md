@@ -108,7 +108,7 @@ Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/
 
 1. **crates.io:** in the `joedocs` crate's Settings → Trusted Publishing, add a GitHub publisher: owner `joelee`, repository `joedocs-mcp`, workflow `release.yml`, environment `release`. After the first automated release, revoke the old `cargo login` token on crates.io.
 2. **GitHub environment:** Settings → Environments → `release`, with yourself as required reviewer and deployments limited to `v*` tags.
-3. **Homebrew tap:** finish the tap's setup ([`docs-release.md`](https://github.com/joelee/homebrew-oss/blob/main/docs-release.md), parts 1 and 2), then add to this repository the variable `TAP_BOT_APP_ID` and, in the `release` environment, the secret `TAP_BOT_PRIVATE_KEY`. Without them the release still publishes, and the tap's daily check picks up the new version.
+3. **Homebrew tap:** finish the tap's setup ([`docs-release.md`](https://github.com/joelee/homebrew-oss/blob/main/docs-release.md), parts 1 and 2), then add to this repository the variable `TAP_BOT_CLIENT_ID` (the App's client ID, shown on its settings page) and, in the `release` environment, the secret `TAP_BOT_PRIVATE_KEY`. Without them the release still publishes, and the tap's daily check picks up the new version.
 4. **Signing key:** release tags are signed (`git tag -s`), so git needs a signing key (`user.signingkey`, GPG or SSH with `gpg.format`), and the public key must be on your GitHub account, because the workflow refuses a tag that GitHub does not report as verified.
 
 ### Each release

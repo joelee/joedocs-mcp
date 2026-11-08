@@ -131,22 +131,22 @@ jobs:
       # The tap's App key is an environment secret, so the dispatch runs in
       # this approved job rather than waiting for a second approval.
       - name: Skip the Homebrew dispatch
-        if: vars.TAP_BOT_APP_ID == ''
-        run: echo "::notice::TAP_BOT_APP_ID is not set; the tap's daily check or 'gh workflow run bump-formula.yml -R joelee/homebrew-oss' bumps the formula"
+        if: vars.TAP_BOT_CLIENT_ID == ''
+        run: echo "::notice::TAP_BOT_CLIENT_ID is not set; the tap's daily check or 'gh workflow run bump-formula.yml -R joelee/homebrew-oss' bumps the formula"
 
       - name: Get a token for joelee/homebrew-oss
-        if: vars.TAP_BOT_APP_ID != ''
+        if: vars.TAP_BOT_CLIENT_ID != ''
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.TAP_BOT_APP_ID }}
+          client-id: ${{ vars.TAP_BOT_CLIENT_ID }}
           private-key: ${{ secrets.TAP_BOT_PRIVATE_KEY }}
           owner: joelee
           repositories: homebrew-oss
           permission-contents: write
 
       - name: Ask the Homebrew tap to bump the formula
-        if: vars.TAP_BOT_APP_ID != ''
+        if: vars.TAP_BOT_CLIENT_ID != ''
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           VERSION: ${{ needs.verify.outputs.version }}
