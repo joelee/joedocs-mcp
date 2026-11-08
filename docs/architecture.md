@@ -30,7 +30,7 @@ flowchart LR
 | Module | Responsibility |
 | --- | --- |
 | `main.rs` | Parse args, build the real `Context`, load config, start logging, run, map errors to exit codes. |
-| `lib.rs` | `load`, `execute`, `open_store` and `catch_up` (the rebuild `serve` runs on start), the `Error` type, exit codes. |
+| `lib.rs` | `load`, `execute`, `open_store` and `catch_up` (the rebuild `serve` runs on start, followed by rewriting each project's `INDEX.md`), the `Error` type, exit codes. |
 | `cli` | `clap` definitions and conversion of flags to config values. |
 | `config` | Schema and defaults (`mod.rs`), resolution (`resolve.rs`), rule checks (`validate.rs`), diagnostics (`show.rs`). |
 | `env` | `Env` trait, `ProcessEnv` (process environment over `.env`), `MapEnv` (tests). |
@@ -39,7 +39,7 @@ flowchart LR
 | `app_id` | Application name and the environment prefix derived from it. |
 | `clock` | `Clock` trait, `SystemClock`, `FixedClock` (tests), RFC 3339 formatting. |
 | `document` | Pure domain rules: slugs, project keys, `DocumentId`, titles and file stems, front matter classes, parsing, serialising and change rules. |
-| `store` | Document use cases (create, get, update, edit, append, rename, move, change front matter, restore a revision, archive and unarchive, list, search, history, diff), projects and API keys, the write lock, the integrity guard, the undo journal for vault files, the file → history → database ordering, `reindex` and `check`. |
+| `store` | Document use cases (create, get, update, edit, append, rename, move, change front matter, restore a revision, archive and unarchive, list, search, history, diff), projects and API keys, the write lock, the integrity guard, the undo journal for vault files, the file → history → database ordering, each project's generated `INDEX.md` (`index_file.rs`), `reindex` and `check`. |
 | `db` | SQLite connection setup, embedded migrations, and queries as free functions over a connection, including the search index (`doc_fields`, `doc_fts`). |
 | `history` | `History` trait and `GitCli`, with the git directory outside the vault: commit, show, log and diff. |
 | `auth` | API key generation, parsing, hashing and verification; `Permission` and `Grant`; `RandomSource`. |
@@ -58,13 +58,15 @@ Every document change takes the write lock (a file lock in the state directory),
 
 Every change other than create and archive goes through one path (`Store::revise`): it reads the verified file, lets the operation change a draft of the title, type, status, other front matter and body, then writes the result, moving the file if the title or type changed. Rename, move, update, edit, append, front matter changes and restore differ only in how they change the draft.
 
+After the database commit, still holding the write lock, the change rewrites its project's `INDEX.md` (when `documents.index_file` is on), and so do `project add`, `reindex` and the start of `serve`. The file is generated from the database, written to a temporary file and renamed into place, and skipped when its content would not change. A failure only logs a warning, since the document change is already committed. `INDEX.md` never enters the history: the store adds `/*/INDEX.md` to the history's `info/exclude`.
+
 ## Search
 
 `search_documents` parses `query` into a quoted FTS5 expression (so no input is a syntax error) and `filters` into `EXISTS` conditions over `doc_fields`, then runs one SQL query: driven by the FTS5 match when there is text (ranked by `bm25`, title ten times body, with a snippet), otherwise by the documents table, newest first. `"*"` searches every project the key holds a grant on.
 
 ## Rebuilding the index
 
-The documents, revisions and search tables are an index of the history: every revision is a commit whose trailers name the document, revision, action and client, and the latest content of each document carries the rest in front matter. `joedocs reindex` replays `git log` into fresh tables in one transaction, recreates projects missing from the database from front matter, and reports vault files that differ from the history. `serve` runs it on start when the index records another history commit than `HEAD` (a write interrupted between the git commit and the database commit) or another index format (a database from an older build), so writes are never left refused.
+The documents, revisions and search tables are an index of the history: every revision is a commit whose trailers name the document, revision, action and client, and the latest content of each document carries the rest in front matter. `joedocs reindex` replays `git log` into fresh tables in one transaction, recreates projects missing from the database from front matter, and reports vault files that differ from the history. `serve` runs it on start when the index records another history commit than `HEAD` (a write interrupted between the git commit and the database commit) or another index format (a database from an older build), so writes are never left refused. Then it rewrites every project's `INDEX.md`, so a file deleted or edited by hand is restored before the server listens.
 
 ## Configuration resolution
 

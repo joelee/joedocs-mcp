@@ -37,3 +37,6 @@ statuses = ["draft", "review", "approved", "rejected", "superseded", "done"]
 # Type and status used when a new document names none.
 default_type = "home"
 default_status = "draft"
+# Write INDEX.md, a table of the live documents sorted by ID, in each project
+# folder. When false, existing INDEX.md files are left in place.
+index_file = true

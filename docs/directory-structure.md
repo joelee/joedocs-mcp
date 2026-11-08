@@ -4,6 +4,7 @@
 .
 ├── .github/
 │   ├── workflows/ci.yml    just ci on Linux and macOS, and just docker-test
+│   ├── workflows/release.yml  Signed vX.Y.Z tag: checks, CI, approval, crates.io, tap, GitHub release
 │   └── dependabot.yml      Weekly action and crate update proposals
 ├── AGENTS.md               Instructions for coding agents
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code
@@ -76,6 +77,7 @@
 │       ├── revisions.rs    History pages and diffs
 │       ├── archive.rs      Archive list and restore
 │       ├── check.rs        Drift report for joedocs check
+│       ├── index_file.rs   Each project's generated INDEX.md
 │       ├── registry.rs     Projects and API keys
 │       ├── search.rs       Store::search
 │       ├── reindex.rs      Rebuilding the index from the history

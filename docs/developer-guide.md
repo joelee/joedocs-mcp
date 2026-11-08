@@ -94,11 +94,24 @@ CI runs on GitHub Actions ([`.github/workflows/ci.yml`](../.github/workflows/ci.
 - `just ci` on Ubuntu and macOS, with full git history (for the gitleaks scan) and `NEXTEST_PROFILE=ci`; the JUnit report is uploaded as an artifact.
 - `just docker-test`, which builds the image and runs the deployment tests against it.
 
+The same workflow runs as a reusable workflow (`workflow_call`) from [`.github/workflows/release.yml`](../.github/workflows/release.yml) on every release tag, before anything is published (see Releasing).
+
 Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS`, `GITLEAKS_VERSION` and `ACTIONLINT_VERSION` variables, with gitleaks and actionlint checksums per platform). Keep the tool versions in step with what `just setup` installs locally. Dependabot proposes weekly updates for actions and crates; every proposal runs CI, including `cargo deny`.
 
 ## Releasing
 
 Versions number the command line, the configuration and the MCP tools; the Rust library in the crate is internal. A published version can never be replaced (only yanked), so check before publishing.
+
+Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml). It checks the tag, runs the full CI gate on the tagged commit, waits for approval in the `release` environment, publishes to crates.io with Trusted Publishing (no stored token), asks the Homebrew tap to bump the formula, and creates the GitHub release from the CHANGELOG section.
+
+### One-time setup
+
+1. **crates.io:** in the `joedocs` crate's Settings → Trusted Publishing, add a GitHub publisher: owner `joelee`, repository `joedocs-mcp`, workflow `release.yml`, environment `release`. After the first automated release, revoke the old `cargo login` token on crates.io.
+2. **GitHub environment:** Settings → Environments → `release`, with yourself as required reviewer and deployments limited to `v*` tags.
+3. **Homebrew tap:** finish the tap's setup ([`docs-release.md`](https://github.com/joelee/homebrew-oss/blob/main/docs-release.md), parts 1 and 2), then add to this repository the variable `TAP_BOT_APP_ID` and, in the `release` environment, the secret `TAP_BOT_PRIVATE_KEY`. Without them the release still publishes, and the tap's daily check picks up the new version.
+4. **Signing key:** release tags are signed (`git tag -s`), so git needs a signing key (`user.signingkey`, GPG or SSH with `gpg.format`), and the public key must be on your GitHub account, because the workflow refuses a tag that GitHub does not report as verified.
+
+### Each release
 
 1. On a release branch, move the `Unreleased` entries in `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, add the compare links at the bottom, and set `version` in `Cargo.toml`.
 2. Check what would be published and that it builds on its own:
@@ -110,20 +123,43 @@ Versions number the command line, the configuration and the MCP tools; the Rust 
    ```
 
 3. Run `just ci`, open a pull request, and merge it once CI passes.
-4. From an up-to-date `main`, publish, then tag. Publish first: a published version cannot be replaced, so the tag should point at exactly what was published. Release tags are signed, so git needs a signing key (`user.signingkey`, GPG or SSH with `gpg.format`):
+4. Optionally, dry-run the release workflow from `main`. It runs the checks, CI and `cargo publish --dry-run`, and never publishes:
 
    ```bash
-   cargo publish --locked
+   gh workflow run release.yml -f dry_run=true
+   ```
+
+5. From an up-to-date `main`, sign, check and push the tag:
+
+   ```bash
    git tag -s vX.Y.Z -m "JoeDocs X.Y.Z"
    git tag -v vX.Y.Z                  # check the signature before pushing
    git push origin vX.Y.Z
-   gh release create vX.Y.Z --title "JoeDocs X.Y.Z" --notes "<the CHANGELOG section>"
    ```
 
-5. Update the Homebrew formula in the tap ([`joelee/homebrew-oss`](https://github.com/joelee/homebrew-oss)): set `url` in `Formula/joedocs.rb` to the new crate and `sha256` to its crates.io checksum, then open a pull request there; its macOS workflow runs `brew install --build-from-source`, `brew test` and `brew audit --strict`.
+6. In the Actions tab, open the Release run and approve the `release` deployment once the checks and CI pass.
+7. Check the result: the version on crates.io, the GitHub release, and the tap's `joedocs X.Y.Z` pull request, which merges by itself once the tap's tests pass.
 
-   ```bash
-   curl -sL https://static.crates.io/crates/joedocs/joedocs-X.Y.Z.crate | shasum -a 256
-   ```
+### When the release fails
 
-`cargo publish` uses the token from `cargo login`: create it on crates.io with only the `publish-update` scope (and `publish-new` for the first release), limited to the `joedocs` crate, with an expiry date. Never commit it.
+- **Before publishing** (a check, CI, or the approval was rejected): nothing was published. Fix the problem on `main`, then move the tag: `git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`, and tag and push again.
+- **After publishing:** the version is on crates.io and cannot be replaced, so never rerun the Publish job: `cargo publish` fails for a version that already exists.
+  - If the GitHub release failed, rerun only the GitHub release job, or create the release by hand (below).
+  - If the Homebrew dispatch failed, the tap's daily check bumps the formula by itself; to bump it now, run `gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z`.
+  - Fix anything else forward with a new patch version.
+
+### Releasing by hand
+
+If the workflow cannot be used, publish from an up-to-date `main` with a crates.io token from `cargo login` (scope `publish-update`, limited to the `joedocs` crate, with an expiry date; never commit it):
+
+```bash
+cargo publish --locked
+git tag -s vX.Y.Z -m "JoeDocs X.Y.Z"
+git tag -v vX.Y.Z
+git push origin vX.Y.Z
+gh release create vX.Y.Z --title "JoeDocs X.Y.Z" \
+  --notes-file <(awk -v heading="## [X.Y.Z]" 'index($0, heading) == 1 { found = 1; next } /^## \[/ { found = 0 } found' CHANGELOG.md)
+gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z
+```
+
+Pushing the tag also starts the release workflow; reject its `release` deployment, since the crate is already published.

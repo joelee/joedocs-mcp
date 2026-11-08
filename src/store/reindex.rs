@@ -12,7 +12,7 @@ use std::fs;
 use indexmap::IndexMap;
 
 use super::documents::sha256;
-use super::{Error, Store, lock};
+use super::{Error, Store, index_file, lock};
 use crate::clock::format_timestamp;
 use crate::db::{self, Connection, DocumentRow, ProjectRow, RevisionRow};
 use crate::document::DocumentId;
@@ -91,6 +91,7 @@ impl Store {
     pub fn reindex(&mut self) -> Result<Reindexed, Error> {
         let Self {
             paths,
+            settings,
             conn,
             history,
             ..
@@ -123,6 +124,7 @@ impl Store {
         db::set_index_format(&tx)?;
         tx.commit()?;
 
+        index_file::refresh_all(conn, &paths.home, settings);
         report.drifted = drifted(conn, &paths.home)?;
         Ok(report)
     }

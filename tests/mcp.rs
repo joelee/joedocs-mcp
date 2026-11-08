@@ -713,6 +713,16 @@ fn the_serve_command_runs_until_sigterm() {
     let mut init = Command::new(binary);
     env(&mut init);
     assert!(init.arg("init").output().unwrap().status.success());
+    let mut add = Command::new(binary);
+    env(&mut add);
+    let added = add
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .output()
+        .unwrap();
+    assert!(added.status.success());
+    // serve rewrites a missing INDEX.md on start.
+    let index = dir.path().join("vault/joedocs/INDEX.md");
+    std::fs::remove_file(&index).unwrap();
 
     let mut serve = Command::new(binary);
     env(&mut serve);
@@ -730,6 +740,7 @@ fn the_serve_command_runs_until_sigterm() {
         line.starts_with("JoeDocs MCP endpoint: http://127.0.0.1:"),
         "{line}"
     );
+    assert!(index.is_file(), "serve wrote INDEX.md before listening");
     let addr: std::net::SocketAddr = line
         .trim()
         .trim_start_matches("JoeDocs MCP endpoint: http://")

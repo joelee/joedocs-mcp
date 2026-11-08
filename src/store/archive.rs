@@ -4,7 +4,7 @@ use super::documents::{
     Action, Change, Changed, DocumentInfo, choose_path, finish, integrity, parse_id,
     revision_with_content, write_revision,
 };
-use super::{Actor, Error, Store, begin_write};
+use super::{Actor, Error, Store, begin_write, index_file};
 use crate::clock::format_timestamp;
 use crate::db;
 use crate::document::front_matter;
@@ -123,6 +123,7 @@ impl Store {
             paths: &[&row.path],
         };
         finish(tx, history.as_ref(), journal, &commit)?;
+        index_file::refresh(conn, &paths.home, settings, &row.project);
         Ok(changed)
     }
 }

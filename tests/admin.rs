@@ -392,3 +392,31 @@ fn systemd_install_dry_run_shows_the_unit_for_this_binary() {
         .code(65)
         .stderr("error: --run-as needs --system; a user unit runs as you\n");
 }
+
+#[test]
+fn check_reports_a_stale_index_file_and_reindex_rewrites_it() {
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let index = vault(root.path()).join("joedocs/INDEX.md");
+    assert!(index.is_file());
+    std::fs::write(&index, "edited by hand\n").unwrap();
+    cmd(root.path())
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "INDEX.md files that are missing or out of date (`joedocs reindex` rewrites them):\n  \
+             joedocs/INDEX.md\n",
+        ))
+        .stderr(predicate::str::starts_with("error: check found 1 "));
+    cmd(root.path()).arg("reindex").assert().success();
+    cmd(root.path())
+        .arg("check")
+        .assert()
+        .success()
+        .stdout("No problems found.\n");
+}

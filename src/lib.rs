@@ -191,6 +191,7 @@ pub fn execute(
         Command::Serve => {
             let mut store = open_store(loaded, ctx)?;
             catch_up(&mut store)?;
+            store.refresh_index_files();
             mcp::run(store, loaded.config(), out)?;
         }
         Command::Reindex => admin::reindex(&mut open_store(loaded, ctx)?, out)?,

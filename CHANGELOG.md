@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-07
+
+Each project folder gets a generated `INDEX.md`, and releases are published from a signed tag by a GitHub Actions workflow.
+
+### Added
+
+- **`INDEX.md` in each project folder** (`<storage.home>/<project>/INDEX.md`): a table of the project's live documents sorted by ID, with each title linked to its file and its type, status and updated date, so a document can be found and opened by ID in Obsidian or any Markdown viewer. JoeDocs rewrites it after every change, never commits it to the history, and `check` treats the path as reserved. Turn it off with `documents.index_file = false` (`JOEDOCS__DOCUMENTS__INDEX_FILE`). After upgrading, `serve` writes the files when it starts (as does `joedocs reindex`); until then `check` reports them as missing.
+
 ## [0.1.2] - 2026-11-07
 
 Three MCP tools stop writing empty revisions, and the deployment guide shows how to keep API keys out of client config files.
@@ -46,7 +54,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/joelee/joedocs-mcp/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/joelee/joedocs-mcp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/joelee/joedocs-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/joelee/joedocs-mcp/releases/tag/v0.1.0

@@ -22,6 +22,7 @@ mod archive;
 mod check;
 mod documents;
 mod editing;
+mod index_file;
 mod journal;
 mod registry;
 mod reindex;
@@ -266,6 +267,8 @@ pub struct Settings {
     pub default_status: String,
     /// Largest serialised document, in bytes.
     pub max_document_bytes: u64,
+    /// Whether each project folder gets a generated `INDEX.md`.
+    pub index_file: bool,
 }
 
 impl Settings {
@@ -278,6 +281,7 @@ impl Settings {
             default_type: config.documents.default_type.clone(),
             default_status: config.documents.default_status.clone(),
             max_document_bytes: config.server.max_document_bytes,
+            index_file: config.documents.index_file,
         }
     }
 }
@@ -402,6 +406,7 @@ impl Store {
         }
         fs::create_dir_all(&paths.home).map_err(Error::io("create", &paths.home))?;
         history.init()?;
+        index_file::exclude_from_history(&paths.git_dir())?;
         let conn = db::open(&paths.db())?;
         if history.head()?.is_none() {
             // An empty history needs no rebuild.
@@ -430,6 +435,10 @@ impl Store {
             return Err(Error::NotInitialised(paths.state_dir));
         }
         let conn = db::open(&paths.db())?;
+        // Older installs predate the rule; it only tidies `git status`.
+        if let Err(error) = index_file::exclude_from_history(&paths.git_dir()) {
+            tracing::warn!(%error, "could not add INDEX.md to the history's exclude file");
+        }
         Ok(Self {
             paths,
             settings,

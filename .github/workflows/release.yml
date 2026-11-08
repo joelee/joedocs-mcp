@@ -1,0 +1,182 @@
+# Publishes a release when a signed vX.Y.Z tag is pushed (see the release
+# steps in docs/developer-guide.md):
+#
+# 1. verify: the tag matches Cargo.toml, CHANGELOG.md has its section, the
+#    tagged commit is on main, and GitHub reports the tag signature verified.
+# 2. ci: the full CI gate (ci.yml) on the tagged commit.
+# 3. publish: waits for approval in the `release` environment, publishes to
+#    crates.io with Trusted Publishing (no stored token), then asks the
+#    Homebrew tap to bump the formula.
+# 4. github-release: creates the GitHub release from the CHANGELOG section.
+#
+# Run it by hand (workflow_dispatch) for a dry run: verify (without the tag
+# checks), ci and `cargo publish --dry-run`. A dry run never publishes,
+# releases or dispatches.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run (publishing happens only from a tag push)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Check the release
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The ancestry check needs main.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the version, CHANGELOG, branch and signature
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          [ -n "$version" ] || fail "cannot read the version from Cargo.toml"
+          grep -qF "## [$version] - " CHANGELOG.md \
+            || fail "CHANGELOG.md has no '## [$version] - <date>' section"
+          if [ "$EVENT" = workflow_dispatch ]; then
+            [ "$DRY_RUN" = true ] \
+              || fail "a manual run is always a dry run; publish by pushing a signed tag"
+            echo "Dry run for $version: tag checks skipped"
+          else
+            [ "$TAG" = "v$version" ] || fail "tag $TAG does not match Cargo.toml version $version"
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+              || fail "$TAG is not on main"
+            read -r type sha < <(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+            [ "$type" = tag ] || fail "$TAG is a lightweight tag; create it with git tag -s"
+            verified="$(gh api "repos/$REPO/git/tags/$sha" --jq '.verification.verified')"
+            [ "$verified" = true ] \
+              || fail "GitHub does not report a verified signature on $TAG; sign it with git tag -s and add the key to your GitHub account"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  ci:
+    name: CI
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  dry-run:
+    name: Dry-run publish
+    if: github.event_name == 'workflow_dispatch'
+    needs: [verify, ci]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run --locked
+
+  publish:
+    name: Publish to crates.io
+    if: github.event_name == 'push'
+    needs: [verify, ci]
+    runs-on: ubuntu-24.04
+    # Waits for a reviewer; crates.io accepts Trusted Publishing only from
+    # this workflow and environment.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Get a crates.io token (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+
+      - name: cargo publish
+        id: publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          cargo publish --locked
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      # The tap's App key is an environment secret, so the dispatch runs in
+      # this approved job rather than waiting for a second approval.
+      - name: Skip the Homebrew dispatch
+        if: vars.TAP_BOT_APP_ID == ''
+        run: echo "::notice::TAP_BOT_APP_ID is not set; the tap's daily check or 'gh workflow run bump-formula.yml -R joelee/homebrew-oss' bumps the formula"
+
+      - name: Get a token for joelee/homebrew-oss
+        if: vars.TAP_BOT_APP_ID != ''
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.TAP_BOT_APP_ID }}
+          private-key: ${{ secrets.TAP_BOT_PRIVATE_KEY }}
+          owner: joelee
+          repositories: homebrew-oss
+          permission-contents: write
+
+      - name: Ask the Homebrew tap to bump the formula
+        if: vars.TAP_BOT_APP_ID != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          gh api repos/joelee/homebrew-oss/dispatches \
+            -f event_type=formula-release \
+            -f "client_payload[formula]=joedocs" \
+            -f "client_payload[version]=$VERSION"
+
+  github-release:
+    name: GitHub release
+    # Runs once the crate is published, even if the Homebrew dispatch failed.
+    if: always() && needs.publish.outputs.published == 'true'
+    needs: [verify, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create the release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          awk -v heading="## [$VERSION]" \
+            'index($0, heading) == 1 { found = 1; next } /^## \[/ { found = 0 } found' \
+            CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --verify-tag --title "JoeDocs $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md"

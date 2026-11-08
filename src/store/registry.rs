@@ -3,7 +3,7 @@
 
 use secrecy::SecretString;
 
-use super::{Actor, Error, Store};
+use super::{Actor, Error, Store, index_file, lock};
 use crate::auth::{self, Grant, RandomSource};
 use crate::db::{self, AuditEntry, Connection, KeyRow, ProjectRow};
 use crate::document::{DocumentId, check_title, is_project_key, is_slug};
@@ -63,6 +63,12 @@ impl Store {
         let project = db::find_project_by_id(&tx, id)?
             .ok_or_else(|| Error::ProjectNotFound(name.to_owned()))?;
         tx.commit()?;
+        match lock(&self.paths) {
+            Ok(_lock) => index_file::refresh(&self.conn, &self.paths.home, &self.settings, name),
+            Err(error) => {
+                tracing::warn!(project = %name, %error, "could not write {name}/INDEX.md");
+            }
+        }
         Ok(project)
     }
 
