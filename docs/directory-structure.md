@@ -27,6 +27,7 @@
 ├── .githooks/pre-commit    Git hook running `just pre-commit` (enabled by just setup)
 ├── docs/                   Maintained documentation (rules in docs/AGENTS.md)
 │   ├── deployment.md       Running a server: systemd, brew services, Tailscale, operations
+│   ├── upgrading.md        Upgrading a server, going back, notes for each version
 │   ├── reference.md        Commands, MCP tools, search, front matter, errors
 │   ├── plan.md             JoeDocs design decisions and phased plan
 │   ├── media/              Images for the README (the banner)
@@ -44,16 +45,23 @@
 │   │   ├── resolve.rs      File selection, layering, override parsing
 │   │   ├── show.rs         config show / config paths output
 │   │   └── validate.rs     Rule checks beyond types (slugs, membership, paths)
-│   ├── admin.rs            Reports for init, project, key, reindex, archive and check
+│   ├── admin.rs            Reports for init, project, key, admin-token, reindex, archive, check, get, backup
+│   ├── agents.rs           joedocs agents: the maintenance guide filled in with this installation's facts
+│   ├── agents.md           The guide's template (shipped in the crate)
+│   ├── backup.rs           joedocs backup: archive format, writing, safe restore
+│   ├── client.rs           Client of a server's admin API: login, sessions, prompts, remote calls
+│   ├── status.rs           joedocs status: StatusReport, the /health probe, unit state, sizes
+│   ├── totp.rs             TOTP (RFC 6238), base32, otpauth URIs
 │   ├── auth.rs             API key format, hashing, grants, RandomSource
 │   ├── clock.rs            Clock trait, SystemClock, FixedClock
 │   ├── db/
 │   │   ├── mod.rs          Connection setup, migrations, history head, index format
 │   │   ├── projects.rs     Project queries
 │   │   ├── keys.rs         API key and grant queries
+│   │   ├── admin.rs        Admin token and session queries
 │   │   ├── documents.rs    Document, listing and revision queries
 │   │   ├── search.rs       Search index upkeep and the search query
-│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search)
+│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search, 0004_admin)
 │   ├── document/
 │   │   ├── mod.rs          Slugs and re-exports
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
@@ -62,6 +70,7 @@
 │   ├── history/mod.rs      History trait and GitCli (commit, show, log, diff)
 │   ├── mcp/
 │   │   ├── mod.rs          Router, ServerOptions, serve, run, shutdown signal
+│   │   ├── admin_api.rs    The /admin/v1 API: login, sessions, checks, audit, routes
 │   │   ├── auth.rs         Bearer key middleware and Caller
 │   │   ├── tools.rs        Tool parameters, results and handlers
 │   │   └── errors.rs       ToolError: codes and structured results
@@ -75,7 +84,10 @@
 │       ├── documents.rs    Document use cases and the write path
 │       ├── editing.rs      Move, exact edits, append, restore a revision
 │       ├── revisions.rs    History pages and diffs
+│       ├── admin_tokens.rs Admin tokens, TOTP logins, lockout, sessions
 │       ├── archive.rs      Archive list and restore
+│       ├── backup.rs       The consistent snapshot behind joedocs backup
+│       ├── summary.rs      Counts and state for joedocs status
 │       ├── check.rs        Drift report for joedocs check
 │       ├── index_file.rs   Each project's generated INDEX.md
 │       ├── registry.rs     Projects and API keys
@@ -85,6 +97,8 @@
 │       └── tests.rs        Store unit tests (temp vault, real git)
 └── tests/
     ├── admin.rs            Admin commands through the binary
+    ├── admin_api.rs        The admin API: off by default, login, lockout, sessions, audit
+    ├── client.rs           Client mode: login, sessions, prompts, parity with local commands
     ├── common/mod.rs       Shared MCP client and raw HTTP helpers
     ├── deployment.rs       Ignored black-box suite for a running server (just docker-test)
     ├── cli.rs              End-to-end tests of the binary

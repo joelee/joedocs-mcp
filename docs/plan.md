@@ -102,7 +102,7 @@ All tools return structured JSON (MCP `structuredContent` with an `outputSchema`
 | `edit_document` | Applies exact `old`/`new` string replacements (like an editor's search-and-replace) without resending the whole document. This saves tokens and avoids clobbering on large docs. **Implemented in phase 4** (`document_id`, `edits[]`, `expected_revision?`, `summary?`). |
 | `append_to_document` | Appends a section, for example a comment on an issue or a log entry. **Implemented in phase 4** (`document_id`, `content`, `expected_revision?`, `summary?`). |
 
-Admin operations are deliberately **not** MCP tools in v1. They run through the CLI on the server host: registering projects, creating, granting and revoking keys, listing and restoring archives, reindexing and integrity checks. This keeps a leaked client key from escalating.
+Admin operations are deliberately **not** MCP tools. They run through the CLI on the server host: registering projects, creating, granting and revoking keys, listing and restoring archives, reindexing and integrity checks. This keeps a leaked client key from escalating. Since 0.3.0 the same CLI can also run them from another machine through a separate admin API that is off by default and needs an admin token plus a TOTP code (section 17, 0.3.0).
 
 ```text
 joedocs init                                   create state dir, DB, git repo
@@ -503,3 +503,5 @@ Phase 4 implementation choices, 2026-11-04 (open to revision):
 | Link rewriting | Deferred (section 16). |
 
 After phase 4, 2026-11-04: `key rotate <name>` issues a new token for an existing key. The key keeps its ID (the first part of the token), name and grants, so the audit log and history stay attributed to it; only the secret's hash is replaced, so the old token stops working at once. A revoked key cannot be rotated: revocation is permanent, so create a new key instead.
+
+0.3.0, 2026-11-08 (plan JD-8): **remote administration**, reversing "admin operations only on the server host" above, with these controls. The admin API is a separate router under `/admin/v1/`, never MCP tools, and is off unless `[admin] enabled = true`. It accepts only admin tokens (`jda_...`), which are created, listed and revoked only on the server and are not document keys, so a leaked document key still cannot escalate. Logging in also needs a TOTP code (RFC 6238, SHA-1, 6 digits, 30 seconds, one step of skew, each step once); five wrong codes lock the token for 15 minutes. A login opens a session (`jds_...`) that lasts `admin.session_hours` (8 by default) and works only with its own token; revoking the token ends its sessions. Every call is audited, `Host` and `Origin` are checked as for `/mcp`, and nothing logs a token or a code. The TOTP secret has to be stored as it is, so the database and backups are private. Remote output is the server's own command output, so it matches the local command exactly.

@@ -42,6 +42,7 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 - `tests/store.rs` and `tests/mcp.rs` drive the store and the MCP server in-process against a temporary vault and real git. `tests/common/` holds the shared MCP client helpers.
 - `tests/history.rs` covers the phase 4 operations (history, diff, restore, move, edit, append, archive restore, `check`) and checks that each replays identically through `reindex`.
 - `tests/search.rs` searches a fixture vault built through the store, and `tests/reindex.rs` checks that rebuilding the index from the history gives the same tables, recovers a lost write or database, and refuses a history it cannot replay.
+- `tests/admin_api.rs` drives the admin API over raw HTTP with a `FixedClock` (expiry, lockout) and checks the audit rows; `tests/client.rs` runs the binary as a client of an in-process server on its own thread (the client runs its own runtime), compares remote and local output command by command, and drives the re-login prompt through the library with a scripted `Prompt`. TOTP codes in tests come from the token's secret and the server's clock (`joedocs::totp::code`).
 - `tests/deployment.rs` is a black-box suite for a running server. It is ignored by `just test` and `just ci`; `just docker-test` runs it against Docker Compose, or set `JOEDOCS_TEST_URL`, `JOEDOCS_TEST_TOKEN` and `JOEDOCS_TEST_PROJECT` and run `cargo nextest run --test deployment --run-ignored only` against any server.
 
 ## Running with Docker

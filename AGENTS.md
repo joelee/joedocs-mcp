@@ -135,7 +135,8 @@ To add a config key: add the field with a default to the schema in `src/config/m
 - the command line: commands, flags, exit codes, and output that scripts read (such as the token alone on the last line of `key create` and `key rotate`);
 - the configuration: keys, defaults, `JOEDOCS__SECTION__KEY` overrides, and the config file lookup;
 - the MCP tools: names, parameters, results and error codes;
-- what is stored: the vault layout, front matter keys, history commit trailers, and the database (changed only by new migrations).
+- the admin HTTP API (`/admin/v1/`): routes, headers, bodies, replies and error codes;
+- what is stored: the vault layout, front matter keys, history commit trailers, the database (changed only by new migrations), and the backup archive format (`manifest.json` `format`).
 
 The Rust library in the crate is internal; its API may change in any release. Record every user-visible change in `CHANGELOG.md`.
 
@@ -150,6 +151,7 @@ Follow `docs/AGENTS.md` for documentation rules. The maintained set is:
 - `README.md` (including the chosen MSRV profile and CI platform)
 - `CHANGELOG.md` (Keep a Changelog format)
 - `docs/deployment.md`
+- `docs/upgrading.md`
 - `docs/reference.md`
 - `docs/skills/` (agent skills that use JoeDocs)
 - `docs/architecture.md`

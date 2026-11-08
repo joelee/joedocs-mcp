@@ -39,18 +39,45 @@ flowchart LR
 | `app_id` | Application name and the environment prefix derived from it. |
 | `clock` | `Clock` trait, `SystemClock`, `FixedClock` (tests), RFC 3339 formatting. |
 | `document` | Pure domain rules: slugs, project keys, `DocumentId`, titles and file stems, front matter classes, parsing, serialising and change rules. |
-| `store` | Document use cases (create, get, update, edit, append, rename, move, change front matter, restore a revision, archive and unarchive, list, search, history, diff), projects and API keys, the write lock, the integrity guard, the undo journal for vault files, the file → history → database ordering, each project's generated `INDEX.md` (`index_file.rs`), `reindex` and `check`. |
+| `store` | Document use cases (create, get, update, edit, append, rename, move, change front matter, restore a revision, archive and unarchive, list, search, history, diff), projects and API keys, the write lock, the integrity guard, the undo journal for vault files, the file → history → database ordering, each project's generated `INDEX.md` (`index_file.rs`), `reindex` and `check`, the backup snapshot (taken under the write lock), and admin tokens with their TOTP logins, lockout and sessions. |
 | `db` | SQLite connection setup, embedded migrations, and queries as free functions over a connection, including the search index (`doc_fields`, `doc_fts`). |
 | `history` | `History` trait and `GitCli`, with the git directory outside the vault: commit, show, log and diff. |
 | `auth` | API key generation, parsing, hashing and verification; `Permission` and `Grant`; `RandomSource`. |
 | `systemd` | `joedocs systemd install|remove`: renders a user or sandboxed system unit that pins the effective configuration, and runs `systemctl` through `ServiceManager`. |
 | `admin` | Text reports for `init`, `project`, `key`, `reindex`, `archive` and `check`. |
 | `mcp` | `joedocs serve`: the axum app (`/mcp` behind bearer authentication, `/health`), rmcp's Streamable HTTP service with `Host`/`Origin` checks, the fifteen tools with JSON schemas, grant checks, audit logging, and error mapping. |
+| `mcp::admin_api` | The `/admin/v1/` API, merged into the router only when `admin.enabled`: `Host`/`Origin` checks, admin token and session authentication, TOTP login, one audit row per call, and routes that run the same `admin` command functions and return their text (`status`, `documents` and `backup` return data and the archive). |
+| `client` | `joedocs` as a client of a server's admin API (`client.server`, `--server`): reqwest with rustls (ring) and the OS root store, the session file, the `Prompt` trait for codes, and the re-login retry. |
+| `status` | `joedocs status`: `StatusReport` (shared with the admin API), the `/health` probe, systemd unit state through `ServiceManager`, directory sizes. |
+| `agents` | `joedocs agents`: renders `src/agents.md` with this installation's facts. |
+| `backup` | `joedocs backup`: the archive format (manifest, `state/`, `content/`), writing it from a store snapshot, and the restore that refuses unsafe entries. |
+| `totp` | Pure TOTP (RFC 6238) and HOTP (RFC 4226), base32 (RFC 4648) and `otpauth://` URIs. |
 | `search` | Pure: the forgiving query grammar and its FTS5 translation (`query.rs`), and front matter filters, their SQL translation and value flattening (`filter.rs`). |
 
 ## Request path
 
 An MCP request first passes the bearer-key middleware, which looks the token up (SHA-256 of the secret) and attaches the key's name and grants to the request. rmcp then checks `Host` and `Origin` and dispatches the tool. Each tool checks the grant for the target project, runs the store operation under the store mutex on a blocking thread, writes an audit entry for changes, and returns structured JSON or a structured error.
+
+## Admin request path
+
+The admin API serves the admin commands to other machines. It is off unless `admin.enabled` is set, and it is a separate router, never MCP tools, so a document API key never reaches it. An admin token (`jda_...`, created only on the server) plus a TOTP code opens a session (`jds_...`) that lasts `admin.session_hours`. Every later call sends both the token and the session. The server checks the session before it runs anything, so a client that logs in again after an expired session can retry without repeating a change.
+
+```mermaid
+sequenceDiagram
+    participant C as joedocs client
+    participant A as admin API
+    participant S as Store
+    C->>A: POST /admin/v1/session with token and code
+    A->>S: admin_login checks the token, the code step and the lock
+    S-->>A: session and expiry
+    A-->>C: 200 with the session
+    C->>C: save sessions.toml with mode 0600
+    C->>A: POST /admin/v1/keys with token and session
+    A->>S: admin_session checks the session
+    A->>S: run the key command and write the audit row
+    A-->>C: 200 with the command output
+    Note over C,A: an expired session gets 401 session_expired, then the client asks for a new code and retries once
+```
 
 ## Write path
 

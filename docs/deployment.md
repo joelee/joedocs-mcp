@@ -231,7 +231,7 @@ When the session expires, the next command asks for a new code. `joedocs admin-t
 
 | Task | How |
 | --- | --- |
-| Upgrade | `brew upgrade joedocs && brew services restart joedocs`, or `cargo install joedocs --locked && systemctl --user restart joedocs`. `serve` rebuilds the index on start if the database is from an older build. |
+| Upgrade | Back up, install the new version, restart, then check: see [upgrading.md](upgrading.md), with notes for each version. In short, `brew upgrade joedocs && brew services restart joedocs`, or `cargo install joedocs --locked && systemctl --user restart joedocs`. `serve` migrates the database and rebuilds the index on start when needed. |
 | Change the configuration | Edit `config.toml`, then restart the service. Rerun `joedocs systemd install` only if you moved the binary or changed what the unit pins (the config file path, overrides, storage paths). |
 | Give a machine access | `joedocs key create NAME --grant PROJECT:PERMISSION`, or `joedocs key grant NAME PROJECT:PERMISSION` for an existing key. |
 | Replace a leaked token | `joedocs key rotate NAME`, then update the client's header. `joedocs key revoke NAME` cuts a machine off for good. |

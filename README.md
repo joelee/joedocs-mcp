@@ -132,7 +132,7 @@ To use one server from several machines, run it on a server and publish it over 
 | Write | `new_document`, `update_document`, `edit_document`, `append_to_document`, `change_document_front_matter` |
 | Organise | `rename_document`, `move_document`, `restore_document_version`, `archive_document` |
 
-Administration stays on the server's command line, so a leaked client key cannot create keys or delete history: `joedocs project`, `key create|grant|rotate|revoke`, `archive list|restore`, `reindex` and `check`. The [reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md) lists every command, tool, parameter and error code.
+Administration is not an MCP tool, so a leaked client key cannot create keys or delete history: `joedocs project`, `key create|grant|rotate|revoke`, `archive list|restore`, `reindex`, `check`, `status`, `get` and `backup` run on the server's command line. To run them from another machine, turn on the server's admin API: it needs a separate admin token and a code from an authenticator app (`joedocs login`). `joedocs backup` writes a consistent backup while the server runs, and `joedocs agents` prints instructions for an AI agent that maintains the server. The [reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md) lists every command, tool, parameter and error code.
 
 ## Skills for agents
 
@@ -153,7 +153,8 @@ flowchart LR
 
 ## Documentation
 
-- [Deployment guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/deployment.md): Linux, macOS, Docker, remote access, upgrades
+- [Deployment guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/deployment.md): Linux, macOS, Docker, remote access, managing from another machine
+- [Upgrading](https://github.com/joelee/joedocs-mcp/blob/main/docs/upgrading.md): backing up, each install method, going back, notes for each version
 - [Reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md): commands, MCP tools, search syntax, front matter, errors
 - [Configuration](https://github.com/joelee/joedocs-mcp/blob/main/docs/configuration.md): every key, its default and its environment override
 - [Skills](https://github.com/joelee/joedocs-mcp/blob/main/docs/skills/README.md): agent skills built on JoeDocs
