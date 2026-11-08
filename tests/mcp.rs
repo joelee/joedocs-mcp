@@ -146,6 +146,7 @@ async fn tools_are_listed_with_schemas_and_hints() {
             "restore_document_version",
             "search_documents",
             "update_document",
+            "write_document_files",
         ]
     );
     for tool in &tools {
@@ -419,6 +420,124 @@ async fn multi_file_documents_round_trip() {
         ]
     );
     server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn file_changes_round_trip() {
+    let server = start().await.unwrap();
+    let client = server.client(&server.writer).await.unwrap();
+    ok(
+        &client,
+        "new_document",
+        json!({"project": "joedocs", "title": "Roadmap", "content": "x\n", "multifile": true}),
+    )
+    .await
+    .unwrap();
+    let written = ok(
+        &client,
+        "write_document_files",
+        json!({"document_id": "JD-1", "expected_revision": 1, "files": [
+            {"file": "a", "content": "a\n", "front_matter": {"status": "planned"}},
+            {"file": "b/c", "content": "c\n"}
+        ]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(written["revision"], 2);
+    assert_eq!(
+        written["files"],
+        json!([
+            {"file": "a", "path": "joedocs/home/Roadmap/a.md", "created": true},
+            {"file": "b/c", "path": "joedocs/home/Roadmap/b/c.md", "created": true}
+        ])
+    );
+    for (tool, args) in [
+        (
+            "update_document",
+            json!({"file": "a", "content": "a2\n", "expected_revision": 2}),
+        ),
+        (
+            "edit_document",
+            json!({"file": "a", "edits": [{"old": "a2", "new": "a3"}]}),
+        ),
+        (
+            "append_to_document",
+            json!({"file": "b/c", "content": "more"}),
+        ),
+        (
+            "change_document_front_matter",
+            json!({"file": "a", "set": {"status": "done"}}),
+        ),
+        ("rename_document", json!({"file": "b/c", "new_file": "d"})),
+        (
+            "append_to_document",
+            json!({"file": "Roadmap", "content": "main"}),
+        ),
+    ] {
+        let mut args = args;
+        args["document_id"] = json!("JD-1");
+        ok(&client, tool, args).await.unwrap();
+    }
+    let item = ok(
+        &client,
+        "get_document",
+        json!({"document_id": "JD-1", "file": "a"}),
+    )
+    .await
+    .unwrap();
+    assert!(
+        item["markdown"]
+            .as_str()
+            .unwrap()
+            .ends_with("status: done\n---\na3\n")
+    );
+    let main = ok(&client, "get_document", json!({"document_id": "JD-1"}))
+        .await
+        .unwrap();
+    assert_eq!(main["files"], json!(["a", "d"]));
+    assert!(main["markdown"].as_str().unwrap().ends_with("x\n\nmain\n"));
+
+    file_refusals(&client).await.unwrap();
+    client.cancel().await.unwrap();
+    let audit = audit_log(&server.root).unwrap();
+    assert_eq!(
+        audit[1..],
+        [
+            "write_document_files JD-1 ok",
+            "update_document JD-1 ok",
+            "edit_document JD-1 ok",
+            "append_to_document JD-1 ok",
+            "change_document_front_matter JD-1 ok",
+            "rename_document JD-1 ok",
+            "append_to_document JD-1 ok",
+            "update_document JD-1 conflict",
+            "rename_document JD-1 invalid_argument",
+        ]
+    );
+    server.stop().await.unwrap();
+}
+
+/// The refusals of the file round trip, on JD-1 at revision 8 with file
+/// `a` last changed at revision 6.
+async fn file_refusals(client: &Client) -> TestResult<()> {
+    let stale = error(
+        client,
+        "update_document",
+        json!({"document_id": "JD-1", "file": "a", "content": "z", "expected_revision": 2}),
+    )
+    .await?;
+    assert_eq!(stale["code"], "conflict");
+    assert_eq!(stale["file"], "a");
+    assert_eq!(stale["file_revision"], 6);
+    assert_eq!(stale["current_revision"], 8);
+    let both = error(
+        client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "X", "file": "a", "new_file": "e"}),
+    )
+    .await?;
+    assert_eq!(both["code"], "invalid_argument");
+    Ok(())
 }
 
 /// The reading half of the multi-file round trip, on JD-1 holding the

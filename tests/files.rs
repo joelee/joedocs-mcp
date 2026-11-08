@@ -505,3 +505,419 @@ fn reindex_rebuilds_files_identically_and_check_sees_their_drift() {
         .unwrap_err();
     assert!(matches!(err, Error::Integrity { .. }), "{err}");
 }
+
+// --- Changing files (STEP-06) -----------------------------------------------
+
+/// JD-1 "Roadmap" (multi-file) at revision 3 with `backlog/item-1` (rev 2)
+/// and `notes` (rev 3).
+fn roadmap_with_files(store: &mut Store) -> TestResult<()> {
+    roadmap(store)?;
+    let mut item = new_file("backlog/item-1", "# Item 1\n", None);
+    item.front_matter = fields(json!({"status": "planned"}));
+    store.create_file(&actor(), &item)?;
+    store.create_file(&actor(), &new_file("notes", "notes\n", None))?;
+    Ok(())
+}
+
+fn read(root: &Path, path: &str) -> String {
+    fs::read_to_string(root.join("vault").join(path)).unwrap_or_default()
+}
+
+#[test]
+fn each_edit_tool_changes_one_file_in_one_commit() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    let main_before = read(dir.path(), "joedocs/plans/Roadmap/Roadmap.md");
+    let notes_before = read(dir.path(), "joedocs/plans/Roadmap/notes.md");
+    let item = "joedocs/plans/Roadmap/backlog/item-1.md";
+
+    let set = fields(json!({"status": "doing"}));
+    let changed = store
+        .update_file(
+            &actor(),
+            "JD-1",
+            "backlog/item-1",
+            "# Item 1 v2\n",
+            &set,
+            Some(3),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        (changed.revision, changed.file.as_deref()),
+        (4, Some("backlog/item-1"))
+    );
+    assert_eq!(changed.front_matter["status"], json!("doing"));
+    assert_eq!(changed.front_matter["revision"], json!(4));
+    let edits = [joedocs::store::Replacement {
+        old: "v2".into(),
+        new: "v3".into(),
+    }];
+    store
+        .edit_file(&actor(), "JD-1", "backlog/item-1", &edits, Some(4), None)
+        .unwrap();
+    store
+        .append_file(&actor(), "JD-1", "backlog/item-1", "more\n", None, None)
+        .unwrap();
+    let set = fields(json!({"owner": "joel"}));
+    store
+        .change_file_front_matter(
+            &actor(),
+            "JD-1",
+            "backlog/item-1",
+            &set,
+            &["status".into()],
+            None,
+        )
+        .unwrap();
+    let text = read(dir.path(), item);
+    assert!(
+        text.starts_with("---\ndocument: JD-1\nrevision: 7\n"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with("owner: joel\n---\n# Item 1 v3\n\nmore\n"),
+        "{text}"
+    );
+    assert!(!text.contains("status:"), "{text}");
+    assert_eq!(
+        read(dir.path(), "joedocs/plans/Roadmap/Roadmap.md"),
+        main_before
+    );
+    assert_eq!(
+        read(dir.path(), "joedocs/plans/Roadmap/notes.md"),
+        notes_before
+    );
+
+    let actions: Vec<(String, String)> = git(dir.path())
+        .log()
+        .unwrap()
+        .iter()
+        .skip(4)
+        .map(|c| {
+            let files: Vec<&str> = c
+                .trailers
+                .iter()
+                .filter(|(k, _)| k == "JoeDocs-File")
+                .map(|(_, v)| v.as_str())
+                .collect();
+            (
+                c.trailer("JoeDocs-Action").unwrap_or("").to_owned(),
+                files.join(","),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            ("update".to_owned(), "backlog/item-1.md".to_owned()),
+            ("edit".to_owned(), "backlog/item-1.md".to_owned()),
+            ("append".to_owned(), "backlog/item-1.md".to_owned()),
+            ("front_matter".to_owned(), "backlog/item-1.md".to_owned()),
+        ]
+    );
+
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
+
+#[test]
+fn file_changes_that_change_nothing_or_miss_the_file_are_refused() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    let before = snapshot(dir.path()).unwrap();
+    let same = fields(json!({"status": "planned"}));
+    let no_op = [joedocs::store::Replacement {
+        old: "Item".into(),
+        new: "Item".into(),
+    }];
+    let id = "JD-1";
+    let item = "backlog/item-1";
+    let refusals = [
+        store
+            .update_file(
+                &actor(),
+                id,
+                item,
+                "# Item 1\n",
+                &Fields::new(),
+                Some(3),
+                None,
+            )
+            .unwrap_err(),
+        store
+            .change_file_front_matter(&actor(), id, item, &same, &[], None)
+            .unwrap_err(),
+        store
+            .change_file_front_matter(&actor(), id, item, &Fields::new(), &[], None)
+            .unwrap_err(),
+        store
+            .edit_file(&actor(), id, item, &no_op, None, None)
+            .unwrap_err(),
+        store
+            .append_file(&actor(), id, item, " \n", None, None)
+            .unwrap_err(),
+    ];
+    for err in refusals {
+        assert!(matches!(err, Error::Invalid { .. }), "{err}");
+    }
+    let err = store
+        .update_file(&actor(), id, "missing", "x\n", &Fields::new(), None, None)
+        .unwrap_err();
+    assert!(matches!(err, Error::FileNotFound { .. }), "{err}");
+    let err = store
+        .append_file(&actor(), "JD-2", "x", "x\n", None, None)
+        .unwrap_err();
+    assert!(err.to_string().contains("single-file document"), "{err}");
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+}
+
+#[test]
+fn a_stale_revision_conflicts_only_for_the_file_that_changed() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    // Two agents read revision 3 and change different files: both succeed.
+    store
+        .append_file(&actor(), "JD-1", "backlog/item-1", "a\n", Some(3), None)
+        .unwrap();
+    let second = store
+        .append_file(&actor(), "JD-1", "notes", "b\n", Some(3), None)
+        .unwrap();
+    assert_eq!(second.revision, 5);
+    // The main file last changed at 1, so revision 3 is not stale for it.
+    let main = store
+        .append(&actor(), "JD-1", "c\n", Some(3), None)
+        .unwrap();
+    assert_eq!(main.revision, 6);
+
+    let stale = store
+        .append_file(&actor(), "JD-1", "backlog/item-1", "again\n", Some(3), None)
+        .unwrap_err();
+    match &stale {
+        Error::FileConflict {
+            file,
+            file_revision,
+            current,
+            ..
+        } => assert_eq!(
+            (file.as_str(), *file_revision, *current),
+            ("backlog/item-1", 4, 6)
+        ),
+        other => panic!("{other}"),
+    }
+    let stale_main = store
+        .append(&actor(), "JD-1", "d\n", Some(5), None)
+        .unwrap_err();
+    assert!(
+        matches!(
+            stale_main,
+            Error::FileConflict {
+                file_revision: 6,
+                ..
+            }
+        ),
+        "{stale_main}"
+    );
+    let ahead = store
+        .append_file(&actor(), "JD-1", "notes", "x\n", Some(9), None)
+        .unwrap_err();
+    assert!(matches!(ahead, Error::FileConflict { .. }), "{ahead}");
+    // Whole-document operations still need the current revision.
+    let rename = store
+        .rename(&actor(), "JD-2", "Plan B", Some(9))
+        .unwrap_err();
+    assert!(matches!(rename, Error::Conflict { .. }), "{rename}");
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
+
+#[test]
+fn files_are_renamed_within_the_document_and_keep_their_history() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    let changed = store
+        .rename_file(&actor(), "JD-1", "notes", "archive/2026/Notes.md", Some(3))
+        .unwrap();
+    assert_eq!(
+        (
+            changed.revision,
+            changed.path.as_str(),
+            changed.file.as_deref()
+        ),
+        (
+            4,
+            "joedocs/plans/Roadmap/archive/2026/Notes.md",
+            Some("archive/2026/Notes")
+        )
+    );
+    assert!(
+        !dir.path()
+            .join("vault/joedocs/plans/Roadmap/notes.md")
+            .exists()
+    );
+    let text = read(dir.path(), "joedocs/plans/Roadmap/archive/2026/Notes.md");
+    assert!(
+        text.starts_with("---\ndocument: JD-1\nrevision: 4\n"),
+        "{text}"
+    );
+    let last = git(dir.path()).log().unwrap().pop().unwrap();
+    let files: Vec<(String, String)> = last
+        .trailers
+        .into_iter()
+        .filter(|(k, _)| k.starts_with("JoeDocs-File"))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            (
+                "JoeDocs-File".to_owned(),
+                "archive/2026/Notes.md".to_owned()
+            ),
+            ("JoeDocs-File-From".to_owned(), "notes.md".to_owned()),
+        ]
+    );
+    // Back to the top level, then a case-only rename.
+    store
+        .rename_file(&actor(), "JD-1", "archive/2026/notes", "Notes", None)
+        .unwrap();
+    assert!(
+        !dir.path()
+            .join("vault/joedocs/plans/Roadmap/archive")
+            .exists()
+    );
+    store
+        .rename_file(&actor(), "JD-1", "Notes", "notes", None)
+        .unwrap();
+    assert!(read(dir.path(), "joedocs/plans/Roadmap/notes.md").contains("revision: 6"));
+    let names: Vec<String> = store
+        .list_files("JD-1", Some(4))
+        .unwrap()
+        .into_iter()
+        .map(|f| f.file)
+        .collect();
+    assert_eq!(names, ["Roadmap", "archive/2026/Notes", "backlog/item-1"]);
+    let old = store
+        .get_file("JD-1", "archive/2026/Notes", Some(4))
+        .unwrap();
+    assert!(old.markdown.contains("revision: 4"));
+
+    for (from, to, why) in [
+        ("notes", "notes", "already the file's path"),
+        ("notes", "backlog/item-1", "already exists"),
+        ("notes", "Roadmap", "main file"),
+        ("notes", "../x", "`..`"),
+    ] {
+        let err = store
+            .rename_file(&actor(), "JD-1", from, to, None)
+            .unwrap_err();
+        assert!(err.to_string().contains(why), "{why}: {err}");
+    }
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
+
+fn write(file: &str, content: &str, front_matter: serde_json::Value) -> joedocs::store::FileWrite {
+    joedocs::store::FileWrite {
+        file: file.into(),
+        content: content.into(),
+        front_matter: fields(front_matter),
+    }
+}
+
+#[test]
+fn several_files_are_written_in_one_revision_or_not_at_all() {
+    let dir = TempDir::new().unwrap();
+    let mut settings = Settings::from_config(&Config::default());
+    settings.max_files = 4;
+    let mut store = open_with(dir.path(), settings).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    let commits = git(dir.path()).log().unwrap().len();
+
+    let written = store
+        .write_files(
+            &actor(),
+            &joedocs::store::WriteFiles {
+                document_id: "JD-1".into(),
+                files: vec![
+                    write("backlog/item-1", "# Item 1 v2\n", json!({"status": "done"})),
+                    write("backlog/item-2", "# Item 2\n", json!({"status": "planned"})),
+                    // Identical: not counted as a change.
+                    write("notes", "notes\n", json!({})),
+                ],
+                expected_revision: Some(3),
+                summary: Some("triage".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(written.revision, 4);
+    let names: Vec<(&str, bool)> = written
+        .files
+        .iter()
+        .map(|f| (f.file.as_str(), f.created))
+        .collect();
+    assert_eq!(names, [("backlog/item-1", false), ("backlog/item-2", true)]);
+    let log = git(dir.path()).log().unwrap();
+    assert_eq!(log.len(), commits + 1);
+    let last = log.last().unwrap();
+    assert_eq!(last.trailer("JoeDocs-Action"), Some("write_files"));
+    assert_eq!(last.subject, "Write files of JD-1: triage");
+    assert!(read(dir.path(), "joedocs/plans/Roadmap/notes.md").contains("revision: 3"));
+
+    let before = snapshot(dir.path()).unwrap();
+    let request =
+        |files: Vec<joedocs::store::FileWrite>, expected: Option<u64>| joedocs::store::WriteFiles {
+            document_id: "JD-1".into(),
+            files,
+            expected_revision: expected,
+            summary: None,
+        };
+    for (files, expected, why) in [
+        (
+            vec![
+                write("a", "x\n", json!({})),
+                write("../b", "x\n", json!({})),
+            ],
+            None,
+            "file 2",
+        ),
+        (
+            vec![
+                write("a", "x\n", json!({})),
+                write("A.md", "y\n", json!({})),
+            ],
+            None,
+            "twice",
+        ),
+        (
+            vec![write("a", "x\n", json!({})), write("b", "y\n", json!({}))],
+            None,
+            "documents.max_files",
+        ),
+        (
+            vec![write("backlog/item-1", "z\n", json!({}))],
+            Some(3),
+            "changed at revision 4",
+        ),
+        (
+            vec![write("notes", "notes\n", json!({}))],
+            None,
+            "nothing would change",
+        ),
+        (vec![write("Roadmap", "x\n", json!({}))], None, "main file"),
+        (
+            vec![write("a", "x\n", json!({"revision": 1}))],
+            None,
+            "owned by the server",
+        ),
+        (vec![], None, "1 to 4"),
+    ] {
+        let err = store
+            .write_files(&actor(), &request(files, expected))
+            .unwrap_err();
+        assert!(err.to_string().contains(why), "{why}: {err}");
+    }
+    assert!(!dir.path().join("vault/joedocs/plans/Roadmap/a.md").exists());
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}

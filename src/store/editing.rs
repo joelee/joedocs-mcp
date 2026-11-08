@@ -186,7 +186,7 @@ impl Store {
 }
 
 /// Applies `edits` to `body` in order.
-fn apply_edits(body: &str, edits: &[Replacement]) -> Result<String, Error> {
+pub(super) fn apply_edits(body: &str, edits: &[Replacement]) -> Result<String, Error> {
     let mut body = body.to_owned();
     for (index, edit) in edits.iter().enumerate() {
         let n = index + 1;
@@ -223,7 +223,7 @@ fn apply_edits(body: &str, edits: &[Replacement]) -> Result<String, Error> {
 
 /// `body` with `content` after it, separated by a blank line, ending in a
 /// newline.
-fn appended(body: &str, content: &str) -> String {
+pub(super) fn appended(body: &str, content: &str) -> String {
     let mut out = body.trim_end_matches('\n').to_owned();
     if !out.is_empty() {
         out.push_str("\n\n");

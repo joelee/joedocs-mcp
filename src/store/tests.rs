@@ -1486,3 +1486,70 @@ impl std::io::Write for Sink {
         Ok(())
     }
 }
+
+#[test]
+fn a_failed_history_commit_leaves_no_partial_folder() {
+    let mut fx = fixture();
+    let mut doc = new_doc("Roadmap");
+    doc.multifile = true;
+    fx.store.create(&actor(), doc).unwrap();
+    let request = |file: &str| NewFile {
+        document_id: "JD-1".into(),
+        file: file.into(),
+        content: "x\n".into(),
+        ..NewFile::default()
+    };
+    fx.store.create_file(&actor(), &request("a")).unwrap();
+    let files_before = vault_files(&fx.paths.home);
+    let a_before = read(&fx, "joedocs/plans/Roadmap/a.md");
+    fx.fail.store(true, Ordering::SeqCst);
+
+    assert!(fx.store.create_file(&actor(), &request("new/b")).is_err());
+    assert!(
+        fx.store
+            .append_file(&actor(), "JD-1", "a", "more\n", None, None)
+            .is_err()
+    );
+    assert!(
+        fx.store
+            .rename_file(&actor(), "JD-1", "a", "moved/a", None)
+            .is_err()
+    );
+    let writes = WriteFiles {
+        document_id: "JD-1".into(),
+        files: vec![
+            FileWrite {
+                file: "a".into(),
+                content: "y\n".into(),
+                front_matter: Fields::new(),
+            },
+            FileWrite {
+                file: "c/d".into(),
+                content: "z\n".into(),
+                front_matter: fields(json!({"k": 1})),
+            },
+        ],
+        expected_revision: None,
+        summary: None,
+    };
+    assert!(fx.store.write_files(&actor(), &writes).is_err());
+    let mut files_after = vault_files(&fx.paths.home);
+    files_after.retain(|f| !f.ends_with("INDEX.md"));
+    let mut expected = files_before.clone();
+    expected.retain(|f| !f.ends_with("INDEX.md"));
+    assert_eq!(files_after, expected);
+    assert_eq!(read(&fx, "joedocs/plans/Roadmap/a.md"), a_before);
+
+    fx.fail.store(false, Ordering::SeqCst);
+    assert_eq!(fx.store.get("JD-1", None).unwrap().document.revision, 2);
+    let listed: Vec<String> = fx
+        .store
+        .list_files("JD-1", None)
+        .unwrap()
+        .into_iter()
+        .map(|f| f.file)
+        .collect();
+    assert_eq!(listed, ["Roadmap", "a"]);
+    assert_eq!(fx.store.write_files(&actor(), &writes).unwrap().revision, 3);
+    assert_eq!(fx.store.check().unwrap().problems(), 0);
+}

@@ -98,6 +98,17 @@ impl From<store::Error> for ToolError {
             E::Conflict { id, current, .. } => Self::new("conflict", message)
                 .with("document_id", id)
                 .with("current_revision", current),
+            E::FileConflict {
+                id,
+                file,
+                file_revision,
+                current,
+                ..
+            } => Self::new("conflict", message)
+                .with("document_id", id)
+                .with("file", file)
+                .with("file_revision", file_revision)
+                .with("current_revision", current),
             E::Integrity { id, .. } => Self::new(
                 "integrity",
                 format!(

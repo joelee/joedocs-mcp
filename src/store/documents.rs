@@ -244,6 +244,7 @@ pub(super) enum Action {
     Restore,
     Unarchive,
     CreateFile,
+    WriteFiles,
 }
 
 impl Action {
@@ -261,6 +262,7 @@ impl Action {
             Self::Restore => "restore",
             Self::Unarchive => "unarchive",
             Self::CreateFile => "create_file",
+            Self::WriteFiles => "write_files",
         }
     }
 
@@ -277,6 +279,7 @@ impl Action {
             Self::Restore => "Restore",
             Self::Unarchive => "Unarchive",
             Self::CreateFile => "Add a file to",
+            Self::WriteFiles => "Write files of",
         }
     }
 }
@@ -719,14 +722,8 @@ impl Store {
         let _lock = begin_write(paths, conn, history.as_ref())?;
         let tx = conn.transaction()?;
         let mut row = live_row(&tx, &id)?;
-        if let Some(expected) = expected
-            && expected != row.revision
-        {
-            return Err(Error::Conflict {
-                id: row.id,
-                expected,
-                current: row.revision,
-            });
+        if let Some(expected) = expected {
+            check_expected(&row, expected, action)?;
         }
         let text = read_verified(&paths.home, &row)?;
         if row.multifile {
@@ -895,6 +892,36 @@ pub(super) fn main_touch(row: &DocumentRow, change: FileChange) -> Vec<FileTouch
         change,
         from: None,
     }]
+}
+
+/// Checks `expected` against `row` for `action`. A change to the content or
+/// front matter of a multi-file document's main file conflicts only when
+/// the main file changed after `expected` (or `expected` is ahead of the
+/// document), so changes to its other files do not get in the way. Every
+/// other change needs the current revision.
+fn check_expected(row: &DocumentRow, expected: u64, action: Action) -> Result<(), Error> {
+    let file_change = matches!(
+        action,
+        Action::Update | Action::Edit | Action::Append | Action::FrontMatter
+    );
+    if row.multifile && file_change {
+        if row.main_revision > expected || expected > row.revision {
+            return Err(Error::FileConflict {
+                id: row.id.clone(),
+                file: super::files::main_stem(row).to_owned(),
+                expected,
+                file_revision: row.main_revision,
+                current: row.revision,
+            });
+        }
+    } else if expected != row.revision {
+        return Err(Error::Conflict {
+            id: row.id.clone(),
+            expected,
+            current: row.revision,
+        });
+    }
+    Ok(())
 }
 
 /// Refuses an operation on a multi-file document that does not handle

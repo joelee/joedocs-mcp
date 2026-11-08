@@ -24,6 +24,7 @@ mod backup;
 mod check;
 mod documents;
 mod editing;
+mod file_changes;
 mod files;
 mod index_file;
 mod journal;
@@ -49,6 +50,7 @@ pub use documents::{
     RevisionInfo, Update,
 };
 pub use editing::{MAX_EDITS, Replacement};
+pub use file_changes::{FileWrite, WriteFiles, WrittenFile, WrittenFiles};
 pub use files::{FileInfo, NewFile};
 pub use registry::CreatedKey;
 pub use reindex::Reindexed;
@@ -110,6 +112,23 @@ pub enum Error {
         /// Revision the client expected.
         expected: u64,
         /// Current revision.
+        current: u64,
+    },
+    /// A file of a multi-file document changed after the revision the
+    /// client read, or the client's revision is ahead of the document.
+    #[error(
+        "document {id}: file {file} changed at revision {file_revision}, and the document is at revision {current}, so revision {expected} is stale; read it again and reapply the change"
+    )]
+    FileConflict {
+        /// Document ID.
+        id: String,
+        /// The file.
+        file: String,
+        /// Revision the client expected.
+        expected: u64,
+        /// The document revision at which the file last changed.
+        file_revision: u64,
+        /// Current document revision.
         current: u64,
     },
     /// The file on disk is not the one the store last wrote.

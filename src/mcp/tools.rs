@@ -21,8 +21,8 @@ use super::{Caller, Shared, ToolError};
 use crate::auth::Permission;
 use crate::document::front_matter::Fields;
 use crate::store::{
-    self, Actor, Changed, DocumentInfo, FileInfo, ListRequest, NewDocument, NewFile, Replacement,
-    RevisionInfo, SearchHit, SearchRequest, Sort, Store, Update,
+    self, Actor, Changed, DocumentInfo, FileInfo, FileWrite, ListRequest, NewDocument, NewFile,
+    Replacement, RevisionInfo, SearchHit, SearchRequest, Sort, Store, Update, WriteFiles,
 };
 
 /// A tool's result. Tool signatures spell this out, because rmcp's macro
@@ -53,8 +53,11 @@ server; status, tags and aliases are validated; other keys are yours. Values are
 numbers, booleans or lists of those.
 - A multi-file document (new_document with multifile: true) is a folder: its main file plus \
 files such as backlog/item-1 that new_document_file adds, each with its own front matter. \
-list_document_files lists them; get_document with file reads one. Every change to any file \
-raises the document's one revision number.";
+list_document_files lists them; get_document with file reads one. Pass file to \
+update_document, edit_document, append_to_document, change_document_front_matter or \
+rename_document (with new_file) to change one file; write_document_files writes several in one \
+revision. Every change to any file raises the document's one revision number, and a change \
+conflicts only when that file changed after the revision you read.";
 
 /// The MCP server: one instance per session, sharing the store.
 #[derive(Clone)]
@@ -264,6 +267,10 @@ pub struct EditDocumentParams {
     /// One-line description of the change, for the history.
     #[serde(default)]
     pub summary: Option<String>,
+    /// For a multi-file document, the file to change, e.g. backlog/item-1;
+    /// omit for the main file.
+    #[serde(default)]
+    pub file: Option<String>,
 }
 
 /// Arguments of `append_to_document`.
@@ -280,6 +287,10 @@ pub struct AppendParams {
     /// One-line description of the change, for the history.
     #[serde(default)]
     pub summary: Option<String>,
+    /// For a multi-file document, the file to change, e.g. backlog/item-1;
+    /// omit for the main file.
+    #[serde(default)]
+    pub file: Option<String>,
 }
 
 /// Arguments of `get_document`.
@@ -379,6 +390,10 @@ pub struct UpdateDocumentParams {
     /// One-line description of the change, for the history.
     #[serde(default)]
     pub summary: Option<String>,
+    /// For a multi-file document, the file to change, e.g. backlog/item-1;
+    /// omit for the main file.
+    #[serde(default)]
+    pub file: Option<String>,
 }
 
 /// Arguments of `rename_document`.
@@ -387,11 +402,51 @@ pub struct UpdateDocumentParams {
 pub struct RenameDocumentParams {
     /// Document ID, e.g. JD-42.
     pub document_id: String,
-    /// New title.
-    pub title: String,
-    /// If given, the rename is refused unless this is the current revision.
+    /// New title, to rename the document. Leave it out when renaming a
+    /// file with `file` and `new_file`.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// If given, the rename is refused unless this is the current revision
+    /// (for a file: unless the file is unchanged since then).
     #[serde(default)]
     pub expected_revision: Option<u64>,
+    /// For a multi-file document, the file to rename or move within it.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// The file's new path inside the document's folder, with file.
+    #[serde(default)]
+    pub new_file: Option<String>,
+}
+
+/// One file of `write_document_files`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileWriteParam {
+    /// Path inside the document's folder, e.g. backlog/item-1.
+    pub file: String,
+    /// The file's Markdown body, without front matter.
+    pub content: String,
+    /// Front matter keys to set (merged into an existing file's).
+    #[serde(default)]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub front_matter: Option<Fields>,
+}
+
+/// Arguments of `write_document_files`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteDocumentFilesParams {
+    /// Document ID of a multi-file document, e.g. JD-42.
+    pub document_id: String,
+    /// The files to create or replace, each path at most once.
+    pub files: Vec<FileWriteParam>,
+    /// The document revision you last read: a file that changed after it
+    /// is a conflict.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    /// One-line description of the change, for the history.
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 /// Arguments of `change_document_front_matter`.
@@ -410,6 +465,10 @@ pub struct ChangeFrontMatterParams {
     /// If given, the change is refused unless this is the current revision.
     #[serde(default)]
     pub expected_revision: Option<u64>,
+    /// For a multi-file document, the file to change, e.g. backlog/item-1;
+    /// omit for the main file.
+    #[serde(default)]
+    pub file: Option<String>,
 }
 
 /// Arguments of `archive_document`.
@@ -703,6 +762,34 @@ impl From<Changed> for ChangedOut {
     }
 }
 
+/// One file `write_document_files` wrote.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct WrittenFileOut {
+    /// Path inside the document's folder, without .md.
+    pub file: String,
+    /// Path within the vault.
+    pub path: String,
+    /// True for a new file.
+    pub created: bool,
+}
+
+/// Result of `write_document_files`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct WrittenFilesOut {
+    /// Document ID.
+    pub document_id: String,
+    /// The new revision.
+    pub revision: u64,
+    /// The files that changed, in the order given.
+    pub files: Vec<WrittenFileOut>,
+}
+
+impl AuditId for WrittenFilesOut {
+    fn audit_id(&self) -> Option<String> {
+        Some(self.document_id.clone())
+    }
+}
+
 /// Result of `archive_document`.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ArchivedOut {
@@ -757,6 +844,15 @@ fn require_document(
         Some(permission) if permission.allows(needed) => Ok(()),
         Some(_) => Err(ToolError::permission_denied(&project.name)),
         None => Err(not_found()),
+    }
+}
+
+/// The sub-file a tool's `file` argument names, or `None` for the main
+/// file (no `file`, or the main file's own name).
+fn sub_file(store: &Store, id: &str, file: Option<&str>) -> Result<Option<String>, ToolError> {
+    match file {
+        Some(file) if !store.names_main_file(id, file)? => Ok(Some(file.to_owned())),
+        _ => Ok(None),
     }
 }
 
@@ -1077,6 +1173,61 @@ impl JoeDocsServer {
     }
 
     #[tool(
+        description = "Create or replace several files of a multi-file document in one revision and one commit, e.g. a whole backlog. All or nothing: every path, limit and conflict is checked first, and one bad entry changes nothing. A file given with the content and front matter it already has is left alone; a call that changes no file is refused. front_matter is merged into an existing file's. expected_revision (the document revision you last read) makes a file that changed after it a conflict.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn write_document_files(
+        &self,
+        Parameters(params): Parameters<WriteDocumentFilesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<WrittenFilesOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "write_document_files",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let written = store.write_files(
+                    actor,
+                    &WriteFiles {
+                        document_id: params.document_id,
+                        files: params
+                            .files
+                            .into_iter()
+                            .map(|f| FileWrite {
+                                file: f.file,
+                                content: f.content,
+                                front_matter: f.front_matter.unwrap_or_default(),
+                            })
+                            .collect(),
+                        expected_revision: params.expected_revision,
+                        summary: params.summary,
+                    },
+                )?;
+                Ok(WrittenFilesOut {
+                    document_id: written.id,
+                    revision: written.revision,
+                    files: written
+                        .files
+                        .into_iter()
+                        .map(|f| WrittenFileOut {
+                            file: f.file,
+                            path: f.path,
+                            created: f.created,
+                        })
+                        .collect(),
+                })
+            },
+        )
+        .await
+    }
+
+    #[tool(
         description = "List a document's files: the main file first, then the other files of a multi-file document by path, each with the document revision at which it last changed. Pass version to list them as they were at an earlier revision.",
         annotations(read_only_hint = true)
     )]
@@ -1121,16 +1272,28 @@ impl JoeDocsServer {
             Some(id),
             move |store, caller, actor| {
                 require_document(store, caller, &params.document_id, Permission::Write)?;
-                let changed = store.update(
-                    actor,
-                    Update {
-                        id: params.document_id,
-                        content: params.content,
-                        expected_revision: params.expected_revision,
-                        front_matter: params.front_matter.unwrap_or_default(),
-                        summary: params.summary,
-                    },
-                )?;
+                let front_matter = params.front_matter.unwrap_or_default();
+                let changed = match sub_file(store, &params.document_id, params.file.as_deref())? {
+                    Some(file) => store.update_file(
+                        actor,
+                        &params.document_id,
+                        &file,
+                        &params.content,
+                        &front_matter,
+                        Some(params.expected_revision),
+                        params.summary.as_deref(),
+                    )?,
+                    None => store.update(
+                        actor,
+                        Update {
+                            id: params.document_id,
+                            content: params.content,
+                            expected_revision: params.expected_revision,
+                            front_matter,
+                            summary: params.summary,
+                        },
+                    )?,
+                };
                 Ok(changed.into())
             },
         )
@@ -1157,12 +1320,28 @@ impl JoeDocsServer {
             Some(id),
             move |store, caller, actor| {
                 require_document(store, caller, &params.document_id, Permission::Write)?;
-                let changed = store.rename(
-                    actor,
-                    &params.document_id,
-                    &params.title,
-                    params.expected_revision,
-                )?;
+                let changed = match (params.title, params.file, params.new_file) {
+                    (None, Some(file), Some(new_file)) => store.rename_file(
+                        actor,
+                        &params.document_id,
+                        &file,
+                        &new_file,
+                        params.expected_revision,
+                    )?,
+                    (Some(title), None, None) => store.rename(
+                        actor,
+                        &params.document_id,
+                        &title,
+                        params.expected_revision,
+                    )?,
+                    _ => {
+                        return Err(store::Error::invalid(
+                            "title",
+                            "give title to rename the document, or file and new_file to rename one of its files",
+                        )
+                        .into());
+                    }
+                };
                 Ok(changed.into())
             },
         )
@@ -1189,13 +1368,25 @@ impl JoeDocsServer {
             Some(id),
             move |store, caller, actor| {
                 require_document(store, caller, &params.document_id, Permission::Write)?;
-                let changed = store.change_front_matter(
-                    actor,
-                    &params.document_id,
-                    &params.set.unwrap_or_default(),
-                    &params.remove.unwrap_or_default(),
-                    params.expected_revision,
-                )?;
+                let set = params.set.unwrap_or_default();
+                let remove = params.remove.unwrap_or_default();
+                let changed = match sub_file(store, &params.document_id, params.file.as_deref())? {
+                    Some(file) => store.change_file_front_matter(
+                        actor,
+                        &params.document_id,
+                        &file,
+                        &set,
+                        &remove,
+                        params.expected_revision,
+                    )?,
+                    None => store.change_front_matter(
+                        actor,
+                        &params.document_id,
+                        &set,
+                        &remove,
+                        params.expected_revision,
+                    )?,
+                };
                 Ok(changed.into())
             },
         )
@@ -1230,13 +1421,23 @@ impl JoeDocsServer {
                         new: e.new,
                     })
                     .collect();
-                let changed = store.edit(
-                    actor,
-                    &params.document_id,
-                    &edits,
-                    params.expected_revision,
-                    params.summary.as_deref(),
-                )?;
+                let changed = match sub_file(store, &params.document_id, params.file.as_deref())? {
+                    Some(file) => store.edit_file(
+                        actor,
+                        &params.document_id,
+                        &file,
+                        &edits,
+                        params.expected_revision,
+                        params.summary.as_deref(),
+                    )?,
+                    None => store.edit(
+                        actor,
+                        &params.document_id,
+                        &edits,
+                        params.expected_revision,
+                        params.summary.as_deref(),
+                    )?,
+                };
                 Ok(changed.into())
             },
         )
@@ -1263,13 +1464,23 @@ impl JoeDocsServer {
             Some(id),
             move |store, caller, actor| {
                 require_document(store, caller, &params.document_id, Permission::Write)?;
-                let changed = store.append(
-                    actor,
-                    &params.document_id,
-                    &params.content,
-                    params.expected_revision,
-                    params.summary.as_deref(),
-                )?;
+                let changed = match sub_file(store, &params.document_id, params.file.as_deref())? {
+                    Some(file) => store.append_file(
+                        actor,
+                        &params.document_id,
+                        &file,
+                        &params.content,
+                        params.expected_revision,
+                        params.summary.as_deref(),
+                    )?,
+                    None => store.append(
+                        actor,
+                        &params.document_id,
+                        &params.content,
+                        params.expected_revision,
+                        params.summary.as_deref(),
+                    )?,
+                };
                 Ok(changed.into())
             },
         )

@@ -89,6 +89,8 @@ Every tool returns structured JSON. A tool takes only the parameters listed; an 
 
 Every change is one new revision and one git commit. `update_document`, `edit_document` and `change_document_front_matter` refuse a call that would change nothing with `invalid_argument`, and write nothing. `rename_document` and `move_document` likewise refuse the current title or type, and `restore_document_version` refuses the latest revision. Restoring an earlier revision whose content equals the latest still writes a revision. `summary`, where accepted, becomes the commit message. `expected_revision` is the revision you last read: the change is refused with `conflict` if the document has moved on since. It is required by `update_document` and optional elsewhere.
 
+For a multi-file document, `update_document`, `edit_document`, `append_to_document` and `change_document_front_matter` take `file` to change one file instead of the main file, and `rename_document` takes `file` and `new_file` (instead of `title`) to rename or move a file within the document. A change to one file, the main file's content and front matter included, is refused with `conflict` only when that file changed after `expected_revision`, or `expected_revision` is ahead of the document, so agents changing different files of a document do not get in each other's way; the error then also gives `file` and `file_revision`. Renaming, moving, restoring and archiving the whole document still need the current revision.
+
 | Tool | Parameters | Effect |
 | --- | --- | --- |
 | `new_document` | `project`, `title`, `content` (the body), `type`, `status`, `front_matter` (custom keys, `tags`, `aliases`), `summary`, `multifile` (default `false`) | Creates revision 1 and returns the new ID and path. With `multifile: true` the document is a folder (see [Multi-file documents](#multi-file-documents)). |
@@ -97,7 +99,8 @@ Every change is one new revision and one git commit. `update_document`, `edit_do
 | `edit_document` | `document_id`, `edits` (1 to 64 of `{old, new}`), `expected_revision`, `summary` | Exact replacements in the body, in order. Each `old` must occur exactly once; if any edit fails, nothing changes and the error names it. Refused (`field: edits`) if the edits leave the body as it was. |
 | `append_to_document` | `document_id`, `content`, `expected_revision`, `summary` | Adds Markdown to the end of the body, after a blank line. |
 | `change_document_front_matter` | `document_id`, `set` (object), `remove` (list of keys), `expected_revision` | Sets and removes front matter keys without touching the body. Refused (`field: front_matter`) if the keys already have these values, or a removed key is not set. |
-| `rename_document` | `document_id`, `title`, `expected_revision` | Changes the title and the file name; the old title is added to `aliases`. |
+| `rename_document` | `document_id`, `title`, `expected_revision`; or `document_id`, `file`, `new_file`, `expected_revision` | Changes the title and the file name; the old title is added to `aliases`. With `file` and `new_file`, renames or moves that file within its multi-file document. |
+| `write_document_files` | `document_id` (a multi-file document), `files` (each `{file, content, front_matter}`), `expected_revision`, `summary` | Creates or replaces several files in one revision and one commit. All or nothing: every path, limit, size and conflict is checked first. An existing file's `front_matter` keys are merged as in `update_document`; a file given with the content and front matter it already has is left alone, and a call that changes nothing is refused (`field: files`). Returns the revision and the files written, each with `file`, `path` and `created`. The main file is changed with the other tools. |
 | `move_document` | `document_id`, `type`, `expected_revision` | Changes the type (folder). The ID, title and content stay the same. |
 | `restore_document_version` | `document_id`, `version`, `expected_revision`, `summary` | Makes an earlier revision's body, status, tags and custom keys the new latest revision. Title, type and aliases stay current. |
 | `archive_document` | `document_id`, `reason` | Removes the document from the vault, lists and search. An administrator can bring it back with `joedocs archive restore`. |
@@ -112,7 +115,7 @@ A failed tool call is a result with `isError: true` and `structuredContent.error
 | `not_found` | No such project or document, or the key has no grant on it (the two look the same, so nothing leaks). |
 | `archived` | The document is archived. |
 | `already_exists` | The name or title is taken. |
-| `conflict` | `expected_revision` is stale; `current_revision` says what to read and merge. |
+| `conflict` | `expected_revision` is stale; `current_revision` says what to read and merge. For a file of a multi-file document, `file` and `file_revision` say which file changed and when. |
 | `integrity` | The file was changed outside JoeDocs, so JoeDocs refuses to overwrite it. `joedocs check` explains how to resolve it. |
 | `too_large` | The document is over `server.max_document_bytes`. |
 | `permission_denied` | The key can only read this project. |
@@ -293,4 +296,4 @@ JoeDocs-Action: update
 JoeDocs-Client: claude-code
 ```
 
-Actions are `create`, `update`, `edit`, `append`, `front_matter`, `rename`, `move`, `restore`, `archive`, `unarchive` and, for multi-file documents, `create_file`. A commit of a multi-file document also names every file it adds, changes or removes in a `JoeDocs-File` trailer: its path inside the folder with `.md`, the main file under its own name. A renamed file's `JoeDocs-File` is followed by `JoeDocs-File-From` with its old path. Commits of single-file documents have none. Inspect it with plain git, for example `git --git-dir <state_dir>/history.git log --format='%ad %an | %s'`.
+Actions are `create`, `update`, `edit`, `append`, `front_matter`, `rename`, `move`, `restore`, `archive`, `unarchive` and, for multi-file documents, `create_file` and `write_files`. A change to one file of a multi-file document keeps the action of the tool that made it (`update`, `edit`, `append`, `front_matter`, `rename`). A commit of a multi-file document also names every file it adds, changes or removes in a `JoeDocs-File` trailer: its path inside the folder with `.md`, the main file under its own name. A renamed file's `JoeDocs-File` is followed by `JoeDocs-File-From` with its old path. Commits of single-file documents have none. Inspect it with plain git, for example `git --git-dir <state_dir>/history.git log --format='%ad %an | %s'`.
