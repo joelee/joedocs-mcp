@@ -188,6 +188,45 @@ bearer_token_env_var = "JOEDOCS_API_KEY"
 
 **Other MCP clients** need the Streamable HTTP URL (`https://<host>/mcp`) and the header `Authorization: Bearer <token>`. If the client can read the header or token from the environment, use that rather than writing the key into its config.
 
+## 6a. Manage from another machine
+
+The admin commands can also run from another machine, through the server's admin API, with an admin token and a TOTP code from an authenticator app. The API is off until you turn it on.
+
+1. On the server, turn the API on and restart the service:
+
+   ```toml
+   [admin]
+   enabled = true
+   session_hours = 8    # how long a login lasts
+   ```
+
+2. On the server, create an admin token for the machine you manage it from (with Docker: `docker compose exec joedocs joedocs admin-token create laptop`):
+
+   ```bash
+   joedocs admin-token create laptop
+   ```
+
+   It prints a TOTP secret and an `otpauth://` URI: add the secret to Google Authenticator (or another TOTP app), or show the URI as a QR code with `... | qrencode -t ansiutf8`. The admin token is on the last line. Both are shown once.
+3. On the client, keep the token in a password manager, for example `pass insert joedocs/admin`, and point `joedocs` at the server in `~/.config/joedocs/config.toml`:
+
+   ```toml
+   [client]
+   server = "https://docs.example.ts.net"
+   ```
+
+4. Log in, then use the admin commands as on the server:
+
+   ```bash
+   export JOEDOCS_ADMIN_TOKEN="$(pass show joedocs/admin)"
+   joedocs login            # asks for the 6-digit code
+   joedocs status
+   joedocs key create ci --grant joedocs:read
+   joedocs backup ~/joedocs-$(date +%F).tgz
+   joedocs logout
+   ```
+
+When the session expires, the next command asks for a new code. `joedocs admin-token revoke laptop` on the server ends that token and its sessions at once. The server's `/admin/v1/` path must be reachable the same way as `/mcp` (for example through `tailscale serve`), and `server.allowed_hosts` must list the name you use.
+
 ## 7. Operate
 
 | Task | How |

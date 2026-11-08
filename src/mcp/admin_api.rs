@@ -62,6 +62,17 @@ pub(super) fn routes(
     Router::new()
         .route("/session", post(login).delete(logout))
         .route("/status", get(status))
+        .route("/projects", get(projects_list).post(projects_add))
+        .route("/keys", get(keys_list).post(keys_create))
+        .route("/keys/{name}/grants", post(keys_grant))
+        .route("/keys/{name}/rotate", post(keys_rotate))
+        .route("/keys/{name}/revoke", post(keys_revoke))
+        .route("/archive", get(archive_list))
+        .route("/archive/{id}/restore", post(archive_restore))
+        .route("/check", get(check))
+        .route("/reindex", post(reindex))
+        .route("/documents/{id}", get(document))
+        .route("/backup", get(backup))
         .with_state(state)
 }
 
@@ -431,6 +442,296 @@ async fn status(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Respo
             ),
         })?;
         Ok(axum::Json(report).into_response())
+    })
+    .await
+}
+
+/// A command's text output as `{"output": ...}`, the same text the local
+/// command prints. `check` problems are `{"output", "problems": n}`.
+fn text(run: impl FnOnce(&mut Vec<u8>) -> Result<(), crate::Error>) -> Result<Response, ApiError> {
+    let mut out = Vec::new();
+    let problems = match run(&mut out) {
+        Ok(()) => 0,
+        Err(crate::Error::Problems(count)) => count,
+        Err(error) => return Err(from_crate(&error)),
+    };
+    let output = String::from_utf8_lossy(&out).into_owned();
+    Ok(axum::Json(json!({"output": output, "problems": problems})).into_response())
+}
+
+/// Maps a command error to the API error the client turns back into the
+/// same message and exit code.
+fn from_crate(error: &crate::Error) -> ApiError {
+    match error {
+        crate::Error::Store(error) => ApiError::from(error),
+        crate::Error::Archived(_) => {
+            ApiError::new(StatusCode::CONFLICT, "archived", error.to_string())
+        }
+        crate::Error::Backup(inner) if inner.is_user_error() => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_argument",
+            error.to_string(),
+        ),
+        other => {
+            tracing::error!(error = %other, "admin API command failed");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "internal error",
+            )
+        }
+    }
+}
+
+/// The JSON body, or an `invalid_argument` refusal.
+fn body_json(body: &[u8]) -> Result<Value, ApiError> {
+    if body.is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_slice(body).map_err(|e| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_argument",
+            format!("invalid JSON: {e}"),
+        )
+    })
+}
+
+fn field(body: &Value, name: &str) -> Result<String, ApiError> {
+    body.get(name)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                format!("`{name}` is required"),
+            )
+        })
+}
+
+fn grants(body: &Value) -> Result<Vec<crate::auth::Grant>, ApiError> {
+    body.get("grants")
+        .and_then(Value::as_array)
+        .map_or_else(Vec::new, Clone::clone)
+        .iter()
+        .map(|g| {
+            g.as_str()
+                .unwrap_or_default()
+                .parse()
+                .map_err(|e: String| ApiError::new(StatusCode::BAD_REQUEST, "invalid_argument", e))
+        })
+        .collect()
+}
+
+/// A query parameter from `uri`.
+fn query(uri: &axum::http::Uri, name: &str) -> Option<String> {
+    uri.query()?.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name && !value.is_empty()).then(|| value.to_owned())
+    })
+}
+
+async fn projects_list(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
+    let call = Call::new(&state, "admin:projects.list", &headers);
+    authorized(state, call, |store, _, _| {
+        text(|out| crate::admin::project(store, &crate::cli::ProjectCommand::List, out))
+    })
+    .await
+}
+
+async fn projects_add(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let call = Call::new(&state, "admin:projects.add", &headers);
+    authorized(state, call, move |store, _, _| {
+        let body = body_json(&body)?;
+        let command = crate::cli::ProjectCommand::Add {
+            name: field(&body, "name")?,
+            key: field(&body, "key")?,
+            title: body.get("title").and_then(Value::as_str).map(str::to_owned),
+        };
+        text(|out| crate::admin::project(store, &command, out))
+    })
+    .await
+}
+
+async fn keys_list(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
+    let call = Call::new(&state, "admin:keys.list", &headers);
+    authorized(state, call, |store, _, _| {
+        text(|out| crate::admin::key(store, &crate::cli::KeyCommand::List, &OsRandom, out))
+    })
+    .await
+}
+
+async fn keys_create(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let call = Call::new(&state, "admin:keys.create", &headers);
+    authorized(state, call, move |store, _, _| {
+        let body = body_json(&body)?;
+        let command = crate::cli::KeyCommand::Create {
+            name: field(&body, "name")?,
+            grants: grants(&body)?,
+        };
+        text(|out| crate::admin::key(store, &command, &OsRandom, out))
+    })
+    .await
+}
+
+async fn keys_grant(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let call = Call::new(&state, "admin:keys.grant", &headers);
+    authorized(state, call, move |store, _, _| {
+        let command = crate::cli::KeyCommand::Grant {
+            name,
+            grants: grants(&body_json(&body)?)?,
+        };
+        text(|out| crate::admin::key(store, &command, &OsRandom, out))
+    })
+    .await
+}
+
+async fn keys_rotate(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let call = Call::new(&state, "admin:keys.rotate", &headers);
+    authorized(state, call, move |store, _, _| {
+        let command = crate::cli::KeyCommand::Rotate { name };
+        text(|out| crate::admin::key(store, &command, &OsRandom, out))
+    })
+    .await
+}
+
+async fn keys_revoke(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let call = Call::new(&state, "admin:keys.revoke", &headers);
+    authorized(state, call, move |store, _, _| {
+        let command = crate::cli::KeyCommand::Revoke { name };
+        text(|out| crate::admin::key(store, &command, &OsRandom, out))
+    })
+    .await
+}
+
+async fn archive_list(
+    State(state): State<Arc<ApiState>>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> Response {
+    let call = Call::new(&state, "admin:archive.list", &headers);
+    authorized(state, call, move |store, _, _| {
+        let command = crate::cli::ArchiveCommand::List {
+            project: query(&uri, "project"),
+        };
+        text(|out| crate::admin::archive(store, &command, out))
+    })
+    .await
+}
+
+async fn archive_restore(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let call = Call::new(&state, "admin:archive.restore", &headers);
+    authorized(state, call, move |store, _, _| {
+        let command = crate::cli::ArchiveCommand::Restore { document_id: id };
+        text(|out| crate::admin::archive(store, &command, out))
+    })
+    .await
+}
+
+async fn check(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
+    let call = Call::new(&state, "admin:check", &headers);
+    authorized(state, call, |store, _, _| {
+        text(|out| crate::admin::check(store, out))
+    })
+    .await
+}
+
+async fn reindex(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
+    let call = Call::new(&state, "admin:reindex", &headers);
+    authorized(state, call, |store, _, _| {
+        text(|out| crate::admin::reindex(store, out))
+    })
+    .await
+}
+
+async fn document(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> Response {
+    let call = Call::new(&state, "admin:documents.get", &headers);
+    authorized(state, call, move |store, _, _| {
+        let version = match query(&uri, "version") {
+            Some(v) => Some(v.parse::<u64>().map_err(|_| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_argument",
+                    format!("\"{v}\" is not a revision number"),
+                )
+            })?),
+            None => None,
+        };
+        let markdown = crate::admin::fetch(store, &id, version).map_err(|e| from_crate(&e))?;
+        Ok(axum::Json(json!({"markdown": markdown})).into_response())
+    })
+    .await
+}
+
+/// `GET /admin/v1/backup`: a backup archive, streamed.
+async fn backup(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
+    let call = Call::new(&state, "admin:backup", &headers);
+    authorized(state, call, |store, _, _| {
+        let path = store
+            .paths()
+            .state_dir
+            .join(format!("backup-download-{}.tgz", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let created = crate::backup::create(store, &path)
+            .map_err(|e| from_crate(&crate::Error::Backup(e)))?;
+        let file = std::fs::File::open(&path);
+        // The open file stays readable after its name is removed.
+        let _ = std::fs::remove_file(&path);
+        let file = file.map_err(|e| {
+            tracing::error!(error = %e, "cannot open the backup for download");
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "internal error",
+            )
+        })?;
+        let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file));
+        let mut response = axum::body::Body::from_stream(stream).into_response();
+        let headers = response.headers_mut();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/gzip"),
+        );
+        if let Ok(value) = HeaderValue::from_str(&created.manifest.documents.to_string()) {
+            headers.insert("joedocs-documents", value);
+        }
+        if let Ok(value) = HeaderValue::from_str(
+            &serde_json::to_string(&created.skipped_links).unwrap_or_default(),
+        ) {
+            headers.insert("joedocs-skipped-links", value);
+        }
+        Ok(response)
     })
     .await
 }

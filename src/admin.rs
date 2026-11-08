@@ -284,6 +284,20 @@ pub enum Part {
     FrontMatter,
 }
 
+impl Part {
+    /// The part `--content-only` and `--front-matter-only` select.
+    #[must_use]
+    pub fn new(content_only: bool, front_matter_only: bool) -> Self {
+        if content_only {
+            Self::Body
+        } else if front_matter_only {
+            Self::FrontMatter
+        } else {
+            Self::Whole
+        }
+    }
+}
+
 /// The whole Markdown of a document, or of one of its revisions.
 ///
 /// # Errors

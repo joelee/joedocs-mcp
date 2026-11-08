@@ -20,7 +20,6 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::clock::Clock;
 use crate::store::{self, Store};
 
 /// The archive format this build writes and reads.
@@ -119,7 +118,7 @@ pub struct Created {
 /// # Errors
 ///
 /// Returns [`Error::Exists`] when `file` exists, and I/O or store errors.
-pub fn create(store: &Store, clock: &dyn Clock, file: &Path) -> Result<Created, Error> {
+pub fn create(store: &Store, file: &Path) -> Result<Created, Error> {
     if fs::symlink_metadata(file).is_ok() {
         return Err(Error::Exists(file.to_path_buf()));
     }
@@ -129,7 +128,7 @@ pub fn create(store: &Store, clock: &dyn Clock, file: &Path) -> Result<Created, 
         format: FORMAT,
         joedocs_version: env!("CARGO_PKG_VERSION").to_owned(),
         schema_version: crate::db::SCHEMA_VERSION,
-        created_at: crate::clock::format_timestamp(clock.now()),
+        created_at: store.now(),
         history_head: snapshot.history_head,
         documents: snapshot.documents,
         vault: store.paths().home.clone(),
@@ -152,6 +151,34 @@ pub fn create(store: &Store, clock: &dyn Clock, file: &Path) -> Result<Created, 
         bytes,
         skipped_links: snapshot.skipped_links,
     })
+}
+
+/// Reads the manifest at the start of the archive `file`.
+///
+/// # Errors
+///
+/// Returns [`Error::Unsupported`] when `file` is not a backup.
+pub fn read_manifest(file: &Path) -> Result<Manifest, Error> {
+    let unsupported = |reason: String| Error::Unsupported {
+        file: file.to_path_buf(),
+        reason,
+    };
+    let archive_file = File::open(file).map_err(Error::io("read", file))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(archive_file));
+    let mut entries = archive
+        .entries()
+        .map_err(|e| unsupported(format!("not a gzip tar archive ({e})")))?;
+    match entries.next() {
+        Some(Ok(mut entry)) if entry.path().is_ok_and(|p| p == Path::new(MANIFEST)) => {
+            let mut text = String::new();
+            entry
+                .read_to_string(&mut text)
+                .map_err(|e| unsupported(format!("unreadable {MANIFEST} ({e})")))?;
+            serde_json::from_str(&text)
+                .map_err(|e| unsupported(format!("invalid {MANIFEST} ({e})")))
+        }
+        _ => Err(unsupported(format!("it does not start with {MANIFEST}"))),
+    }
 }
 
 /// Writes the archive for a staged snapshot to `out`.

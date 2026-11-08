@@ -5,7 +5,7 @@ The command line, the MCP tools, the search syntax, the front matter and the err
 ## Command line
 
 ```text
-joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
+joedocs [--config PATH] [--log-level LEVEL] [--server URL] <COMMAND>
 ```
 
 | Command | What it does |
@@ -35,8 +35,19 @@ joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
 | `systemd remove [--system] [--dry-run]` | Stop, disable and delete the unit. |
 | `config show` | Show the effective configuration and where each value came from. |
 | `config paths` | List the config file search order and which file was selected. |
+| `login [--code CODE]` | With a server configured (`client.server` or `--server URL`): log in to its admin API with `JOEDOCS_ADMIN_TOKEN` and a 6-digit code from your authenticator (asked for when `--code` is left out), and keep the session for later commands (see [Client mode](#client-mode)). |
+| `logout` | End the admin session with the server and forget it. |
 
-`key create`, `key rotate` and the admin commands change the store directly, so run them on the server, as the account that runs `serve`.
+Without a server configured, every command works on the local store, so run admin commands on the server, as the account that runs `serve`. With one, they run on that server (see [Client mode](#client-mode)).
+
+### Client mode
+
+When `client.server` is set, or `--server URL` is given, `project`, `key`, `archive`, `check`, `reindex`, `status`, `get` and `backup FILE` run on that server through its [admin API](#admin-api). They print the same output and exit with the same codes as on the server; `status` adds the server URL and the session's expiry, and `backup` downloads the archive to `FILE` (mode `0600`). `init`, `serve`, `systemd`, `admin-token`, `agents` and `backup --restore` run only on the server and exit `65` with a server configured; `config` always describes this machine.
+
+- `joedocs login` opens a session with the admin token from `JOEDOCS_ADMIN_TOKEN` and a TOTP code. The session lasts `admin.session_hours` (8 by default) and is kept in `$XDG_STATE_HOME/joedocs/sessions.toml`, or `~/.local/state/joedocs/sessions.toml` (file `0600`, directory `0700`), one entry per server URL. Every call sends both the token and the session, so the file alone is not enough to act.
+- When a session has expired, or there is none, and standard input and standard error are terminals, a command asks for a new code (`Session expired. Code for <server>: `), logs in, and runs once more. The server checks the session before it runs anything, so a change is never applied twice. A wrong code is asked for again, up to three times in all. Without a terminal (scripts, agents, CI) the command exits `77` and says to run `joedocs login`.
+- A missing `JOEDOCS_ADMIN_TOKEN`, refused codes, or a token locked after five failed logins exit `77` without running the command; a server that cannot be reached exits `69`.
+- `client.server` must be `https://` (rustls with the operating system's root certificates), or `http://` to `localhost`, `127.0.0.1` or `[::1]`.
 
 ### Exit codes
 
@@ -46,9 +57,10 @@ joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
 | `1` | `check` found problems. |
 | `2` | Usage error (unknown command or flag). |
 | `65` | Invalid request: a bad name, an unknown project or key, or a store that is not initialised. |
-| `69` | `serve` cannot listen, or `systemctl` cannot be run. |
+| `69` | `serve` cannot listen, `systemctl` cannot be run, or the `client.server` cannot be reached. |
 | `70` | Database, history or vault fault. |
 | `74` | Output error. |
+| `77` | The admin API refused the credentials: no `JOEDOCS_ADMIN_TOKEN`, a wrong code, a locked token, or no valid session where no code can be asked for (run `joedocs login`). |
 | `78` | Configuration error, naming the file, variable or key. |
 
 ## MCP tools
@@ -99,6 +111,47 @@ A failed tool call is a result with `isError: true` and `structuredContent.error
 | `too_large` | The document is over `server.max_document_bytes`. |
 | `permission_denied` | The key can only read this project. |
 | `internal` | A server fault; details are in the server log, not the result. |
+
+## Admin API
+
+With `[admin] enabled = true`, `joedocs serve` also serves a JSON API under `/admin/v1/`, the one client mode uses. It is never part of the MCP endpoint, and when `admin.enabled` is off every `/admin/v1/` path answers `404`. Requests must pass the `server.allowed_hosts` check, and requests with an `Origin` outside `server.allowed_origins` get `403`.
+
+Every request carries `Authorization: Bearer jda_...` (an admin token from `joedocs admin-token create`). Every route but login also carries `JoeDocs-Session: jds_...`, a session of that same token. Each call, refused or not, writes one row to the audit log with the tool `admin:<operation>`.
+
+| Route | Operation | Body or query | Reply |
+| --- | --- | --- | --- |
+| `POST /admin/v1/session` | `session.create` | `{"code": "123456"}` | `{"session", "expires_at", "name"}` |
+| `DELETE /admin/v1/session` | `session.delete` | | `204` |
+| `GET /admin/v1/status` | `status` | | the `joedocs status` report as JSON |
+| `GET /admin/v1/projects` | `projects.list` | | `{"output"}` |
+| `POST /admin/v1/projects` | `projects.add` | `{"name", "key", "title"?}` | `{"output"}` |
+| `GET /admin/v1/keys` | `keys.list` | | `{"output"}` |
+| `POST /admin/v1/keys` | `keys.create` | `{"name", "grants": ["project:read"]}` | `{"output"}`, ending with the token |
+| `POST /admin/v1/keys/{name}/grants` | `keys.grant` | `{"grants": [...]}` | `{"output"}` |
+| `POST /admin/v1/keys/{name}/rotate` | `keys.rotate` | | `{"output"}`, ending with the token |
+| `POST /admin/v1/keys/{name}/revoke` | `keys.revoke` | | `{"output"}` |
+| `GET /admin/v1/archive` | `archive.list` | `?project=NAME` | `{"output"}` |
+| `POST /admin/v1/archive/{id}/restore` | `archive.restore` | | `{"output"}` |
+| `GET /admin/v1/check` | `check` | | `{"output", "problems"}` |
+| `POST /admin/v1/reindex` | `reindex` | | `{"output"}` |
+| `GET /admin/v1/documents/{id}` | `documents.get` | `?version=N` | `{"markdown"}` |
+| `GET /admin/v1/backup` | `backup` | | the backup archive (`application/gzip`), with `JoeDocs-Documents` and `JoeDocs-Skipped-Links` headers |
+
+`output` is the text the same command prints on the server, and `problems` is the number of problems `check` found (it exits `1` when that is not `0`).
+
+Logins are TOTP codes (RFC 6238: SHA-1, 6 digits, 30 seconds). A code is accepted for its own step or one step either side, and each step only once per token. Five wrong codes in a row lock the token for 15 minutes. A session lasts `admin.session_hours`. Refusals are `{"error": {"code", "message"}}`:
+
+| Status | `code` | Meaning |
+| --- | --- | --- |
+| `401` | `unauthorized` | The admin token, or the code, is not valid, or the token is revoked. |
+| `401` | `no_session` | No session, or one that was ended or belongs to another token. |
+| `401` | `session_expired` | The session has expired: log in again. |
+| `429` | `locked` | Too many wrong codes; `Retry-After` gives the seconds until logins are accepted again. |
+| `403` | `forbidden` | The `Host` or `Origin` is not allowed. |
+| `400` | `invalid_argument` | A bad request, such as a bad name. |
+| `404` | `not_found` | No such project, key or document. |
+| `409` | `already_exists`, `conflict`, `archived` | The request conflicts with what is stored. |
+| `500` | `internal` | A server fault (details are only in the server log). |
 
 ## Search
 

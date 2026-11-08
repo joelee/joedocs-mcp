@@ -37,7 +37,9 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 pub use app_id::AppId;
-pub use cli::{ArchiveCommand, Cli, Command, ConfigCommand, SystemdCommand};
+pub use cli::{
+    ArchiveCommand, Cli, Command, ConfigCommand, KeyCommand, ProjectCommand, SystemdCommand,
+};
 pub use config::{Config, ConfigError, Resolved};
 
 use crate::auth::RandomSource;
@@ -240,7 +242,7 @@ pub fn execute(
             ..
         } => {
             let store = open_store(loaded, ctx)?;
-            let created = backup::create(&store, ctx.clock.as_ref(), file)?;
+            let created = backup::create(&store, file)?;
             admin::report_backup(file, &created, out)?;
         }
         Command::Backup {
@@ -269,13 +271,7 @@ pub fn execute(
             front_matter_only,
             file,
         } => {
-            let part = if *content_only {
-                admin::Part::Body
-            } else if *front_matter_only {
-                admin::Part::FrontMatter
-            } else {
-                admin::Part::Whole
-            };
+            let part = admin::Part::new(*content_only, *front_matter_only);
             let markdown = admin::fetch(&open_store(loaded, ctx)?, document_id, *version)?;
             admin::write_document(&markdown, part, file.as_deref(), out)?;
         }
@@ -283,8 +279,8 @@ pub fn execute(
     Ok(())
 }
 
-/// Runs `cli` against the admin API of `server`, or returns `None` when the
-/// command runs locally.
+/// Runs `cli` against the admin API of `client.server`, or returns `None`
+/// when the command runs locally.
 fn remote(
     cli: &Cli,
     loaded: &Loaded,
@@ -300,12 +296,23 @@ fn remote(
             .into())
         });
     }
-    match &cli.command {
-        Command::Login { .. } | Command::Logout | Command::Status => {
-            Some(run_remote(cli, server, loaded, ctx, out))
-        }
+    let local_only = match &cli.command {
+        Command::Config { .. } => return None,
+        Command::Init => Some("init"),
+        Command::Serve => Some("serve"),
+        Command::Systemd { .. } => Some("systemd"),
+        Command::AdminToken { .. } => Some("admin-token"),
+        Command::Agents => Some("agents"),
+        Command::Backup { restore: true, .. } => Some("backup --restore"),
         _ => None,
+    };
+    if let Some(name) = local_only {
+        return Some(Err(client::Error::Usage(format!(
+            "`joedocs {name}` runs only on the server; drop --server (or clear client.server) to run it here"
+        ))
+        .into()));
     }
+    Some(run_remote(cli, server, loaded, ctx, out))
 }
 
 fn run_remote(
@@ -338,7 +345,7 @@ fn run_remote(
                 writeln!(out, "Not logged in to {}.", remote.server())?;
             }
         }
-        _ => {
+        Command::Status => {
             let reply = remote.call(&reqwest::Method::GET, "status", None)?;
             let report: status::StatusReport = serde_json::from_slice(&reply.body)
                 .map_err(|e| client::Error::Protocol(e.to_string()))?;
@@ -352,8 +359,159 @@ fn run_remote(
                 remote.server()
             )?;
         }
+        command => remote_admin(&remote, command, out)?,
     }
     Ok(())
+}
+
+/// Prints the `output` of an admin API call, as the local command would,
+/// and turns `check` problems into exit `1`.
+fn remote_text(
+    remote: &client::Remote<'_>,
+    method: &reqwest::Method,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let json = remote.call(method, path, body)?.json();
+    out.write_all(json["output"].as_str().unwrap_or_default().as_bytes())?;
+    match json["problems"].as_u64().unwrap_or(0) {
+        0 => Ok(()),
+        count => Err(Error::Problems(
+            usize::try_from(count).unwrap_or(usize::MAX),
+        )),
+    }
+}
+
+/// The admin commands that run remotely and print what they print locally.
+fn remote_admin(
+    remote: &client::Remote<'_>,
+    command: &Command,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    use reqwest::Method;
+    use serde_json::json;
+    let grants =
+        |grants: &[auth::Grant]| grants.iter().map(ToString::to_string).collect::<Vec<_>>();
+    match command {
+        Command::Project {
+            command: ProjectCommand::List,
+        } => remote_text(remote, &Method::GET, "projects", None, out),
+        Command::Project {
+            command: ProjectCommand::Add { name, key, title },
+        } => {
+            let body = json!({"name": name, "key": key, "title": title});
+            remote_text(remote, &Method::POST, "projects", Some(&body), out)
+        }
+        Command::Key {
+            command: KeyCommand::List,
+        } => remote_text(remote, &Method::GET, "keys", None, out),
+        Command::Key {
+            command: KeyCommand::Create { name, grants: g },
+        } => {
+            let body = json!({"name": name, "grants": grants(g)});
+            remote_text(remote, &Method::POST, "keys", Some(&body), out)
+        }
+        Command::Key {
+            command: KeyCommand::Grant { name, grants: g },
+        } => {
+            let body = json!({"grants": grants(g)});
+            remote_text(
+                remote,
+                &Method::POST,
+                &format!("keys/{name}/grants"),
+                Some(&body),
+                out,
+            )
+        }
+        Command::Key {
+            command: KeyCommand::Rotate { name },
+        } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("keys/{name}/rotate"),
+            None,
+            out,
+        ),
+        Command::Key {
+            command: KeyCommand::Revoke { name },
+        } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("keys/{name}/revoke"),
+            None,
+            out,
+        ),
+        Command::Archive {
+            command: ArchiveCommand::List { project },
+        } => {
+            let path = project
+                .as_ref()
+                .map_or_else(|| "archive".to_owned(), |p| format!("archive?project={p}"));
+            remote_text(remote, &Method::GET, &path, None, out)
+        }
+        Command::Archive {
+            command: ArchiveCommand::Restore { document_id },
+        } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("archive/{document_id}/restore"),
+            None,
+            out,
+        ),
+        Command::Check => remote_text(remote, &Method::GET, "check", None, out),
+        Command::Reindex => remote_text(remote, &Method::POST, "reindex", None, out),
+        Command::Get {
+            document_id,
+            version,
+            content_only,
+            front_matter_only,
+            file,
+        } => {
+            let part = admin::Part::new(*content_only, *front_matter_only);
+            remote_get(remote, document_id, *version, part, file.as_deref(), out)
+        }
+        Command::Backup { file, .. } => remote_backup(remote, file, out),
+        // Handled by `run_remote`, or refused by `remote` before it.
+        _ => Ok(()),
+    }
+}
+
+fn remote_get(
+    remote: &client::Remote<'_>,
+    id: &str,
+    version: Option<u64>,
+    part: admin::Part,
+    file: Option<&std::path::Path>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let path = version.map_or_else(
+        || format!("documents/{id}"),
+        |v| format!("documents/{id}?version={v}"),
+    );
+    let reply = remote.call(&reqwest::Method::GET, &path, None)?;
+    let markdown = reply.json()["markdown"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    admin::write_document(&markdown, part, file, out)
+}
+
+fn remote_backup(
+    remote: &client::Remote<'_>,
+    file: &std::path::Path,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    if std::fs::symlink_metadata(file).is_ok() {
+        return Err(backup::Error::Exists(file.to_path_buf()).into());
+    }
+    let downloaded = remote.download("backup", file)?;
+    let created = backup::Created {
+        manifest: backup::read_manifest(file)?,
+        bytes: downloaded.bytes,
+        skipped_links: downloaded.skipped_links,
+    };
+    admin::report_backup(file, &created, out)
 }
 
 /// Runs `joedocs backup --restore`: extracts the archive into empty or

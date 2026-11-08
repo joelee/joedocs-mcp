@@ -554,6 +554,119 @@ impl<'a> Remote<'a> {
     }
 }
 
+/// What a backup download wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Downloaded {
+    /// Bytes written.
+    pub bytes: u64,
+    /// Vault symlinks the server left out.
+    pub skipped_links: Vec<String>,
+}
+
+impl Remote<'_> {
+    /// Downloads `path` (the backup) into `dest`, which must not exist,
+    /// through a 0600 temporary file renamed into place. Logs in again like
+    /// [`Remote::call`] when the session is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Auth`], [`Error::Io`] and the request's errors.
+    pub fn download(&self, path: &str, dest: &Path) -> Result<Downloaded, Error> {
+        let saved = self.saved()?;
+        let first = self.download_once(path, saved.as_ref().map(|s| s.token.as_str()), dest)?;
+        let refused = match first {
+            Ok(done) => return Ok(done),
+            Err(reply) if reply.is_session_refusal() => reply,
+            Err(reply) => {
+                return Err(reply
+                    .into_result()
+                    .err()
+                    .unwrap_or_else(|| Error::Protocol("no body".into())));
+            }
+        };
+        drop(refused);
+        let message = format!("Session expired. Code for {}: ", self.server);
+        let (_, fresh) = self.login_with_prompts(&message)?;
+        match self.download_once(path, Some(&fresh.token), dest)? {
+            Ok(done) => Ok(done),
+            Err(reply) => Err(reply
+                .into_result()
+                .err()
+                .unwrap_or_else(|| Error::Protocol("no body".into()))),
+        }
+    }
+
+    fn download_once(
+        &self,
+        path: &str,
+        session: Option<&str>,
+        dest: &Path,
+    ) -> Result<Result<Downloaded, Reply>, Error> {
+        let url = format!("{}/admin/v1/{path}", self.server);
+        let mut request = self.http.get(&url).bearer_auth(self.token.expose_secret());
+        if let Some(session) = session {
+            request = request.header(SESSION_HEADER, session);
+        }
+        let unreachable = |e: reqwest::Error| Error::Unreachable {
+            url: self.server.clone(),
+            reason: without_url(&e),
+        };
+        self.runtime.block_on(async {
+            let mut response = request.send().await.map_err(unreachable)?;
+            let status = response.status().as_u16();
+            if !(200..300).contains(&status) {
+                let body = response.bytes().await.map_err(unreachable)?.to_vec();
+                return Ok(Err(Reply { status, body }));
+            }
+            let skipped_links = response
+                .headers()
+                .get("joedocs-skipped-links")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| serde_json::from_str(v).ok())
+                .unwrap_or_default();
+            let dir = dest
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let name = dest
+                .file_name()
+                .map_or_else(|| "backup".into(), |n| n.to_string_lossy().into_owned());
+            let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temp)
+                .map_err(Error::io("create", &temp))?;
+            let mut bytes = 0_u64;
+            let written: Result<(), Error> = async {
+                while let Some(chunk) = response.chunk().await.map_err(unreachable)? {
+                    file.write_all(&chunk).map_err(Error::io("write", &temp))?;
+                    bytes += chunk.len() as u64;
+                }
+                file.sync_all().map_err(Error::io("write", &temp))
+            }
+            .await;
+            if let Err(error) = written {
+                let _ = fs::remove_file(&temp);
+                return Err(error);
+            }
+            if fs::symlink_metadata(dest).is_ok() {
+                let _ = fs::remove_file(&temp);
+                return Err(Error::Usage(format!(
+                    "{} already exists; choose another file name",
+                    dest.display()
+                )));
+            }
+            fs::rename(&temp, dest).map_err(Error::io("write", dest))?;
+            Ok(Ok(Downloaded {
+                bytes,
+                skipped_links,
+            }))
+        })
+    }
+}
+
 /// A reqwest error without its URL (which is printed already).
 fn without_url(error: &reqwest::Error) -> String {
     use std::error::Error as _;
