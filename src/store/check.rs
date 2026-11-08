@@ -48,6 +48,10 @@ impl Store {
             .into_iter()
             .map(|row| row.path)
             .collect();
+        let projects: HashSet<String> = db::list_projects(&self.conn)?
+            .into_iter()
+            .map(|project| project.name)
+            .collect();
         let mut files = Vec::new();
         walk(&self.paths.home, "", &mut files)?;
         files.sort();
@@ -56,18 +60,18 @@ impl Store {
             drifted,
             unknown_files: files
                 .into_iter()
-                .filter(|f| !known.contains(f) && !is_index_file(f))
+                .filter(|f| !known.contains(f) && !is_index_file(f, &projects))
                 .collect(),
             stale_index_files: index_file::stale(&self.conn, &self.paths.home, &self.settings)?,
         })
     }
 }
 
-/// Whether `path` (vault-relative) is a project's `INDEX.md`, a reserved
-/// path that is never reported as unknown.
-fn is_index_file(path: &str) -> bool {
+/// Whether `path` (vault-relative) is a registered project's `INDEX.md`, a
+/// reserved path that is never reported as unknown.
+fn is_index_file(path: &str, projects: &HashSet<String>) -> bool {
     path.split_once('/')
-        .is_some_and(|(project, rest)| !project.is_empty() && rest == index_file::FILE_NAME)
+        .is_some_and(|(project, rest)| rest == index_file::FILE_NAME && projects.contains(project))
 }
 
 /// Collects the files under `dir`, skipping names that start with a dot.

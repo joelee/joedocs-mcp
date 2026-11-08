@@ -143,7 +143,10 @@ Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/
 ### When the release fails
 
 - **Before publishing** (a check, CI, or the approval was rejected): nothing was published. Fix the problem on `main`, then move the tag: `git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`, and tag and push again.
-- **After publishing:** the version is on crates.io and cannot be replaced. If only the GitHub release or the Homebrew dispatch failed, rerun the failed job, or finish it by hand (below). Fix anything else forward with a new patch version.
+- **After publishing:** the version is on crates.io and cannot be replaced, so never rerun the Publish job: `cargo publish` fails for a version that already exists.
+  - If the GitHub release failed, rerun only the GitHub release job, or create the release by hand (below).
+  - If the Homebrew dispatch failed, the tap's daily check bumps the formula by itself; to bump it now, run `gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z`.
+  - Fix anything else forward with a new patch version.
 
 ### Releasing by hand
 

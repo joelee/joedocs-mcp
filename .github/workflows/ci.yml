@@ -14,8 +14,10 @@ on:
 permissions:
   contents: read
 
+# When release.yml calls this workflow, github.workflow is the caller's name,
+# so a release run never shares a group with (and cancels) main's own CI.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:

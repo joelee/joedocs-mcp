@@ -1274,3 +1274,13 @@ fn check_reports_a_missing_or_stale_index_file() {
     fs::write(&path, "left over\n").unwrap();
     assert_eq!(off.check().unwrap().problems(), 0);
 }
+
+#[test]
+fn check_reports_an_index_file_outside_a_project_as_unknown() {
+    let fx = fixture();
+    fs::create_dir_all(fx.paths.home.join("stray")).unwrap();
+    fs::write(fx.paths.home.join("stray/INDEX.md"), "not a project\n").unwrap();
+    let report = fx.store.check().unwrap();
+    assert_eq!(report.unknown_files, ["stray/INDEX.md"]);
+    assert!(report.stale_index_files.is_empty(), "{report:?}");
+}
