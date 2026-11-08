@@ -1113,3 +1113,124 @@ fn admin_tokens_are_created_with_a_totp_secret_listed_and_revoked() {
         .assert()
         .code(65);
 }
+
+/// Rewrites the backup `from` into `to`, dropping entries for which `keep`
+/// is false and adding `extra` entries at the end.
+fn rewrite_archive(
+    from: &Path,
+    to: &Path,
+    keep: impl Fn(&str) -> bool,
+    extra: &[(&str, &[u8])],
+) -> std::io::Result<()> {
+    use std::io::Read as _;
+    let mut reader = tar::Archive::new(flate2::read::GzDecoder::new(std::fs::File::open(from)?));
+    let mut writer = tar::Builder::new(flate2::write::GzEncoder::new(
+        std::fs::File::create(to)?,
+        flate2::Compression::default(),
+    ));
+    for entry in reader.entries()? {
+        let mut entry = entry?;
+        let name = entry.path()?.to_string_lossy().into_owned();
+        if !keep(&name) {
+            continue;
+        }
+        let mut header = entry.header().clone();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data)?;
+        writer.append_data(&mut header, &name, data.as_slice())?;
+    }
+    for (name, data) in extra {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o600);
+        header.set_cksum();
+        writer.append_data(&mut header, name, *data)?;
+    }
+    writer.into_inner()?.finish()?;
+    Ok(())
+}
+
+#[test]
+fn a_restore_that_cannot_open_the_store_leaves_its_targets_as_they_were() {
+    let root = TempDir::new().unwrap();
+    populated(root.path());
+    let good = root.path().join("good.tgz");
+    cmd(root.path())
+        .args(["backup", good.to_str().unwrap()])
+        .assert()
+        .success();
+    let bad_db = root.path().join("bad-db.tgz");
+    rewrite_archive(
+        &good,
+        &bad_db,
+        |n| n != "state/joedocs.db",
+        &[("state/joedocs.db", b"not a database")],
+    )
+    .unwrap();
+    let no_history = root.path().join("no-history.tgz");
+    rewrite_archive(
+        &good,
+        &no_history,
+        |n| !n.starts_with("state/history.git"),
+        &[],
+    )
+    .unwrap();
+
+    for (index, archive) in [&bad_db, &no_history].into_iter().enumerate() {
+        // Absent targets end up absent.
+        let absent = root.path().join(format!("absent{index}"));
+        cmd(root.path())
+            .args(["backup", "--restore", "--state-dir"])
+            .arg(absent.join("state"))
+            .arg("--content-dir")
+            .arg(absent.join("vault"))
+            .arg(archive)
+            .assert()
+            .failure()
+            .code(predicate::ne(1));
+        assert!(
+            !absent.join("state").exists() && !absent.join("vault").exists(),
+            "{}",
+            archive.display()
+        );
+        // Empty targets end up empty, and a good archive restores into them.
+        let empty = root.path().join(format!("empty{index}"));
+        for dir in ["state", "vault"] {
+            std::fs::create_dir_all(empty.join(dir)).unwrap();
+        }
+        let restore = |file: &Path| {
+            let mut command = cmd(root.path());
+            command
+                .args(["backup", "--restore", "--state-dir"])
+                .arg(empty.join("state"))
+                .arg("--content-dir")
+                .arg(empty.join("vault"))
+                .arg(file);
+            command
+        };
+        restore(archive).assert().failure().code(predicate::ne(1));
+        for dir in ["state", "vault"] {
+            assert_eq!(
+                std::fs::read_dir(empty.join(dir)).unwrap().count(),
+                0,
+                "{dir} not emptied"
+            );
+        }
+        restore(&good).assert().success();
+    }
+
+    // A store that opens but has problems keeps its data and exits 1.
+    let stray = root.path().join("stray.tgz");
+    rewrite_archive(&good, &stray, |_| true, &[("content/stray.md", b"x")]).unwrap();
+    let kept = root.path().join("kept");
+    cmd(root.path())
+        .args(["backup", "--restore", "--state-dir"])
+        .arg(kept.join("state"))
+        .arg("--content-dir")
+        .arg(kept.join("vault"))
+        .arg(&stray)
+        .assert()
+        .code(1);
+    assert!(kept.join("state/joedocs.db").is_file());
+    assert!(kept.join("vault/stray.md").is_file());
+}

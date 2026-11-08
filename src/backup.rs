@@ -326,8 +326,9 @@ impl Drop for Staging {
 }
 
 /// Extracts the backup `file` into `state_dir` and `content_dir`, which must
-/// be empty or absent. On any failure the targets are emptied again (and
-/// removed when this created them). Returns the archive's manifest.
+/// be empty or absent. On any failure, and later when the returned
+/// [`Extracted`] is dropped without [`Extracted::commit`], the targets are
+/// emptied again (and removed when this created them).
 ///
 /// Only regular files and directories under `state/` and `content/` are
 /// accepted; absolute paths, `..`, links and devices are refused before
@@ -336,18 +337,53 @@ impl Drop for Staging {
 /// # Errors
 ///
 /// Returns [`Error::NotEmpty`], [`Error::Unsupported`] and I/O errors.
-pub fn extract(file: &Path, state_dir: &Path, content_dir: &Path) -> Result<Manifest, Error> {
+pub fn extract(file: &Path, state_dir: &Path, content_dir: &Path) -> Result<Extracted, Error> {
     let targets = [
         Target::prepare(state_dir, true)?,
         Target::prepare(content_dir, false)?,
     ];
-    let result = extract_into(file, state_dir, content_dir);
-    if result.is_err() {
-        for target in &targets {
-            target.undo();
+    match extract_into(file, state_dir, content_dir) {
+        Ok(manifest) => Ok(Extracted {
+            manifest,
+            targets,
+            committed: false,
+        }),
+        Err(error) => {
+            for target in &targets {
+                target.undo();
+            }
+            Err(error)
         }
     }
-    result
+}
+
+/// Restored files that are removed again, leaving the targets as they were,
+/// unless [`Extracted::commit`] is called once the restored store has
+/// opened.
+#[derive(Debug)]
+pub struct Extracted {
+    manifest: Manifest,
+    targets: [Target; 2],
+    committed: bool,
+}
+
+impl Extracted {
+    /// Keeps the restored files, and returns the archive's manifest.
+    #[must_use]
+    pub fn commit(mut self) -> Manifest {
+        self.committed = true;
+        self.manifest.clone()
+    }
+}
+
+impl Drop for Extracted {
+    fn drop(&mut self) {
+        if !self.committed {
+            for target in &self.targets {
+                target.undo();
+            }
+        }
+    }
 }
 
 fn extract_into(file: &Path, state_dir: &Path, content_dir: &Path) -> Result<Manifest, Error> {
@@ -425,6 +461,7 @@ fn extract_into(file: &Path, state_dir: &Path, content_dir: &Path) -> Result<Man
 }
 
 /// A restore target, and whether this run created it.
+#[derive(Debug)]
 struct Target {
     path: PathBuf,
     created: bool,

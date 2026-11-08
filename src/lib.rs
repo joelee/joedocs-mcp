@@ -544,14 +544,17 @@ pub fn restore(
             std::path::Path::to_path_buf,
         ),
     };
-    let manifest = backup::extract(file, &paths.state_dir, &paths.home)?;
+    let extracted = backup::extract(file, &paths.state_dir, &paths.home)?;
     let history = GitCli::new(paths.git_dir(), &paths.home);
+    // If the restored store does not open (or migrate), `extracted` is
+    // dropped here and the targets are left as they were.
     let store = Store::open(
         paths.clone(),
         Settings::from_config(loaded.config()),
         Box::new(history),
         Arc::clone(&ctx.clock),
     )?;
+    let manifest = extracted.commit();
     admin::report_restore(&manifest, &paths, &configured, out)?;
     admin::check(&store, out)
 }
