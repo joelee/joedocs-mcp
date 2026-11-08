@@ -119,7 +119,7 @@ A failed tool call is a result with `isError: true` and `structuredContent.error
 
 With `[admin] enabled = true`, `joedocs serve` also serves a JSON API under `/admin/v1/`, the one client mode uses. It is never part of the MCP endpoint, and when `admin.enabled` is off every `/admin/v1/` path answers `404`. Requests must pass the `server.allowed_hosts` check, and requests with an `Origin` outside `server.allowed_origins` get `403`.
 
-Every request carries `Authorization: Bearer jda_...` (an admin token from `joedocs admin-token create`). Every route but login also carries `JoeDocs-Session: jds_...`, a session of that same token. Each call, refused or not, writes one row to the audit log with the tool `admin:<operation>`.
+Every request carries `Authorization: Bearer jda_...` (an admin token from `joedocs admin-token create`). Every route but login also carries `JoeDocs-Session: jds_...`, a session of that same token. Each request, refused or not, writes one row to the audit log with the tool `admin:<operation>` (`admin:unknown` for a path or method that is not a route), and never a token, session or code. Request bodies are limited to 64 KiB.
 
 | Route | Operation | Body or query | Reply |
 | --- | --- | --- | --- |
@@ -150,9 +150,10 @@ Logins are TOTP codes (RFC 6238: SHA-1, 6 digits, 30 seconds). A code is accepte
 | `401` | `no_session` | No session, or one that was ended or belongs to another token. |
 | `401` | `session_expired` | The session has expired: log in again. |
 | `429` | `locked` | Too many wrong codes; `Retry-After` gives the seconds until logins are accepted again. |
-| `403` | `forbidden` | The `Host` or `Origin` is not allowed. |
+| `403` | `forbidden` | The `Host` or `Origin` is not allowed (checked before anything else). |
+| `413` | `payload_too_large` | The request body is over 64 KiB. |
 | `400` | `invalid_argument` | A bad request, such as a bad name. |
-| `404` | `not_found` | No such project, key or document. |
+| `404` | `not_found` | No such project, key or document, or no such route. |
 | `409` | `already_exists`, `conflict`, `archived` | The request conflicts with what is stored. |
 | `500` | `internal` | A server fault (details are only in the server log). |
 

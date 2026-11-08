@@ -15,7 +15,6 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 
@@ -60,19 +59,8 @@ pub(super) fn routes(
         allowed_origins: options.allowed_origins.clone(),
     });
     Router::new()
-        .route("/session", post(login).delete(logout))
-        .route("/status", get(status))
-        .route("/projects", get(projects_list).post(projects_add))
-        .route("/keys", get(keys_list).post(keys_create))
-        .route("/keys/{name}/grants", post(keys_grant))
-        .route("/keys/{name}/rotate", post(keys_rotate))
-        .route("/keys/{name}/revoke", post(keys_revoke))
-        .route("/archive", get(archive_list))
-        .route("/archive/{id}/restore", post(archive_restore))
-        .route("/check", get(check))
-        .route("/reindex", post(reindex))
-        .route("/documents/{id}", get(document))
-        .route("/backup", get(backup))
+        .route("/", axum::routing::any(dispatch))
+        .route("/{*rest}", axum::routing::any(dispatch))
         .with_state(state)
 }
 
@@ -363,9 +351,142 @@ where
     }
 }
 
+/// The largest request body the admin API reads.
+pub const BODY_LIMIT: usize = 64 * 1024;
+
+/// One admin API route, with its path parameter.
+enum Route {
+    Login,
+    Logout,
+    Status,
+    ProjectsList,
+    ProjectsAdd,
+    KeysList,
+    KeysCreate,
+    KeysGrant(String),
+    KeysRotate(String),
+    KeysRevoke(String),
+    ArchiveList,
+    ArchiveRestore(String),
+    Check,
+    Reindex,
+    Document(String),
+    Backup,
+    Unknown,
+}
+
+impl Route {
+    /// The route for `method` and `path` (relative to `/admin/v1`).
+    fn of(method: &axum::http::Method, path: &str) -> Self {
+        use axum::http::Method as M;
+        let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
+        let get = *method == M::GET;
+        let post = *method == M::POST;
+        match parts.as_slice() {
+            ["session"] if post => Self::Login,
+            ["session"] if *method == M::DELETE => Self::Logout,
+            ["status"] if get => Self::Status,
+            ["projects"] if get => Self::ProjectsList,
+            ["projects"] if post => Self::ProjectsAdd,
+            ["keys"] if get => Self::KeysList,
+            ["keys"] if post => Self::KeysCreate,
+            ["keys", name, "grants"] if post => Self::KeysGrant((*name).to_owned()),
+            ["keys", name, "rotate"] if post => Self::KeysRotate((*name).to_owned()),
+            ["keys", name, "revoke"] if post => Self::KeysRevoke((*name).to_owned()),
+            ["archive"] if get => Self::ArchiveList,
+            ["archive", id, "restore"] if post => Self::ArchiveRestore((*id).to_owned()),
+            ["check"] if get => Self::Check,
+            ["reindex"] if post => Self::Reindex,
+            ["documents", id] if get => Self::Document((*id).to_owned()),
+            ["backup"] if get => Self::Backup,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// The audit log's tool name.
+    fn operation(&self) -> &'static str {
+        match self {
+            Self::Login => "admin:session.create",
+            Self::Logout => "admin:session.delete",
+            Self::Status => "admin:status",
+            Self::ProjectsList => "admin:projects.list",
+            Self::ProjectsAdd => "admin:projects.add",
+            Self::KeysList => "admin:keys.list",
+            Self::KeysCreate => "admin:keys.create",
+            Self::KeysGrant(_) => "admin:keys.grant",
+            Self::KeysRotate(_) => "admin:keys.rotate",
+            Self::KeysRevoke(_) => "admin:keys.revoke",
+            Self::ArchiveList => "admin:archive.list",
+            Self::ArchiveRestore(_) => "admin:archive.restore",
+            Self::Check => "admin:check",
+            Self::Reindex => "admin:reindex",
+            Self::Document(_) => "admin:documents.get",
+            Self::Backup => "admin:backup",
+            Self::Unknown => "admin:unknown",
+        }
+    }
+}
+
+/// Every `/admin/v1/` request. It uses no extractor that can reject a
+/// request before it is checked and audited: the request is read here,
+/// with [`BODY_LIMIT`], and every outcome goes through [`run`].
+async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Request) -> Response {
+    let (parts, body) = request.into_parts();
+    let route = Route::of(&parts.method, parts.uri.path());
+    let call = Call::new(&state, route.operation(), &parts.headers);
+    let Ok(body) = axum::body::to_bytes(body, BODY_LIMIT).await else {
+        let too_large = ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            format!("request bodies are limited to {BODY_LIMIT} bytes"),
+        );
+        return refuse(state, call, too_large).await;
+    };
+    let uri = parts.uri;
+    match route {
+        Route::Login => login(state, call, body).await,
+        Route::Logout => logout(state, call).await,
+        Route::Status => status(state, call).await,
+        Route::ProjectsList => projects_list(state, call).await,
+        Route::ProjectsAdd => projects_add(state, call, body).await,
+        Route::KeysList => keys_list(state, call).await,
+        Route::KeysCreate => keys_create(state, call, body).await,
+        Route::KeysGrant(name) => keys_grant(state, call, name, body).await,
+        Route::KeysRotate(name) => keys_rotate(state, call, name).await,
+        Route::KeysRevoke(name) => keys_revoke(state, call, name).await,
+        Route::ArchiveList => archive_list(state, call, uri).await,
+        Route::ArchiveRestore(id) => archive_restore(state, call, id).await,
+        Route::Check => check(state, call).await,
+        Route::Reindex => reindex(state, call).await,
+        Route::Document(id) => document(state, call, id, uri).await,
+        Route::Backup => backup(state, call).await,
+        Route::Unknown => {
+            let missing = ApiError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "no such admin API route",
+            );
+            refuse(state, call, missing).await
+        }
+    }
+}
+
+/// Answers `call` with `error` (after the `Host`/`Origin` check, which
+/// takes precedence), naming the caller in the audit row when the token is
+/// valid.
+async fn refuse(state: Arc<ApiState>, call: Call, error: ApiError) -> Response {
+    run(state, call, move |store, _, call| {
+        let who = call
+            .token
+            .as_ref()
+            .and_then(|t| store.admin_token_for(t).ok().flatten());
+        Ok((who, Err(error)))
+    })
+    .await
+}
+
 /// `POST /admin/v1/session` with `{"code": "123456"}`: logs in.
-async fn login(State(state): State<Arc<ApiState>>, headers: HeaderMap, body: Bytes) -> Response {
-    let call = Call::new(&state, "admin:session.create", &headers);
+async fn login(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
     run(state, call, move |store, state, call| {
         let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
         let who = store
@@ -400,8 +521,7 @@ async fn login(State(state): State<Arc<ApiState>>, headers: HeaderMap, body: Byt
 }
 
 /// `DELETE /admin/v1/session`: logs out.
-async fn logout(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
-    let call = Call::new(&state, "admin:session.delete", &headers);
+async fn logout(state: Arc<ApiState>, call: Call) -> Response {
     run(state, call, move |store, _, call| {
         let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
         let who = store
@@ -423,8 +543,7 @@ async fn logout(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Respo
 }
 
 /// `GET /admin/v1/status`: the `joedocs status` report.
-async fn status(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
-    let call = Call::new(&state, "admin:status", &headers);
+async fn status(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, state, _| {
         let report = crate::status::collect_parts(
             store,
@@ -532,20 +651,14 @@ fn query(uri: &axum::http::Uri, name: &str) -> Option<String> {
     })
 }
 
-async fn projects_list(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
-    let call = Call::new(&state, "admin:projects.list", &headers);
+async fn projects_list(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, _, _| {
         text(|out| crate::admin::project(store, &crate::cli::ProjectCommand::List, out))
     })
     .await
 }
 
-async fn projects_add(
-    State(state): State<Arc<ApiState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let call = Call::new(&state, "admin:projects.add", &headers);
+async fn projects_add(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
     authorized(state, call, move |store, _, _| {
         let body = body_json(&body)?;
         let command = crate::cli::ProjectCommand::Add {
@@ -558,20 +671,14 @@ async fn projects_add(
     .await
 }
 
-async fn keys_list(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
-    let call = Call::new(&state, "admin:keys.list", &headers);
+async fn keys_list(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, _, _| {
         text(|out| crate::admin::key(store, &crate::cli::KeyCommand::List, &OsRandom, out))
     })
     .await
 }
 
-async fn keys_create(
-    State(state): State<Arc<ApiState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let call = Call::new(&state, "admin:keys.create", &headers);
+async fn keys_create(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
     authorized(state, call, move |store, _, _| {
         let body = body_json(&body)?;
         let command = crate::cli::KeyCommand::Create {
@@ -583,13 +690,7 @@ async fn keys_create(
     .await
 }
 
-async fn keys_grant(
-    State(state): State<Arc<ApiState>>,
-    axum::extract::Path(name): axum::extract::Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let call = Call::new(&state, "admin:keys.grant", &headers);
+async fn keys_grant(state: Arc<ApiState>, call: Call, name: String, body: Bytes) -> Response {
     authorized(state, call, move |store, _, _| {
         let command = crate::cli::KeyCommand::Grant {
             name,
@@ -600,12 +701,7 @@ async fn keys_grant(
     .await
 }
 
-async fn keys_rotate(
-    State(state): State<Arc<ApiState>>,
-    axum::extract::Path(name): axum::extract::Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let call = Call::new(&state, "admin:keys.rotate", &headers);
+async fn keys_rotate(state: Arc<ApiState>, call: Call, name: String) -> Response {
     authorized(state, call, move |store, _, _| {
         let command = crate::cli::KeyCommand::Rotate { name };
         text(|out| crate::admin::key(store, &command, &OsRandom, out))
@@ -613,12 +709,7 @@ async fn keys_rotate(
     .await
 }
 
-async fn keys_revoke(
-    State(state): State<Arc<ApiState>>,
-    axum::extract::Path(name): axum::extract::Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let call = Call::new(&state, "admin:keys.revoke", &headers);
+async fn keys_revoke(state: Arc<ApiState>, call: Call, name: String) -> Response {
     authorized(state, call, move |store, _, _| {
         let command = crate::cli::KeyCommand::Revoke { name };
         text(|out| crate::admin::key(store, &command, &OsRandom, out))
@@ -626,12 +717,7 @@ async fn keys_revoke(
     .await
 }
 
-async fn archive_list(
-    State(state): State<Arc<ApiState>>,
-    uri: axum::http::Uri,
-    headers: HeaderMap,
-) -> Response {
-    let call = Call::new(&state, "admin:archive.list", &headers);
+async fn archive_list(state: Arc<ApiState>, call: Call, uri: axum::http::Uri) -> Response {
     authorized(state, call, move |store, _, _| {
         let command = crate::cli::ArchiveCommand::List {
             project: query(&uri, "project"),
@@ -641,12 +727,7 @@ async fn archive_list(
     .await
 }
 
-async fn archive_restore(
-    State(state): State<Arc<ApiState>>,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let call = Call::new(&state, "admin:archive.restore", &headers);
+async fn archive_restore(state: Arc<ApiState>, call: Call, id: String) -> Response {
     authorized(state, call, move |store, _, _| {
         let command = crate::cli::ArchiveCommand::Restore { document_id: id };
         text(|out| crate::admin::archive(store, &command, out))
@@ -654,29 +735,21 @@ async fn archive_restore(
     .await
 }
 
-async fn check(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
-    let call = Call::new(&state, "admin:check", &headers);
+async fn check(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, _, _| {
         text(|out| crate::admin::check(store, out))
     })
     .await
 }
 
-async fn reindex(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
-    let call = Call::new(&state, "admin:reindex", &headers);
+async fn reindex(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, _, _| {
         text(|out| crate::admin::reindex(store, out))
     })
     .await
 }
 
-async fn document(
-    State(state): State<Arc<ApiState>>,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    uri: axum::http::Uri,
-    headers: HeaderMap,
-) -> Response {
-    let call = Call::new(&state, "admin:documents.get", &headers);
+async fn document(state: Arc<ApiState>, call: Call, id: String, uri: axum::http::Uri) -> Response {
     authorized(state, call, move |store, _, _| {
         let version = match query(&uri, "version") {
             Some(v) => Some(v.parse::<u64>().map_err(|_| {
@@ -695,8 +768,7 @@ async fn document(
 }
 
 /// `GET /admin/v1/backup`: a backup archive, streamed.
-async fn backup(State(state): State<Arc<ApiState>>, headers: HeaderMap) -> Response {
-    let call = Call::new(&state, "admin:backup", &headers);
+async fn backup(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, _, _| {
         let path = store
             .paths()

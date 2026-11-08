@@ -371,3 +371,72 @@ fn the_server_paths_are_where_the_test_expects() {
         Path::new("/s/joedocs.db")
     );
 }
+
+#[tokio::test]
+async fn rejected_requests_are_audited_too() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let before = server.audit()?.len();
+    // Over the 64 KiB limit, and over axum's own 2 MB default.
+    for size in [70 * 1024, 3 * 1024 * 1024] {
+        let big = format!(r#"{{"code":"{}"}}"#, "1".repeat(size));
+        let login = server
+            .send("POST", "/admin/v1/session", &server.auth(None), &big)
+            .await?;
+        assert_eq!(login.status, 413, "{size}");
+        assert_eq!(login.json["error"]["code"], "payload_too_large");
+        let add = server
+            .send(
+                "POST",
+                "/admin/v1/projects",
+                &server.auth(Some(&session)),
+                &big,
+            )
+            .await?;
+        assert_eq!(add.status, 413);
+    }
+    // A bad Host is refused first, even with a huge body.
+    let mut stream = TcpStream::connect(server.addr).await?;
+    let big = "1".repeat(70 * 1024);
+    let request = format!(
+        "POST /admin/v1/session HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n{}content-length: {}\r\n\r\n{big}",
+        server.auth(None),
+        big.len()
+    );
+    stream.write_all(request.as_bytes()).await?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await?;
+    assert!(String::from_utf8_lossy(&raw).starts_with("HTTP/1.1 403"));
+    let unknown = server
+        .send("GET", "/admin/v1/nope", &server.auth(Some(&session)), "")
+        .await?;
+    assert_eq!(unknown.status, 404);
+    assert_eq!(unknown.json["error"]["code"], "not_found");
+    let wrong_method = server
+        .send("PUT", "/admin/v1/status", &server.auth(Some(&session)), "")
+        .await?;
+    assert_eq!(wrong_method.status, 404);
+
+    let audit = server.audit()?;
+    let new: Vec<&str> = audit[before..].iter().map(|(_, o)| o.as_str()).collect();
+    assert_eq!(
+        new,
+        [
+            "payload_too_large",
+            "payload_too_large",
+            "payload_too_large",
+            "payload_too_large",
+            "forbidden",
+            "not_found",
+            "not_found",
+        ]
+    );
+    let conn = rusqlite::Connection::open(server.dir.path().join("state/joedocs.db"))?;
+    let leaked: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM audit_log WHERE key_name LIKE '%jd%' OR client LIKE '%jda_%' OR client LIKE '%jds_%' OR tool LIKE '%jd%_%'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(leaked, 0);
+    server.stop().await
+}
