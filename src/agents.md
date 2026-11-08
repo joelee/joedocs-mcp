@@ -16,6 +16,8 @@ You are maintaining a JoeDocs server: an MCP server that stores project document
 
 Run `joedocs status` for the current state, sizes and health, and `joedocs config show` for every setting and where it came from.
 
+Run every `joedocs` command below the way the service runs, or it may read a different store. A systemd unit pins its configuration and storage paths in `Environment=` lines (`systemctl show -p User -p Environment joedocs`, with `--user` for a user unit), and they take precedence over any config file. Run commands with that environment (`env <those values> joedocs ...`), and for a system unit as its `User=` account (`sudo -u <User> env ... joedocs ...`). `joedocs config show` must then report the unit's `storage.home` and `storage.state_dir`; if this table shows other paths, it was printed without the unit's environment.
+
 ## Safe to run at any time
 
 These only read:

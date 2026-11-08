@@ -6,16 +6,35 @@ Read the [version notes](#version-notes) for every version between yours and the
 
 ## 0. Know your install
 
-Every step below has a variant for each way JoeDocs runs. Commands that read the store (`config show`, `backup`, `status`, `check`) must see the service's own configuration and paths, so run them as the service does:
+Every step below has a variant for each way JoeDocs runs. Commands that read the store (`config show`, `backup`, `status`, `check`) must see the service's own configuration and paths, so run them as the service does. Define `JOEDOCS` in your shell for your install, and use it for every such command below:
 
-| Install | Run a joedocs command as the service | The service's vault and state directory | Stop | Check it stopped | Start |
-| --- | --- | --- | --- | --- | --- |
-| systemd user unit | `joedocs ...` as yourself (the unit pins its config with `Environment=` lines) | `systemctl --user cat joedocs`: the `JOEDOCS_CONFIG_FILE` and `JOEDOCS__STORAGE__*` lines; or `joedocs config show` | `systemctl --user stop joedocs` | `systemctl --user is-active joedocs` prints `inactive` | `systemctl --user start joedocs` |
-| systemd system unit | `sudo -u joedocs joedocs --config /etc/joedocs/config.toml ...` (the `User=` and config from the unit) | `systemctl cat joedocs`: the `Environment=` and `ReadWritePaths=` lines | `sudo systemctl stop joedocs` | `systemctl is-active joedocs` prints `inactive` | `sudo systemctl start joedocs` |
-| Homebrew | `joedocs ...` as yourself | `joedocs config show` | `brew services stop joedocs` | `brew services info joedocs` shows it is not running | `brew services start joedocs` |
-| Docker Compose | `docker compose exec joedocs joedocs ...` while it runs, `docker compose run --rm joedocs joedocs ...` while it is stopped | on the host, `$JOEDOCS_DATA/vault` and `$JOEDOCS_DATA/state` (default `./.local/data`), mounted at `/data/vault` and `/data/state` | `docker compose stop joedocs` | `docker compose ps joedocs` shows no running container | `docker compose up -d` |
+```bash
+# systemd user unit: your account, with the unit's environment
+JOEDOCS() { env $(systemctl --user show -p Environment --value joedocs) joedocs "$@"; }
 
-Below, `<storage.home>` and `<storage.state_dir>` are the service's directories from the table, and `JOEDOCS` stands for the way to run a command as the service.
+# systemd system unit: the unit's account (User=), with the unit's environment
+JOEDOCS() {
+  sudo -u "$(systemctl show -p User --value joedocs)" \
+    env $(systemctl show -p Environment --value joedocs) joedocs "$@"
+}
+
+# Homebrew: your account
+JOEDOCS() { joedocs "$@"; }
+
+# Docker Compose: in the container (use `docker compose run --rm joedocs joedocs "$@"` while it is stopped)
+JOEDOCS() { docker compose exec joedocs joedocs "$@"; }
+```
+
+A systemd unit written by `joedocs systemd install` pins its configuration in `Environment=` lines: the config file in use (`JOEDOCS_CONFIG_FILE`), every override given at install time, and the absolute storage paths (`JOEDOCS__STORAGE__HOME`, `JOEDOCS__STORAGE__STATE_DIR`). Overrides take precedence over any config file, so a plain `joedocs` (or one with `--config`) can read a different store than the service does, and back up the wrong one. `systemctl show` works whether the unit is running or stopped. It prints the values separated by spaces, so a value that holds a space makes `env` fail (`No such file or directory`); then copy the `Environment=` lines from `systemctl cat joedocs` (`--user` for a user unit) into the `env` command by hand. Check the result with `JOEDOCS config show`: `storage.home` and `storage.state_dir` must come from the environment and match the unit.
+
+| Install | The service's vault and state directory | Stop | Check it stopped | Start |
+| --- | --- | --- | --- | --- |
+| systemd user unit | `JOEDOCS config show`, or the `JOEDOCS__STORAGE__*` lines in `systemctl --user cat joedocs` | `systemctl --user stop joedocs` | `systemctl --user is-active joedocs` prints `inactive` | `systemctl --user start joedocs` |
+| systemd system unit | `JOEDOCS config show`, or the `JOEDOCS__STORAGE__*` and `ReadWritePaths=` lines in `systemctl cat joedocs` | `sudo systemctl stop joedocs` | `systemctl is-active joedocs` prints `inactive` | `sudo systemctl start joedocs` |
+| Homebrew | `joedocs config show` | `brew services stop joedocs` | `brew services info joedocs` shows it is not running | `brew services start joedocs` |
+| Docker Compose | on the host, `$JOEDOCS_DATA/vault` and `$JOEDOCS_DATA/state` (default `./.local/data`), mounted at `/data/vault` and `/data/state` | `docker compose stop joedocs` | `docker compose ps joedocs` shows no running container | `docker compose up -d` |
+
+Below, `<storage.home>` and `<storage.state_dir>` are the service's directories from the table.
 
 ## 1. Back up first
 
@@ -27,7 +46,7 @@ Some versions add a database migration, and an older JoeDocs refuses a database 
 JOEDOCS backup ~/joedocs-before-upgrade-$(date +%F).tgz
 ```
 
-With Docker, write it under the mounted state directory (`docker compose exec joedocs joedocs backup /data/state/before-upgrade.tgz`), then move it out of `$JOEDOCS_DATA/state` on the host.
+The file is written by the account the service runs as, so with a system unit or Docker, `~` (your home) is the wrong place. For a system unit, write it into the service's state directory (`JOEDOCS backup <storage.state_dir>/before-upgrade.tgz`) and move it out with `sudo mv`. With Docker, write it under the mounted state directory (`JOEDOCS backup /data/state/before-upgrade.tgz`), then move it out of `$JOEDOCS_DATA/state` on the host.
 
 **On 0.2.x and older**, which have no `backup` command, the service must be stopped first, or the database, history and vault in the archive may come from different moments. Stop it with the command for your install, check that it has stopped, then archive both of the service's directories:
 
@@ -72,6 +91,8 @@ If the upgrade added a migration (see the notes), the old version refuses the da
 4. Restore into the now empty places, **with that older binary**: restoring opens the store, which migrates it, so a newer binary would upgrade the restored database again.
    - **an archive from `joedocs backup`** (the older version is 0.3.0 or later): `JOEDOCS backup --restore FILE.tgz`;
    - **an archive from `tar`** (going back to 0.2.x, which has no `backup`): `tar xzf FILE.tgz -C /` (with `sudo` for a system unit).
+
+   For a system unit, the restore runs as the service account. If that account cannot create the directories, create them empty and owned by it first: `sudo install -d -o <User> -m 0700 <storage.state_dir>`, and the same for `<storage.home>` with the mode it had.
 5. Start the service and check it (step 3).
 
 Changes made after the backup are lost, so go back soon or not at all.
