@@ -457,6 +457,14 @@ fn extract_into(file: &Path, state_dir: &Path, content_dir: &Path) -> Result<Man
             .map_err(Error::io("create", &target))?;
         io::copy(&mut entry, &mut out).map_err(Error::io("write", &target))?;
     }
+    // The tar reader stops at the end-of-archive blocks, before the gzip
+    // trailer; reading on to the end makes the decoder check the data's
+    // CRC-32 and length, so a damaged archive is refused.
+    io::copy(&mut archive.into_inner(), &mut io::sink()).map_err(|e| {
+        unsupported(format!(
+            "it is damaged: its gzip checksum or length does not match ({e})"
+        ))
+    })?;
     Ok(manifest)
 }
 

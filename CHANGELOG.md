@@ -15,7 +15,7 @@ Run the admin commands from another machine, protected by an admin token and a T
 - **`joedocs get DOCUMENT_ID`** prints a document, or only its body (`--content-only`) or front matter (`--front-matter-only`), at any revision (`--version N`), to standard output or a file (`-f`).
 - **`joedocs status`** shows where the service runs (bind address, `/health`, the systemd unit and its PID, whether the admin API is on), the sizes of the vault, state directory, database and history, and the state of the store.
 - **`joedocs agents`** prints an AGENTS.md-style guide for AI agents that maintain the server, filled in with this installation's paths and never with a secret.
-- **`joedocs backup FILE.tgz`** writes a consistent backup (database, history and vault) while the server runs, and **`joedocs backup --restore`** restores one into empty directories, refusing unsafe archive entries.
+- **`joedocs backup FILE.tgz`** writes a consistent backup (database, history and vault) while the server runs, and **`joedocs backup --restore`** restores one into empty directories, refusing damaged archives and unsafe entries.
 - **[docs/upgrading.md](docs/upgrading.md)**: backing up, upgrading each kind of install, checking, going back, and notes for each version.
 - Exit code `77` (admin credentials refused); `69` now also means the `client.server` cannot be reached.
 - The secret scan recognises admin and session tokens (`jda_...`, `jds_...`).

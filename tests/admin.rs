@@ -1234,3 +1234,41 @@ fn a_restore_that_cannot_open_the_store_leaves_its_targets_as_they_were() {
     assert!(kept.join("state/joedocs.db").is_file());
     assert!(kept.join("vault/stray.md").is_file());
 }
+
+#[test]
+fn restore_refuses_an_archive_whose_gzip_checksum_or_length_is_wrong() {
+    let root = TempDir::new().unwrap();
+    populated(root.path());
+    let good = root.path().join("good.tgz");
+    cmd(root.path())
+        .args(["backup", good.to_str().unwrap()])
+        .assert()
+        .success();
+    let bytes = std::fs::read(&good).unwrap();
+    // The gzip trailer is the CRC-32 of the data, then its length.
+    let trailer = bytes.len() - 8;
+    let mut bad_crc = bytes.clone();
+    bad_crc[trailer] ^= 0xff;
+    let mut bad_length = bytes.clone();
+    bad_length[trailer + 4] ^= 0xff;
+    let truncated = bytes[..trailer].to_vec();
+
+    for (index, damaged) in [bad_crc, bad_length, truncated].into_iter().enumerate() {
+        let file = root.path().join(format!("damaged{index}.tgz"));
+        std::fs::write(&file, damaged).unwrap();
+        let target = root.path().join(format!("r{index}"));
+        cmd(root.path())
+            .args(["backup", "--restore", "--state-dir"])
+            .arg(target.join("state"))
+            .arg("--content-dir")
+            .arg(target.join("vault"))
+            .arg(&file)
+            .assert()
+            .code(65)
+            .stderr(predicate::str::contains("damaged"));
+        assert!(
+            !target.join("state").exists() && !target.join("vault").exists(),
+            "damaged{index} left files behind"
+        );
+    }
+}
