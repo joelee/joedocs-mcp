@@ -246,7 +246,7 @@ Server keys come first in a fixed order, then custom keys in the order they were
 | 3 | `0003_search` | the search index |
 | 4 | `0004_admin` (0.3.0) | admin tokens, with their TOTP secrets, and admin sessions |
 
-Only SHA-256 hashes of API keys, admin tokens and session tokens are stored. TOTP secrets are stored as they are, because checking a code needs them: keep the database and backups private.
+Only SHA-256 hashes of API keys, admin tokens and session tokens are stored. TOTP secrets are stored as they are, because checking a code needs them, so the state directory is kept private: `init` creates it with mode `0700`, and the database and its `-wal` and `-shm` files are `0600`. Every start (and `init`) tightens a state directory or database that group or other can read, logging each change; if it cannot (for example, the files belong to another account), it logs the `chmod` to run and carries on. The vault keeps its own permissions.
 
 ### Backups
 
@@ -259,7 +259,7 @@ Only SHA-256 hashes of API keys, admin tokens and session tokens are stored. TOT
 | `state/history.git/` | The history repository. |
 | `content/` | Every regular file and directory of the vault, including `INDEX.md` files and dot folders such as `.obsidian`. Symlinks are left out and reported. |
 
-The lock file is not included. The snapshot is taken under the write lock, so it never holds half of a change. `joedocs backup --restore` reads the same format.
+The lock file is not included. The snapshot is taken under the write lock, so it never holds half of a change, and is staged in a `0700` directory inside the state directory before it is compressed. `joedocs backup --restore` reads the same format and creates the state directory `0700`.
 
 ### History
 

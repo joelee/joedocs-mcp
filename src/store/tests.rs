@@ -1426,3 +1426,63 @@ fn sessions_expire_belong_to_their_token_and_end_with_it() {
         Err(Error::NotFound(_))
     ));
 }
+
+// --- State permissions (JD-10 STEP-01) ----------------------------------------
+
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[test]
+fn a_new_store_keeps_its_state_private() {
+    let fx = fixture();
+    assert_eq!(mode_of(&fx.paths.state_dir), 0o700);
+    for name in ["joedocs.db", "joedocs.db-wal", "joedocs.db-shm"] {
+        let path = fx.paths.state_dir.join(name);
+        if path.exists() {
+            assert_eq!(mode_of(&path), 0o600, "{name}");
+        }
+    }
+}
+
+#[test]
+fn opening_an_existing_store_tightens_readable_state() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fx = fixture();
+    fs::set_permissions(&fx.paths.state_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(fx.paths.db(), fs::Permissions::from_mode(0o644)).unwrap();
+    let logs = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let sink = std::sync::Arc::clone(&logs);
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || Sink(std::sync::Arc::clone(&sink)))
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        let reopened = Store::open(
+            fx.paths.clone(),
+            Settings::from_config(&Config::default()),
+            Box::new(git_for(&fx.paths)),
+            Arc::new(FixedClock::at(1_793_000_000)),
+        );
+        assert!(reopened.is_ok());
+    });
+    assert_eq!(mode_of(&fx.paths.state_dir), 0o700);
+    assert_eq!(mode_of(&fx.paths.db()), 0o600);
+    let text = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("made") && text.contains("private"), "{text}");
+}
+
+/// A log writer into a shared buffer.
+struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(mut logs) = self.0.lock() {
+            logs.extend_from_slice(buf);
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}

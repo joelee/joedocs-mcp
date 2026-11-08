@@ -34,6 +34,11 @@ impl Store {
         let db_copy = state.join("joedocs.db");
         self.conn
             .execute("VACUUM INTO ?1", [db_copy.to_string_lossy().as_ref()])?;
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&db_copy, fs::Permissions::from_mode(0o600))
+                .map_err(Error::io("protect", &db_copy))?;
+        }
         let mut skipped_links = Vec::new();
         copy_tree(
             &self.paths.git_dir(),

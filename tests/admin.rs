@@ -835,6 +835,16 @@ fn restore_round_trips_a_backup_into_empty_directories() {
         .arg("check")
         .assert()
         .success();
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode(&state),
+            0o700,
+            "the restored state directory is private"
+        );
+        assert_eq!(mode(&state.join("joedocs.db")), 0o600);
+    }
     let original = cmd(root.path()).args(["get", "JD-1"]).assert().success();
     cmd_at(root.path(), &home, &state)
         .args(["get", "JD-1"])

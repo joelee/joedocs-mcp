@@ -15,7 +15,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read as _, Write};
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -255,7 +255,10 @@ impl Staging {
         if dir.exists() {
             fs::remove_dir_all(&dir).map_err(Error::io("remove", &dir))?;
         }
-        fs::create_dir(&dir).map_err(Error::io("create", &dir))?;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&dir)
+            .map_err(Error::io("create", &dir))?;
         Ok(Self(dir))
     }
 }
@@ -280,7 +283,10 @@ impl Drop for Staging {
 ///
 /// Returns [`Error::NotEmpty`], [`Error::Unsupported`] and I/O errors.
 pub fn extract(file: &Path, state_dir: &Path, content_dir: &Path) -> Result<Manifest, Error> {
-    let targets = [Target::prepare(state_dir)?, Target::prepare(content_dir)?];
+    let targets = [
+        Target::prepare(state_dir, true)?,
+        Target::prepare(content_dir, false)?,
+    ];
     let result = extract_into(file, state_dir, content_dir);
     if result.is_err() {
         for target in &targets {
@@ -371,7 +377,7 @@ struct Target {
 }
 
 impl Target {
-    fn prepare(path: &Path) -> Result<Self, Error> {
+    fn prepare(path: &Path, private: bool) -> Result<Self, Error> {
         match fs::read_dir(path) {
             Ok(mut entries) => {
                 if entries.next().is_some() {
@@ -383,7 +389,12 @@ impl Target {
                 })
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                fs::create_dir_all(path).map_err(Error::io("create", path))?;
+                let mode = if private { 0o700 } else { 0o755 };
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(mode)
+                    .create(path)
+                    .map_err(Error::io("create", path))?;
                 Ok(Self {
                     path: path.to_path_buf(),
                     created: true,
@@ -407,5 +418,27 @@ impl Target {
                 };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::*;
+
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path).map_or(0, |m| m.permissions().mode() & 0o777)
+    }
+
+    #[test]
+    fn staging_and_restored_state_are_private_from_the_start() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let staging = Staging::new(dir.path()).unwrap();
+        assert_eq!(mode(&staging.0), 0o700);
+        let state = dir.path().join("restored/state");
+        let target = Target::prepare(&state, true).unwrap();
+        assert!(target.created);
+        assert_eq!(mode(&state), 0o700);
     }
 }

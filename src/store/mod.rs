@@ -383,6 +383,58 @@ impl Drop for WriteLock {
     }
 }
 
+/// Creates `dir` (and missing parents) with mode `0700`, so no other
+/// account can read the database or the admin TOTP secrets in it.
+fn create_private_dir(dir: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(Error::io("create", dir))
+}
+
+/// Makes the state directory `0700` and the database files `0600` when
+/// group or other can access them. Existing installs predate the rule, so
+/// each change is logged (`quiet` only for files this run just created). A
+/// change that fails is logged with the fix, and the store still opens.
+fn protect_state(paths: &Paths, quiet: bool) {
+    let files = ["joedocs.db", "joedocs.db-wal", "joedocs.db-shm"]
+        .map(|name| (paths.state_dir.join(name), 0o600));
+    for (path, private) in std::iter::once((paths.state_dir.clone(), 0o700)).chain(files) {
+        make_private(&path, private, quiet);
+    }
+}
+
+fn make_private(path: &Path, private: u32, quiet: bool) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let Ok(meta) = fs::metadata(path) else {
+        return;
+    };
+    let mode = meta.permissions().mode() & 0o777;
+    if mode.trailing_zeros() >= 6 {
+        return;
+    }
+    match fs::set_permissions(path, fs::Permissions::from_mode(private)) {
+        Ok(()) if quiet => {
+            tracing::debug!(path = %path.display(), "made private");
+        }
+        Ok(()) => tracing::warn!(
+            path = %path.display(),
+            old_mode = format!("{mode:o}"),
+            "made {} private: it holds API key hashes and admin TOTP secrets",
+            path.display()
+        ),
+        Err(error) => tracing::warn!(
+            path = %path.display(),
+            %error,
+            "{} is readable by other accounts; fix it with: chmod {private:o} '{}'",
+            path.display(),
+            path.display()
+        ),
+    }
+}
+
 fn lock(paths: &Paths) -> Result<WriteLock, Error> {
     let path = paths.lock_file();
     let lock_error = |source| Error::Lock {
@@ -409,7 +461,7 @@ impl Store {
     /// Returns [`Error::HomeNotEmpty`] when the vault directory already has
     /// files but no history, and I/O, database or history errors.
     pub fn init(paths: &Paths, history: &dyn History) -> Result<InitOutcome, Error> {
-        fs::create_dir_all(&paths.state_dir).map_err(Error::io("create", &paths.state_dir))?;
+        create_private_dir(&paths.state_dir)?;
         let _lock = lock(paths)?;
         let existed = history.exists() && paths.db().is_file();
         if !history.exists() && has_entries(&paths.home)? {
@@ -419,6 +471,7 @@ impl Store {
         history.init()?;
         index_file::exclude_from_history(&paths.git_dir())?;
         let conn = db::open(&paths.db())?;
+        protect_state(paths, !existed);
         if history.head()?.is_none() {
             // An empty history needs no rebuild.
             db::set_index_format(&conn)?;
@@ -446,6 +499,7 @@ impl Store {
             return Err(Error::NotInitialised(paths.state_dir));
         }
         let conn = db::open(&paths.db())?;
+        protect_state(&paths, false);
         // Older installs predate the rule; it only tidies `git status`.
         if let Err(error) = index_file::exclude_from_history(&paths.git_dir()) {
             tracing::warn!(%error, "could not add INDEX.md to the history's exclude file");
