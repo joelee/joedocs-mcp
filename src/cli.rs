@@ -121,7 +121,8 @@ pub enum Command {
     },
     /// End the admin session with the server and forget it.
     Logout,
-    /// Print a document: its front matter and body, or one of them.
+    /// Print a document: its front matter and body, or one of them. For a
+    /// multi-file document, the main file and a list of its other files.
     Get {
         /// Document ID, e.g. JD-42.
         document_id: String,
@@ -137,6 +138,18 @@ pub enum Command {
         /// Write to this file (replacing it) instead of standard output.
         #[arg(short = 'f', long, value_name = "PATH")]
         file: Option<PathBuf>,
+        /// Print this file of a multi-file document (its path in the folder,
+        /// e.g. backlog/item-1) instead of the main file.
+        #[arg(long, value_name = "FILE")]
+        part: Option<String>,
+        /// Write the whole multi-file document (every file, paths relative
+        /// to its folder) to this `.tgz` file, replacing it.
+        #[arg(
+            long,
+            value_name = "OUT.tgz",
+            conflicts_with_all = ["file", "part", "content_only", "front_matter_only"]
+        )]
+        archive: Option<PathBuf>,
     },
 }
 
@@ -472,8 +485,22 @@ mod tests {
                 content_only: false,
                 front_matter_only: false,
                 file: Some(PathBuf::from("x.md")),
+                part: None,
+                archive: None,
             }
         );
+        let cli = Cli::try_parse_from(["app", "get", "JD-4", "--part", "backlog/a"]).unwrap();
+        assert!(matches!(cli.command, Command::Get { part: Some(ref p), .. } if p == "backlog/a"));
+        for conflict in [
+            vec!["--archive", "x.tgz", "-f", "y.md"],
+            vec!["--archive", "x.tgz", "--part", "a"],
+            vec!["--archive", "x.tgz", "--content-only"],
+            vec!["--archive", "x.tgz", "--front-matter-only"],
+        ] {
+            let mut args = vec!["app", "get", "JD-4"];
+            args.extend(conflict);
+            assert!(Cli::try_parse_from(&args).is_err(), "{args:?}");
+        }
         let cli = Cli::try_parse_from(["app", "get", "JD-4", "--front-matter-only"]).unwrap();
         assert!(matches!(
             cli.command,

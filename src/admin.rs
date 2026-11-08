@@ -311,6 +311,149 @@ pub fn fetch(store: &Store, id: &str, version: Option<u64>) -> Result<String, Er
     }
 }
 
+/// One file of a multi-file document, as `joedocs get` lists it after the
+/// main file (and as the admin API sends it).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ListedFile {
+    /// Path inside the document's folder, without `.md`.
+    pub file: String,
+    /// The document revision at which it last changed.
+    pub revision: u64,
+    /// When it last changed.
+    pub updated: String,
+}
+
+/// The files of document `id` besides its main file, at `version`; `None`
+/// for a single-file document.
+///
+/// # Errors
+///
+/// Returns [`Error::Archived`] for an archived document, and store errors.
+pub fn other_files(
+    store: &Store,
+    id: &str,
+    version: Option<u64>,
+) -> Result<Option<Vec<ListedFile>>, Error> {
+    let info = store.document_info(id).map_err(archived)?;
+    if !info.multifile {
+        return Ok(None);
+    }
+    let files = store
+        .list_files(id, version)
+        .map_err(archived)?
+        .into_iter()
+        .filter(|f| !f.main)
+        .map(|f| ListedFile {
+            file: f.file,
+            revision: f.revision,
+            updated: f.updated,
+        })
+        .collect();
+    Ok(Some(files))
+}
+
+fn archived(error: crate::store::Error) -> Error {
+    match error {
+        crate::store::Error::Archived(id) => Error::Archived(id),
+        other => other.into(),
+    }
+}
+
+/// Writes the list of a multi-file document's other files, after its main
+/// file, under a separating line.
+///
+/// # Errors
+///
+/// Returns [`Error::Output`].
+pub fn write_file_list(id: &str, files: &[ListedFile], out: &mut dyn Write) -> Result<(), Error> {
+    writeln!(out, "\n--- Other files of {id} ---")?;
+    if files.is_empty() {
+        writeln!(out, "No other files.")?;
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = files
+        .iter()
+        .map(|f| vec![f.file.clone(), f.revision.to_string(), f.updated.clone()])
+        .collect();
+    write_table(out, &["FILE", "REVISION", "UPDATED"], &rows)
+}
+
+/// The whole Markdown of one file of a multi-file document, or of one of
+/// its revisions.
+///
+/// # Errors
+///
+/// Returns [`Error::Archived`] for an archived document, and store errors.
+pub fn fetch_file(
+    store: &Store,
+    id: &str,
+    file: &str,
+    version: Option<u64>,
+) -> Result<String, Error> {
+    Ok(store
+        .get_file(id, file, version)
+        .map_err(archived)?
+        .markdown)
+}
+
+/// A gzip tar of every file of multi-file document `id` at `version` (the
+/// latest when `None`), with paths relative to its folder.
+///
+/// # Errors
+///
+/// Returns a store [`crate::store::Error::Invalid`] for a single-file
+/// document, [`Error::Archived`], and store errors.
+pub fn folder_archive(store: &Store, id: &str, version: Option<u64>) -> Result<Vec<u8>, Error> {
+    let info = store.document_info(id).map_err(archived)?;
+    if !info.multifile {
+        return Err(crate::store::Error::invalid(
+            "archive",
+            format!("{} is a single-file document; use -f to save it", info.id),
+        )
+        .into());
+    }
+    let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut tar = tar::Builder::new(encoder);
+    for file in store.list_files(id, version).map_err(archived)? {
+        let markdown = if file.main {
+            store.get(id, version).map_err(archived)?.markdown
+        } else {
+            fetch_file(store, id, &file.file, version)?
+        };
+        let mut header = tar::Header::new_gnu();
+        header.set_size(markdown.len() as u64);
+        header.set_mode(0o644);
+        let at = file
+            .updated
+            .parse::<jiff::Timestamp>()
+            .map_or(0, |t| u64::try_from(t.as_second()).unwrap_or(0));
+        header.set_mtime(at);
+        header.set_cksum();
+        tar.append_data(
+            &mut header,
+            format!("{}.md", file.file),
+            markdown.as_bytes(),
+        )
+        .map_err(Error::Output)?;
+    }
+    let encoder = tar.into_inner().map_err(Error::Output)?;
+    encoder.finish().map_err(Error::Output)
+}
+
+/// Checks that `bytes` is a gzip tar, as [`folder_archive`] writes.
+///
+/// # Errors
+///
+/// Returns a description of what is wrong.
+pub fn check_folder_archive(bytes: &[u8]) -> Result<(), String> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+    let entries = archive.entries().map_err(|e| e.to_string())?;
+    for entry in entries {
+        entry.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Writes `part` of `markdown` to `file` (replacing it atomically) or, when
 /// there is no file, to `out`.
 ///

@@ -305,6 +305,9 @@ pub struct TextReply {
 pub struct DocumentReply {
     /// The whole document, as `get_document` returns it.
     pub markdown: String,
+    /// For a multi-file document, its other files.
+    #[serde(default)]
+    pub files: Option<Vec<crate::admin::ListedFile>>,
 }
 
 impl Reply {

@@ -691,6 +691,31 @@ fn grants(body: &Value) -> Result<Vec<crate::auth::Grant>, ApiError> {
 }
 
 /// A query parameter from `uri`.
+/// `text` with `%XX` escapes decoded (as UTF-8, lossily).
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        match (
+            bytes[i],
+            bytes.get(i + 1).copied().and_then(hex),
+            bytes.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(high), Some(low)) => {
+                out.push(u8::try_from(high * 16 + low).unwrap_or(b'?'));
+                i += 3;
+            }
+            (byte, _, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn query(uri: &axum::http::Uri, name: &str) -> Option<String> {
     uri.query()?.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=')?;
@@ -844,8 +869,29 @@ async fn document(state: Arc<ApiState>, call: Call, id: String, uri: axum::http:
             })?),
             None => None,
         };
+        if query(&uri, "archive").as_deref() == Some("true") {
+            let bytes =
+                crate::admin::folder_archive(store, &id, version).map_err(|e| from_crate(&e))?;
+            let mut response = bytes.into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/gzip"),
+            );
+            return Ok(response);
+        }
+        if let Some(part) = query(&uri, "part") {
+            let part = percent_decode(&part);
+            let markdown =
+                crate::admin::fetch_file(store, &id, &part, version).map_err(|e| from_crate(&e))?;
+            return Ok(axum::Json(json!({"markdown": markdown})).into_response());
+        }
         let markdown = crate::admin::fetch(store, &id, version).map_err(|e| from_crate(&e))?;
-        Ok(axum::Json(json!({"markdown": markdown})).into_response())
+        let files = crate::admin::other_files(store, &id, version).map_err(|e| from_crate(&e))?;
+        let reply = match files {
+            Some(files) => json!({"markdown": markdown, "files": files}),
+            None => json!({"markdown": markdown}),
+        };
+        Ok(axum::Json(reply).into_response())
     })
     .await
 }

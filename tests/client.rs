@@ -462,6 +462,46 @@ fn outcome(mut cmd: Command, args: &[&str]) -> std::io::Result<(Option<i32>, Str
     ))
 }
 
+/// `get --archive` writes the same archive locally and remotely.
+fn same_archive(local: &Local, server: &Server) -> std::io::Result<()> {
+    let entries = |path: &Path| -> std::io::Result<Vec<String>> {
+        let mut archive =
+            tar::Archive::new(flate2::read::GzDecoder::new(std::fs::File::open(path)?));
+        archive
+            .entries()?
+            .map(|e| Ok(e?.path()?.to_string_lossy().into_owned()))
+            .collect()
+    };
+    let local_archive = local.dir.path().join("out.tgz");
+    let remote_archive = server.root.path().join("out.tgz");
+    local
+        .cmd()
+        .args([
+            "get",
+            "JD-1",
+            "--archive",
+            local_archive.to_str().unwrap_or_default(),
+        ])
+        .assert()
+        .success()
+        .stdout("");
+    server
+        .cmd()
+        .args([
+            "get",
+            "JD-1",
+            "--archive",
+            remote_archive.to_str().unwrap_or_default(),
+        ])
+        .assert()
+        .success()
+        .stdout("");
+    assert_eq!(mode(&remote_archive), 0o600);
+    assert_eq!(entries(&remote_archive)?, entries(&local_archive)?);
+    assert_eq!(entries(&remote_archive)?, ["Plan.md"]);
+    Ok(())
+}
+
 #[test]
 fn remote_commands_print_what_local_commands_print() {
     let server = Server::start().unwrap();
@@ -506,6 +546,11 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["document", "restore-file", "JD-1", "x", "--version", "1"],
         vec!["document", "restore-file", "JD-1", "x", "--version", "99"],
         vec!["get", "JD-1"],
+        vec!["get", "JD-1", "--content-only"],
+        vec!["get", "JD-1", "--part", "Plan"],
+        vec!["get", "JD-1", "--part", "x y"],
+        vec!["get", "JD-2", "--part", "x"],
+        vec!["get", "JD-2", "--archive", "x.tgz"],
     ];
     for step in &steps {
         let local_run = outcome(local.cmd(), step).unwrap();
@@ -517,6 +562,8 @@ fn remote_commands_print_what_local_commands_print() {
         Some(1),
         "the stray file is a problem"
     );
+
+    same_archive(&local, &server).unwrap();
 
     // -f writes the same file.
     let local_file = local.dir.path().join("out.md");

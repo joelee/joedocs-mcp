@@ -275,10 +275,17 @@ pub fn execute(
             content_only,
             front_matter_only,
             file,
+            part: file_part,
+            archive,
         } => {
-            let part = admin::Part::new(*content_only, *front_matter_only);
-            let markdown = admin::fetch(&open_store(loaded, ctx)?, document_id, *version)?;
-            admin::write_document(&markdown, part, file.as_deref(), out)?;
+            let request = GetRequest {
+                id: document_id,
+                version: *version,
+                part: admin::Part::new(*content_only, *front_matter_only),
+                file_part: file_part.as_deref(),
+                archive: archive.as_deref(),
+            };
+            local_get(&open_store(loaded, ctx)?, &request, file.as_deref(), out)?;
         }
     }
     Ok(())
@@ -546,9 +553,17 @@ fn remote_admin(
             content_only,
             front_matter_only,
             file,
+            part: file_part,
+            archive,
         } => {
-            let part = admin::Part::new(*content_only, *front_matter_only);
-            remote_get(remote, document_id, *version, part, file.as_deref(), out)
+            let request = GetRequest {
+                id: document_id,
+                version: *version,
+                part: admin::Part::new(*content_only, *front_matter_only),
+                file_part: file_part.as_deref(),
+                archive: archive.as_deref(),
+            };
+            remote_get(remote, &request, file.as_deref(), out)
         }
         Command::Backup { file, .. } => remote_backup(remote, file, out),
         // Handled by `run_remote`, or refused by `remote` before it.
@@ -556,22 +571,99 @@ fn remote_admin(
     }
 }
 
-fn remote_get(
-    remote: &client::Remote<'_>,
-    id: &str,
-    version: Option<u64>,
-    part: admin::Part,
+/// `joedocs get` on the local store.
+fn local_get(
+    store: &store::Store,
+    request: &GetRequest<'_>,
     file: Option<&std::path::Path>,
     out: &mut dyn Write,
 ) -> Result<(), Error> {
-    let path = version.map_or_else(
-        || format!("documents/{id}"),
-        |v| format!("documents/{id}?version={v}"),
-    );
+    let id = request.id;
+    if let Some(path) = request.archive {
+        let bytes = admin::folder_archive(store, id, request.version)?;
+        admin::write_atomically(path, &bytes)?;
+    } else if let Some(name) = request.file_part {
+        let markdown = admin::fetch_file(store, id, name, request.version)?;
+        admin::write_document(&markdown, request.part, file, out)?;
+    } else {
+        let markdown = admin::fetch(store, id, request.version)?;
+        admin::write_document(&markdown, request.part, file, out)?;
+        if request.part == admin::Part::Whole
+            && file.is_none()
+            && let Some(files) = admin::other_files(store, id, request.version)?
+        {
+            admin::write_file_list(id.trim(), &files, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// What `joedocs get` asks for.
+struct GetRequest<'a> {
+    id: &'a str,
+    version: Option<u64>,
+    part: admin::Part,
+    file_part: Option<&'a str>,
+    archive: Option<&'a std::path::Path>,
+}
+
+fn remote_get(
+    remote: &client::Remote<'_>,
+    request: &GetRequest<'_>,
+    file: Option<&std::path::Path>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let mut query = Vec::new();
+    if let Some(version) = request.version {
+        query.push(format!("version={version}"));
+    }
+    if let Some(name) = request.file_part {
+        query.push(format!("part={}", percent_encode(name)));
+    }
+    if request.archive.is_some() {
+        query.push("archive=true".to_owned());
+    }
+    let path = if query.is_empty() {
+        format!("documents/{}", request.id)
+    } else {
+        format!("documents/{}?{}", request.id, query.join("&"))
+    };
     let reply = remote.call(&reqwest::Method::GET, &path, None)?;
+    if let Some(dest) = request.archive {
+        admin::check_folder_archive(&reply.body).map_err(|e| {
+            client::Error::Protocol(format!(
+                "{} did not send a document archive ({e}); is client.server the JoeDocs server?",
+                remote.server()
+            ))
+        })?;
+        admin::write_atomically(dest, &reply.body)?;
+        return Ok(());
+    }
     let document: client::DocumentReply = remote.parse(&reply, "document reply")?;
-    let markdown = document.markdown;
-    admin::write_document(&markdown, part, file, out)
+    admin::write_document(&document.markdown, request.part, file, out)?;
+    if let Some(files) = document.files
+        && request.part == admin::Part::Whole
+        && file.is_none()
+        && request.file_part.is_none()
+    {
+        admin::write_file_list(request.id.trim(), &files, out)?;
+    }
+    Ok(())
+}
+
+/// `text` with every byte but unreserved characters percent-encoded, for a
+/// query value.
+fn percent_encode(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 fn remote_backup(
