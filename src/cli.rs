@@ -72,10 +72,19 @@ pub enum Command {
     },
     /// Write a backup of the vault, the database and the history to a
     /// `.tgz` file (safe while `serve` runs; the file holds key hashes, so
-    /// keep it private).
+    /// keep it private), or restore one with `--restore`.
     Backup {
-        /// The archive to create; it must not exist yet.
+        /// The archive to create (it must not exist yet), or to restore.
         file: PathBuf,
+        /// Restore `FILE` into empty or absent directories instead.
+        #[arg(long)]
+        restore: bool,
+        /// Where to restore the state directory (default: `storage.state_dir`).
+        #[arg(long, value_name = "PATH", requires = "restore")]
+        state_dir: Option<PathBuf>,
+        /// Where to restore the vault (default: `storage.home`).
+        #[arg(long, value_name = "PATH", requires = "restore")]
+        content_dir: Option<PathBuf>,
     },
     /// Print an AGENTS.md-style guide for AI agents that maintain this
     /// server, filled in with this installation's paths (no secrets).

@@ -166,6 +166,43 @@ pub fn report_backup(
     Ok(())
 }
 
+/// Reports what `joedocs backup --restore` restored, and the settings to
+/// use when it was restored somewhere other than the configured paths.
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails.
+pub fn report_restore(
+    manifest: &crate::backup::Manifest,
+    restored: &Paths,
+    configured: &Paths,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let count = manifest.documents;
+    let noun = if count == 1 { "document" } else { "documents" };
+    writeln!(
+        out,
+        "Restored {count} {noun} from a JoeDocs {} backup taken {}.",
+        manifest.joedocs_version, manifest.created_at
+    )?;
+    writeln!(out, "  vault: {}", restored.home.display())?;
+    writeln!(out, "  state: {}", restored.state_dir.display())?;
+    if restored.home != configured.home || restored.state_dir != configured.state_dir {
+        writeln!(
+            out,
+            "The configuration points elsewhere. To use the restored store, set:"
+        )?;
+        writeln!(out, "  [storage]")?;
+        writeln!(out, "  home = {:?}", restored.home.display().to_string())?;
+        writeln!(
+            out,
+            "  state_dir = {:?}",
+            restored.state_dir.display().to_string()
+        )?;
+    }
+    Ok(())
+}
+
 /// Which part of a document `joedocs get` prints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Part {

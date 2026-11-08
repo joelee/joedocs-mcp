@@ -760,3 +760,278 @@ fn backup_waits_for_a_writer_holding_the_lock() {
     running.join().unwrap();
     assert!(file.exists());
 }
+
+/// A store under `root` with one project, one document and one key; returns
+/// the key's token.
+fn populated(root: &Path) -> String {
+    use joedocs::store::{Actor, NewDocument};
+    cmd(root).arg("init").assert().success();
+    cmd(root)
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let created = cmd(root)
+        .args(["key", "create", "laptop", "--grant", "joedocs:write"])
+        .assert()
+        .success();
+    let token = String::from_utf8(created.get_output().stdout.clone())
+        .unwrap_or_default()
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_owned();
+    if let Ok(mut store) = library_store(root) {
+        let actor = Actor::new("laptop", "test");
+        let _ = store.create(
+            &actor,
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Plan".into(),
+                content: "first\n".into(),
+                ..NewDocument::default()
+            },
+        );
+        let _ = store.append(&actor, "JD-1", "second\n", Some(1), None);
+    }
+    token
+}
+
+/// `cmd` pointed at another vault and state directory.
+fn cmd_at(root: &Path, home: &Path, state: &Path) -> Command {
+    let mut command = cmd(root);
+    command
+        .env("JOEDOCS__STORAGE__HOME", home)
+        .env("JOEDOCS__STORAGE__STATE_DIR", state);
+    command
+}
+
+#[test]
+fn restore_round_trips_a_backup_into_empty_directories() {
+    use secrecy::SecretString;
+    let root = TempDir::new().unwrap();
+    let token = populated(root.path());
+    let file = root.path().join("b.tgz");
+    cmd(root.path())
+        .args(["backup", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let home = root.path().join("restored/vault");
+    let state = root.path().join("restored/state");
+    std::fs::create_dir_all(&home).unwrap(); // empty is fine
+    cmd(root.path())
+        .args(["backup", "--restore", "--content-dir"])
+        .arg(&home)
+        .arg("--state-dir")
+        .arg(&state)
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Restored 1 document"))
+        .stdout(predicate::str::contains("No problems found."))
+        .stdout(predicate::str::contains("state_dir ="));
+
+    cmd_at(root.path(), &home, &state)
+        .arg("check")
+        .assert()
+        .success();
+    let original = cmd(root.path()).args(["get", "JD-1"]).assert().success();
+    cmd_at(root.path(), &home, &state)
+        .args(["get", "JD-1"])
+        .assert()
+        .success()
+        .stdout(String::from_utf8(original.get_output().stdout.clone()).unwrap());
+
+    let before = library_store(root.path())
+        .unwrap()
+        .history("JD-1", 1, 50)
+        .unwrap();
+    let restored = {
+        use std::sync::Arc;
+        let paths = joedocs::store::Paths {
+            home: home.clone(),
+            state_dir: state.clone(),
+        };
+        let git = joedocs::history::GitCli::new(paths.git_dir(), &paths.home);
+        joedocs::store::Store::open(
+            paths,
+            joedocs::store::Settings::from_config(&joedocs::Config::default()),
+            Box::new(git),
+            Arc::new(joedocs::clock::FixedClock::at(1_793_000_000)),
+        )
+        .unwrap()
+    };
+    assert_eq!(restored.history("JD-1", 1, 50).unwrap(), before);
+    let key = restored
+        .authenticate(&SecretString::from(token))
+        .unwrap()
+        .expect("the key still authenticates");
+    assert_eq!(key.name, "laptop");
+}
+
+#[test]
+fn restore_uses_the_configured_paths_and_refuses_non_empty_ones() {
+    let root = TempDir::new().unwrap();
+    populated(root.path());
+    let file = root.path().join("b.tgz");
+    cmd(root.path())
+        .args(["backup", file.to_str().unwrap()])
+        .assert()
+        .success();
+    // The configured store is not empty.
+    cmd(root.path())
+        .args(["backup", "--restore"])
+        .arg(&file)
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("is not empty"));
+    // Configured paths that do not exist yet.
+    let other = TempDir::new().unwrap();
+    cmd_at(
+        root.path(),
+        &other.path().join("vault"),
+        &other.path().join("state"),
+    )
+    .args(["backup", "--restore"])
+    .arg(&file)
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("state_dir =").not());
+    // --state-dir without --restore is a usage error.
+    cmd(root.path())
+        .args(["backup", "--state-dir", "/tmp/x"])
+        .arg(&file)
+        .assert()
+        .code(2);
+}
+
+/// A gzip tar with `manifest` first, then `entry` with raw header fields.
+fn crafted(
+    path: &Path,
+    manifest: &str,
+    name: &[u8],
+    kind: tar::EntryType,
+    link: Option<&str>,
+) -> std::io::Result<()> {
+    let file = std::fs::File::create(path)?;
+    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+        file,
+        flate2::Compression::default(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(manifest.len() as u64);
+    header.set_mode(0o600);
+    header.set_cksum();
+    builder.append_data(&mut header, "manifest.json", manifest.as_bytes())?;
+    let mut header = tar::Header::new_gnu();
+    if let Some(gnu) = header.as_gnu_mut() {
+        gnu.name[..name.len()].copy_from_slice(name);
+    }
+    header.set_entry_type(kind);
+    header.set_mode(0o644);
+    if let Some(link) = link {
+        header.set_link_name(link)?;
+    }
+    let data: &[u8] = if kind == tar::EntryType::Regular {
+        b"x"
+    } else {
+        b""
+    };
+    header.set_size(data.len() as u64);
+    header.set_cksum();
+    builder.append(&header, data)?;
+    builder.into_inner()?.finish()?;
+    Ok(())
+}
+
+/// A manifest, an entry name, its type, its link target, and the expected error text.
+type HostileCase<'a> = (String, &'a [u8], tar::EntryType, Option<&'a str>, &'a str);
+
+#[test]
+fn restore_refuses_unknown_formats_newer_schemas_and_hostile_entries() {
+    let root = TempDir::new().unwrap();
+    let manifest = |format: u32, schema: u32| {
+        format!(
+            r#"{{"format":{format},"joedocs_version":"9.9.9","schema_version":{schema},"created_at":"2026-11-08T00:00:00Z","history_head":null,"documents":0,"vault":"/v","state_dir":"/s"}}"#
+        )
+    };
+    let good = manifest(1, 1);
+    let cases: Vec<HostileCase<'_>> = vec![
+        (
+            manifest(2, 1),
+            b"content/a.md",
+            tar::EntryType::Regular,
+            None,
+            "format 2",
+        ),
+        (
+            manifest(1, 99),
+            b"content/a.md",
+            tar::EntryType::Regular,
+            None,
+            "schema version 99",
+        ),
+        (
+            good.clone(),
+            b"/etc/evil",
+            tar::EntryType::Regular,
+            None,
+            "/etc/evil",
+        ),
+        (
+            good.clone(),
+            b"content/../../evil",
+            tar::EntryType::Regular,
+            None,
+            "content/../../evil",
+        ),
+        (
+            good.clone(),
+            b"elsewhere/a.md",
+            tar::EntryType::Regular,
+            None,
+            "elsewhere/a.md",
+        ),
+        (
+            good.clone(),
+            b"content/link",
+            tar::EntryType::Symlink,
+            Some("/etc/passwd"),
+            "content/link",
+        ),
+        (
+            good.clone(),
+            b"content/hard",
+            tar::EntryType::Link,
+            Some("content/a.md"),
+            "content/hard",
+        ),
+        (
+            good.clone(),
+            b"content/dev",
+            tar::EntryType::Char,
+            None,
+            "content/dev",
+        ),
+    ];
+    for (index, (manifest, name, kind, link, expected)) in cases.into_iter().enumerate() {
+        let file = root.path().join(format!("bad{index}.tgz"));
+        crafted(&file, &manifest, name, kind, link).unwrap();
+        let home = root.path().join(format!("r{index}/vault"));
+        let state = root.path().join(format!("r{index}/state"));
+        cmd(root.path())
+            .args(["backup", "--restore", "--content-dir"])
+            .arg(&home)
+            .arg("--state-dir")
+            .arg(&state)
+            .arg(&file)
+            .assert()
+            .code(65)
+            .stderr(predicate::str::contains(expected));
+        for dir in [&home, &state] {
+            let empty = std::fs::read_dir(dir).map_or(true, |mut d| d.next().is_none());
+            assert!(empty, "{} left files behind for {expected}", dir.display());
+        }
+        assert!(!root.path().join("evil").exists());
+    }
+}

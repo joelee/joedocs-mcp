@@ -14,9 +14,9 @@
 //! written with mode 0600 and must be kept private.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read as _, Write};
 use std::os::unix::fs::OpenOptionsExt as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +66,17 @@ pub enum Error {
         /// Cause.
         source: io::Error,
     },
+    /// A restore target holds files.
+    #[error("{0} is not empty; restore needs empty or absent directories")]
+    NotEmpty(PathBuf),
+    /// The archive is not one this build can restore.
+    #[error("cannot restore {file}: {reason}")]
+    Unsupported {
+        /// The archive.
+        file: PathBuf,
+        /// Why.
+        reason: String,
+    },
     /// The store failed.
     #[error(transparent)]
     Store(#[from] store::Error),
@@ -76,7 +87,7 @@ impl Error {
     #[must_use]
     pub fn is_user_error(&self) -> bool {
         match self {
-            Self::Exists(_) => true,
+            Self::Exists(_) | Self::NotEmpty(_) | Self::Unsupported { .. } => true,
             Self::Io { .. } => false,
             Self::Store(error) => error.is_user_error(),
         }
@@ -226,6 +237,148 @@ impl Drop for Staging {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_dir_all(&self.0) {
             tracing::warn!(path = %self.0.display(), %error, "cannot remove the backup staging directory");
+        }
+    }
+}
+
+/// Extracts the backup `file` into `state_dir` and `content_dir`, which must
+/// be empty or absent. On any failure the targets are emptied again (and
+/// removed when this created them). Returns the archive's manifest.
+///
+/// Only regular files and directories under `state/` and `content/` are
+/// accepted; absolute paths, `..`, links and devices are refused before
+/// anything is written for them.
+///
+/// # Errors
+///
+/// Returns [`Error::NotEmpty`], [`Error::Unsupported`] and I/O errors.
+pub fn extract(file: &Path, state_dir: &Path, content_dir: &Path) -> Result<Manifest, Error> {
+    let targets = [Target::prepare(state_dir)?, Target::prepare(content_dir)?];
+    let result = extract_into(file, state_dir, content_dir);
+    if result.is_err() {
+        for target in &targets {
+            target.undo();
+        }
+    }
+    result
+}
+
+fn extract_into(file: &Path, state_dir: &Path, content_dir: &Path) -> Result<Manifest, Error> {
+    let unsupported = |reason: String| Error::Unsupported {
+        file: file.to_path_buf(),
+        reason,
+    };
+    let archive_file = File::open(file).map_err(Error::io("read", file))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(archive_file));
+    let mut entries = archive
+        .entries()
+        .map_err(|e| unsupported(format!("not a gzip tar archive ({e})")))?;
+    let manifest = match entries.next() {
+        Some(Ok(mut entry)) if entry.path().is_ok_and(|p| p == Path::new(MANIFEST)) => {
+            let mut text = String::new();
+            entry
+                .read_to_string(&mut text)
+                .map_err(|e| unsupported(format!("unreadable {MANIFEST} ({e})")))?;
+            serde_json::from_str::<Manifest>(&text)
+                .map_err(|e| unsupported(format!("invalid {MANIFEST} ({e})")))?
+        }
+        _ => return Err(unsupported(format!("it does not start with {MANIFEST}"))),
+    };
+    if manifest.format != FORMAT {
+        return Err(unsupported(format!(
+            "it is backup format {}, and this build reads format {FORMAT}",
+            manifest.format
+        )));
+    }
+    if manifest.schema_version > crate::db::SCHEMA_VERSION {
+        return Err(unsupported(format!(
+            "it holds database schema version {}, newer than this build supports ({}); install a newer JoeDocs",
+            manifest.schema_version,
+            crate::db::SCHEMA_VERSION
+        )));
+    }
+    for entry in entries {
+        let mut entry = entry.map_err(|e| unsupported(format!("unreadable entry ({e})")))?;
+        let raw = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
+        let refuse = |why: &str| unsupported(format!("refusing the entry {raw}: {why}"));
+        let kind = entry.header().entry_type();
+        if !(kind.is_file() || kind.is_dir()) {
+            return Err(refuse("only regular files and directories are restored"));
+        }
+        let relative = Path::new(&raw);
+        if !relative
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+        {
+            return Err(refuse("absolute paths and `..` are not allowed"));
+        }
+        let mut parts = relative.components();
+        let root = match parts.next() {
+            Some(Component::Normal(first)) if first == "state" => state_dir,
+            Some(Component::Normal(first)) if first == "content" => content_dir,
+            _ => return Err(refuse("entries must be under state/ or content/")),
+        };
+        let target = root.join(parts.as_path());
+        if kind.is_dir() {
+            fs::create_dir_all(&target).map_err(Error::io("create", &target))?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(Error::io("create", parent))?;
+        }
+        let mut out = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&target)
+            .map_err(Error::io("create", &target))?;
+        io::copy(&mut entry, &mut out).map_err(Error::io("write", &target))?;
+    }
+    Ok(manifest)
+}
+
+/// A restore target, and whether this run created it.
+struct Target {
+    path: PathBuf,
+    created: bool,
+}
+
+impl Target {
+    fn prepare(path: &Path) -> Result<Self, Error> {
+        match fs::read_dir(path) {
+            Ok(mut entries) => {
+                if entries.next().is_some() {
+                    return Err(Error::NotEmpty(path.to_path_buf()));
+                }
+                Ok(Self {
+                    path: path.to_path_buf(),
+                    created: false,
+                })
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                fs::create_dir_all(path).map_err(Error::io("create", path))?;
+                Ok(Self {
+                    path: path.to_path_buf(),
+                    created: true,
+                })
+            }
+            Err(error) => Err(Error::io("read", path)(error)),
+        }
+    }
+
+    /// Removes what was extracted.
+    fn undo(&self) {
+        if self.created {
+            let _ = fs::remove_dir_all(&self.path);
+        } else if let Ok(entries) = fs::read_dir(&self.path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let _ = if path.is_dir() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                };
+            }
         }
     }
 }

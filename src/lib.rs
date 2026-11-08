@@ -220,11 +220,28 @@ pub fn execute(
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
         Command::Agents => agents::run(loaded, ctx, out)?,
-        Command::Backup { file } => {
+        Command::Backup {
+            file,
+            restore: false,
+            ..
+        } => {
             let store = open_store(loaded, ctx)?;
             let created = backup::create(&store, ctx.clock.as_ref(), file)?;
             admin::report_backup(file, &created, out)?;
         }
+        Command::Backup {
+            file,
+            restore: true,
+            state_dir,
+            content_dir,
+        } => restore(
+            file,
+            state_dir.as_deref(),
+            content_dir.as_deref(),
+            loaded,
+            ctx,
+            out,
+        )?,
         Command::Status => {
             let store = open_store(loaded, ctx)?;
             let report = status::collect(&store, loaded, ctx.services)?;
@@ -249,6 +266,42 @@ pub fn execute(
         }
     }
     Ok(())
+}
+
+/// Runs `joedocs backup --restore`: extracts the archive into empty or
+/// absent directories (the configured ones by default), opens the restored
+/// store, which migrates an older database, and checks it.
+///
+/// # Errors
+///
+/// Returns backup, store and output errors, and [`Error::Problems`] when the
+/// restored store does not pass `check`.
+pub fn restore(
+    file: &std::path::Path,
+    state_dir: Option<&std::path::Path>,
+    content_dir: Option<&std::path::Path>,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let configured = Paths::from_config(loaded.config(), &ctx.app, ctx.env)?;
+    let paths = Paths {
+        home: content_dir.map_or_else(|| configured.home.clone(), std::path::Path::to_path_buf),
+        state_dir: state_dir.map_or_else(
+            || configured.state_dir.clone(),
+            std::path::Path::to_path_buf,
+        ),
+    };
+    let manifest = backup::extract(file, &paths.state_dir, &paths.home)?;
+    let history = GitCli::new(paths.git_dir(), &paths.home);
+    let store = Store::open(
+        paths.clone(),
+        Settings::from_config(loaded.config()),
+        Box::new(history),
+        Arc::clone(&ctx.clock),
+    )?;
+    admin::report_restore(&manifest, &paths, &configured, out)?;
+    admin::check(&store, out)
 }
 
 /// Rebuilds the index when it is behind the history (an interrupted write,
