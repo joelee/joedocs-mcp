@@ -133,6 +133,75 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// The command's name, e.g. `login` or `key create`, for logs. It never
+    /// includes arguments, which can hold a TOTP code.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Config {
+                command: ConfigCommand::Show,
+            } => "config show",
+            Self::Config {
+                command: ConfigCommand::Paths,
+            } => "config paths",
+            Self::Init => "init",
+            Self::Serve => "serve",
+            Self::Reindex => "reindex",
+            Self::Systemd {
+                command: SystemdCommand::Install { .. },
+            } => "systemd install",
+            Self::Systemd {
+                command: SystemdCommand::Remove { .. },
+            } => "systemd remove",
+            Self::Archive {
+                command: ArchiveCommand::List { .. },
+            } => "archive list",
+            Self::Archive {
+                command: ArchiveCommand::Restore { .. },
+            } => "archive restore",
+            Self::Check => "check",
+            Self::Project {
+                command: ProjectCommand::Add { .. },
+            } => "project add",
+            Self::Project {
+                command: ProjectCommand::List,
+            } => "project list",
+            Self::Key {
+                command: KeyCommand::Create { .. },
+            } => "key create",
+            Self::Key {
+                command: KeyCommand::List,
+            } => "key list",
+            Self::Key {
+                command: KeyCommand::Grant { .. },
+            } => "key grant",
+            Self::Key {
+                command: KeyCommand::Rotate { .. },
+            } => "key rotate",
+            Self::Key {
+                command: KeyCommand::Revoke { .. },
+            } => "key revoke",
+            Self::AdminToken {
+                command: AdminTokenCommand::Create { .. },
+            } => "admin-token create",
+            Self::AdminToken {
+                command: AdminTokenCommand::List,
+            } => "admin-token list",
+            Self::AdminToken {
+                command: AdminTokenCommand::Revoke { .. },
+            } => "admin-token revoke",
+            Self::Login { .. } => "login",
+            Self::Logout => "logout",
+            Self::Status => "status",
+            Self::Agents => "agents",
+            Self::Backup { restore: false, .. } => "backup",
+            Self::Backup { restore: true, .. } => "backup --restore",
+            Self::Get { .. } => "get",
+        }
+    }
+}
+
 /// `project` subcommands.
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum ProjectCommand {

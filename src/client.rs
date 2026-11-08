@@ -23,6 +23,9 @@ use crate::mcp::SESSION_HEADER;
 /// Exit code when the admin API refuses the credentials (`EX_NOPERM`).
 pub const EXIT_NOPERM: u8 = 77;
 
+/// How long a call may wait for the next bytes from the server.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Code prompts allowed for one re-login.
 const ATTEMPTS: usize = 3;
 
@@ -273,8 +276,35 @@ impl Sessions {
 pub struct Reply {
     /// The HTTP status.
     pub status: u16,
+    /// The `Location` of a redirect, if any.
+    pub location: Option<String>,
     /// The body.
     pub body: Vec<u8>,
+}
+
+/// The reply to `POST /admin/v1/session`.
+#[derive(Deserialize)]
+struct LoginReply {
+    session: String,
+    expires_at: String,
+    name: String,
+}
+
+/// The reply of a text command: what the command printed on the server.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TextReply {
+    /// The command's output.
+    pub output: String,
+    /// `check` problems (exit `1` when not `0`).
+    #[serde(default)]
+    pub problems: u64,
+}
+
+/// The reply to `GET /admin/v1/documents/{id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DocumentReply {
+    /// The whole document, as `get_document` returns it.
+    pub markdown: String,
 }
 
 impl Reply {
@@ -311,6 +341,15 @@ impl Reply {
     pub fn into_result(self) -> Result<Self, Error> {
         if (200..300).contains(&self.status) {
             return Ok(self);
+        }
+        if (300..400).contains(&self.status) {
+            // Never followed: a redirect could carry the session or a code
+            // to another origin, or down to plain HTTP.
+            return Err(Error::Protocol(format!(
+                "the server answered with a redirect (HTTP {}) to {}; set client.server to the final URL",
+                self.status,
+                self.location.as_deref().unwrap_or("an unknown location")
+            )));
         }
         let message = self.error_message();
         match (self.status, self.error_code()) {
@@ -352,6 +391,23 @@ impl<'a> Remote<'a> {
         env: &dyn Env,
         prompt: &'a dyn Prompt,
     ) -> Result<Self, Error> {
+        Self::with_timeout(server, token, env, prompt, READ_TIMEOUT)
+    }
+
+    /// Like [`Remote::new`], giving up when the server sends nothing for
+    /// `read_timeout` (between any two reads, so a long download that keeps
+    /// coming is not cut off).
+    ///
+    /// # Errors
+    ///
+    /// As [`Remote::new`].
+    pub fn with_timeout(
+        server: &str,
+        token: Option<&SecretString>,
+        env: &dyn Env,
+        prompt: &'a dyn Prompt,
+        read_timeout: Duration,
+    ) -> Result<Self, Error> {
         let token = token.cloned().ok_or_else(|| {
             Error::Auth(
                 "set JOEDOCS_ADMIN_TOKEN to your admin token (printed once by `joedocs admin-token create` on the server)"
@@ -364,6 +420,8 @@ impl<'a> Remote<'a> {
         let http = reqwest::Client::builder()
             .user_agent(concat!("joedocs-cli/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(15))
+            .read_timeout(read_timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| Error::Protocol(e.to_string()))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -427,8 +485,13 @@ impl<'a> Remote<'a> {
         self.runtime.block_on(async {
             let response = request.send().await.map_err(unreachable)?;
             let status = response.status().as_u16();
+            let location = location(&response);
             let body = response.bytes().await.map_err(unreachable)?.to_vec();
-            Ok(Reply { status, body })
+            Ok(Reply {
+                status,
+                location,
+                body,
+            })
         })
     }
 
@@ -453,18 +516,32 @@ impl<'a> Remote<'a> {
             None,
             Some(&json!({"code": code})),
         )?;
-        let json = reply.clone().into_result()?.json();
-        let (Some(token), Some(expires_at)) =
-            (json["session"].as_str(), json["expires_at"].as_str())
-        else {
-            return Err(Error::Protocol("the login reply has no session".into()));
-        };
+        let login: LoginReply = self.parse(&reply.into_result()?, "login reply")?;
         let saved = Saved {
-            token: token.to_owned(),
-            expires_at: expires_at.to_owned(),
+            token: login.session,
+            expires_at: login.expires_at,
         };
         self.sessions.put(&self.server, saved.clone())?;
-        Ok((json["name"].as_str().unwrap_or("").to_owned(), saved))
+        Ok((login.name, saved))
+    }
+
+    /// Reads a success reply as `T`, or fails with a protocol error naming
+    /// the server, before anything is printed or written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Protocol`] when the body is not `T` as JSON.
+    pub fn parse<T: serde::de::DeserializeOwned>(
+        &self,
+        reply: &Reply,
+        what: &str,
+    ) -> Result<T, Error> {
+        serde_json::from_slice(&reply.body).map_err(|e| {
+            Error::Protocol(format!(
+                "{} sent something that is not a JoeDocs {what} ({e}); is client.server the JoeDocs server?",
+                self.server
+            ))
+        })
     }
 
     fn login_with_prompts(&self, message: &str) -> Result<(String, Saved), Error> {
@@ -615,8 +692,24 @@ impl Remote<'_> {
             let mut response = request.send().await.map_err(unreachable)?;
             let status = response.status().as_u16();
             if !(200..300).contains(&status) {
+                let location = location(&response);
                 let body = response.bytes().await.map_err(unreachable)?.to_vec();
-                return Ok(Err(Reply { status, body }));
+                return Ok(Err(Reply {
+                    status,
+                    location,
+                    body,
+                }));
+            }
+            let gzip = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with("application/gzip"));
+            if !gzip {
+                return Err(Error::Protocol(format!(
+                    "{} did not send a backup archive (application/gzip); is client.server the JoeDocs server?",
+                    self.server
+                )));
             }
             let skipped_links = response
                 .headers()
@@ -665,6 +758,15 @@ impl Remote<'_> {
             }))
         })
     }
+}
+
+/// The `Location` header of `response`, if any.
+fn location(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
 }
 
 /// A reqwest error without its URL (which is printed already).
@@ -753,6 +855,7 @@ mod tests {
     fn replies_turn_into_results() {
         let reply = |status: u16, body: Value| Reply {
             status,
+            location: None,
             body: body.to_string().into_bytes(),
         };
         assert!(reply(200, json!({})).into_result().is_ok());

@@ -668,3 +668,272 @@ fn commands_retry_after_a_new_code_without_repeating_a_change() {
         .unwrap();
     assert_eq!(keys.matches("once").count(), 1, "{keys}");
 }
+
+// --- Hardening (JD-10 STEP-02) ---------------------------------------------
+
+/// What a fake server does with each connection, in order.
+#[derive(Clone)]
+enum Answer {
+    /// Send these bytes, then close.
+    Send(&'static [u8]),
+    /// Send these bytes, then hold the connection open without a word.
+    Stall(&'static [u8]),
+}
+
+/// A loopback server that records every request and answers from `answers`
+/// (the last one repeats).
+type Seen = Arc<std::sync::Mutex<Vec<String>>>;
+
+fn fake(answers: Vec<Answer>) -> std::io::Result<(String, Seen)> {
+    use std::io::{Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}", listener.local_addr()?);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for (index, stream) in listener.incoming().enumerate() {
+            let Ok(mut stream) = stream else { return };
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap_or(0) == 1 {
+                request.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&request).into_owned();
+            let length = head
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::to_owned)
+                })
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut body = vec![0_u8; length];
+            let _ = stream.read_exact(&mut body);
+            if let Ok(mut log) = log.lock() {
+                log.push(format!("{head}{}", String::from_utf8_lossy(&body)));
+            }
+            match answers[index.min(answers.len() - 1)].clone() {
+                Answer::Send(bytes) => {
+                    let _ = stream.write_all(bytes);
+                }
+                Answer::Stall(bytes) => {
+                    let _ = stream.write_all(bytes);
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                }
+            }
+        }
+    });
+    Ok((url, seen))
+}
+
+fn remote<'a>(
+    url: &str,
+    state: &Path,
+    prompt: &'a Scripted,
+    timeout_ms: u64,
+) -> Result<joedocs::client::Remote<'a>, joedocs::client::Error> {
+    let env =
+        joedocs::env::MapEnv::new().with("XDG_STATE_HOME", state.to_string_lossy().into_owned());
+    let token = secrecy::SecretString::from(format!("jda_{}_{}", "ab".repeat(6), "cd".repeat(32)));
+    joedocs::client::Remote::with_timeout(
+        url,
+        Some(&token),
+        &env,
+        prompt,
+        std::time::Duration::from_millis(timeout_ms),
+    )
+}
+
+#[test]
+fn redirects_are_never_followed() {
+    let dir = TempDir::new().unwrap();
+    let (other, seen) = fake(vec![Answer::Send(
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 2\r\n\r\n{}",
+    )])
+    .unwrap();
+    for status in [
+        "302 Found",
+        "307 Temporary Redirect",
+        "308 Permanent Redirect",
+    ] {
+        let reply: &'static [u8] = Box::leak(
+            format!("HTTP/1.1 {status}\r\nconnection: close\r\nlocation: {other}/admin/v1/status\r\ncontent-length: 0\r\n\r\n")
+                .into_bytes()
+                .into_boxed_slice(),
+        );
+        let (url, _) = fake(vec![Answer::Send(reply)]).unwrap();
+        let prompt = Scripted::new(false, &[]);
+        let client = remote(&url, dir.path(), &prompt, 5000).unwrap();
+        for err in [
+            client
+                .call(&reqwest::Method::GET, "status", None)
+                .unwrap_err(),
+            client.login(Some("123456")).unwrap_err(),
+            client
+                .download("backup", &dir.path().join("b.tgz"))
+                .unwrap_err(),
+        ] {
+            assert_eq!(err.exit_code(), 70, "{status}: {err}");
+            assert!(err.to_string().contains(&other), "{err}");
+        }
+    }
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "the other origin was contacted"
+    );
+    assert!(!dir.path().join("b.tgz").exists());
+}
+
+#[test]
+fn a_stalled_server_times_out() {
+    let dir = TempDir::new().unwrap();
+    let prompt = Scripted::new(false, &[]);
+    let (silent, _) = fake(vec![Answer::Stall(b"")]).unwrap();
+    let started = std::time::Instant::now();
+    let err = remote(&silent, dir.path(), &prompt, 300)
+        .unwrap()
+        .call(&reqwest::Method::GET, "status", None)
+        .unwrap_err();
+    assert_eq!(err.exit_code(), 69, "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+
+    let (half, _) = fake(vec![Answer::Stall(
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: application/gzip\r\ncontent-length: 1000\r\n\r\npartial",
+    )]).unwrap();
+    let dest = dir.path().join("out.tgz");
+    let err = remote(&half, dir.path(), &prompt, 300)
+        .unwrap()
+        .download("backup", &dest)
+        .unwrap_err();
+    assert_eq!(err.exit_code(), 69, "{err}");
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("out.tgz"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+/// The binary as a client of the fake server at `url`.
+fn client_cmd(root: &Path, url: &str) -> Command {
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!();
+    cmd.env_clear()
+        .env("HOME", root)
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env(
+            "JOEDOCS_ADMIN_TOKEN",
+            format!("jda_{}_{}", "ab".repeat(6), "cd".repeat(32)),
+        )
+        .current_dir(root)
+        .args(["--server", url]);
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
+    cmd
+}
+
+#[test]
+fn malformed_success_replies_fail_without_writing() {
+    let dir = TempDir::new().unwrap();
+    let bodies: [&'static [u8]; 4] = [
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: text/html\r\ncontent-length: 15\r\n\r\n<html>hi</html>",
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 4\r\n\r\nnull",
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}",
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 41\r\n\r\n{\"output\":5,\"markdown\":7,\"session\":false}",
+    ];
+    let dest = dir.path().join("doc.md");
+    for body in bodies {
+        let (url, _) = fake(vec![Answer::Send(body)]).unwrap();
+        for args in [
+            vec!["project", "list"],
+            vec!["check"],
+            vec!["login", "--code", "123456"],
+            vec!["status"],
+            vec!["get", "JD-1"],
+        ] {
+            client_cmd(dir.path(), &url)
+                .args(&args)
+                .assert()
+                .code(70)
+                .stdout("");
+        }
+        std::fs::write(&dest, "keep me").unwrap();
+        client_cmd(dir.path(), &url)
+            .args(["get", "JD-1", "-f", dest.to_str().unwrap()])
+            .assert()
+            .code(70);
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "keep me");
+    }
+    // A document with an empty body is still fine.
+    let (url, _) = fake(vec![Answer::Send(
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 35\r\n\r\n{\"markdown\":\"---\\nid: JD-1\\n---\\n\"}",
+    )]).unwrap();
+    client_cmd(dir.path(), &url)
+        .args(["get", "JD-1", "--content-only"])
+        .assert()
+        .success()
+        .stdout("");
+    // A backup that is not gzip is refused and removed.
+    let (url, _) = fake(vec![Answer::Send(
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: text/html\r\ncontent-length: 5\r\n\r\nhello",
+    )]).unwrap();
+    let backup = dir.path().join("b.tgz");
+    client_cmd(dir.path(), &url)
+        .args(["backup", backup.to_str().unwrap()])
+        .assert()
+        .code(70);
+    assert!(!backup.exists());
+    let (url, _) = fake(vec![Answer::Send(
+        b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: application/gzip\r\ncontent-length: 5\r\n\r\nhello",
+    )]).unwrap();
+    client_cmd(dir.path(), &url)
+        .args(["backup", backup.to_str().unwrap()])
+        .assert()
+        .code(70);
+    assert!(!backup.exists());
+}
+
+#[test]
+fn login_codes_never_reach_the_logs() {
+    let server = Server::start().unwrap();
+    let logs = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let sink = Arc::clone(&logs);
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || LogSink(Arc::clone(&sink)))
+        .finish();
+    let good = server.code();
+    tracing::subscriber::with_default(subscriber, || {
+        let quiet = Scripted::new(false, &[]);
+        let _ = server.run(
+            &quiet,
+            &["--log-level", "trace", "login", "--code", "987654"],
+        );
+        server
+            .run(&quiet, &["--log-level", "trace", "login", "--code", &good])
+            .unwrap();
+    });
+    let text = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains("login"),
+        "the command is logged by name:\n{text}"
+    );
+    assert!(!text.contains("987654") && !text.contains(&good), "{text}");
+}
+
+struct LogSink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(mut logs) = self.0.lock() {
+            logs.extend_from_slice(buf);
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}

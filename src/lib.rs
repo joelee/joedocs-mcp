@@ -190,7 +190,8 @@ pub fn execute(
     ctx: &Context<'_>,
     out: &mut dyn Write,
 ) -> Result<(), Error> {
-    tracing::debug!(command = ?cli.command, file = ?loaded.resolved.file, "running command");
+    // The name only: arguments can hold a TOTP code (`login --code`).
+    tracing::debug!(command = cli.command.name(), file = ?loaded.resolved.file, "running command");
     if let Some(done) = remote(cli, loaded, ctx, out) {
         return done;
     }
@@ -347,8 +348,7 @@ fn run_remote(
         }
         Command::Status => {
             let reply = remote.call(&reqwest::Method::GET, "status", None)?;
-            let report: status::StatusReport = serde_json::from_slice(&reply.body)
-                .map_err(|e| client::Error::Protocol(e.to_string()))?;
+            let report: status::StatusReport = remote.parse(&reply, "status report")?;
             status::render(&report, out)?;
             let expires = remote
                 .saved()?
@@ -373,9 +373,10 @@ fn remote_text(
     body: Option<&serde_json::Value>,
     out: &mut dyn Write,
 ) -> Result<(), Error> {
-    let json = remote.call(method, path, body)?.json();
-    out.write_all(json["output"].as_str().unwrap_or_default().as_bytes())?;
-    match json["problems"].as_u64().unwrap_or(0) {
+    let reply = remote.call(method, path, body)?;
+    let text: client::TextReply = remote.parse(&reply, "command reply")?;
+    out.write_all(text.output.as_bytes())?;
+    match text.problems {
         0 => Ok(()),
         count => Err(Error::Problems(
             usize::try_from(count).unwrap_or(usize::MAX),
@@ -490,10 +491,8 @@ fn remote_get(
         |v| format!("documents/{id}?version={v}"),
     );
     let reply = remote.call(&reqwest::Method::GET, &path, None)?;
-    let markdown = reply.json()["markdown"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
+    let document: client::DocumentReply = remote.parse(&reply, "document reply")?;
+    let markdown = document.markdown;
     admin::write_document(&markdown, part, file, out)
 }
 
@@ -506,8 +505,15 @@ fn remote_backup(
         return Err(backup::Error::Exists(file.to_path_buf()).into());
     }
     let downloaded = remote.download("backup", file)?;
+    let manifest = backup::read_manifest(file).map_err(|e| {
+        let _ = std::fs::remove_file(file);
+        client::Error::Protocol(format!(
+            "{} sent something that is not a JoeDocs backup ({e})",
+            remote.server()
+        ))
+    })?;
     let created = backup::Created {
-        manifest: backup::read_manifest(file)?,
+        manifest,
         bytes: downloaded.bytes,
         skipped_links: downloaded.skipped_links,
     };

@@ -48,6 +48,9 @@ When `client.server` is set, or `--server URL` is given, `project`, `key`, `arch
 - When a session has expired, or there is none, and standard input and standard error are terminals, a command asks for a new code (`Session expired. Code for <server>: `), logs in, and runs once more. The server checks the session before it runs anything, so a change is never applied twice. A wrong code is asked for again, up to three times in all. Without a terminal (scripts, agents, CI) the command exits `77` and says to run `joedocs login`.
 - A missing `JOEDOCS_ADMIN_TOKEN`, refused codes, or a token locked after five failed logins exit `77` without running the command; a server that cannot be reached exits `69`.
 - `client.server` must be `https://` (rustls with the operating system's root certificates), or `http://` to `localhost`, `127.0.0.1` or `[::1]`.
+- The client never follows a redirect: a `3xx` reply exits `70` and names its `Location`, so set `client.server` to the final URL. It gives up when the server sends nothing for 60 seconds (exit `69`), however long a download that keeps arriving takes, and removes a partial download.
+- A reply that is not what the admin API sends (an HTML page from a proxy, or JSON of the wrong shape) exits `70` before anything is printed or a file is replaced. A backup download that is not `application/gzip`, or has no readable manifest, is removed.
+- Logs name the command only, never its arguments, so a `--code` never appears in them.
 
 ### Exit codes
 
@@ -58,7 +61,7 @@ When `client.server` is set, or `--server URL` is given, `project`, `key`, `arch
 | `2` | Usage error (unknown command or flag). |
 | `65` | Invalid request: a bad name, an unknown project or key, or a store that is not initialised. |
 | `69` | `serve` cannot listen, `systemctl` cannot be run, or the `client.server` cannot be reached. |
-| `70` | Database, history or vault fault. |
+| `70` | Database, history or vault fault, or an admin API reply the client does not understand (including a redirect). |
 | `74` | Output error. |
 | `77` | The admin API refused the credentials: no `JOEDOCS_ADMIN_TOKEN`, a wrong code, a locked token, or no valid session where no code can be asked for (run `joedocs login`). |
 | `78` | Configuration error, naming the file, variable or key. |
