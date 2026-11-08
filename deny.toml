@@ -20,10 +20,21 @@ allow = [
     # Approved 2026-11-04 (docs/plan.md section 13, option A): needed by
     # matchit (via axum) and encoding_rs (via serde-saphyr).
     "BSD-3-Clause",
+    # Approved 2026-11-08 (JD-8 D-02): rustls with ring for the client's
+    # HTTPS (ring, rustls-webpki, untrusted).
+    "ISC",
     "MIT",
     "Unicode-3.0",
 ]
 confidence-threshold = 0.93
+
+# Approved 2026-11-08 by the maintainer (JD-8 STEP-08): the Mozilla root
+# certificate data. rustls-platform-verifier (via reqwest) needs it only on
+# wasm32, so it is never built for the Linux and macOS releases; this
+# exception allows the licence for this crate alone.
+[[licenses.exceptions]]
+crate = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
 
 # This crate's own licence is not checked while it is unpublished.
 [licenses.private]

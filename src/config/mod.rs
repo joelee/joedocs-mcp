@@ -39,6 +39,8 @@ pub struct Config {
     pub documents: DocumentsConfig,
     /// The remote admin API (`[admin]`).
     pub admin: AdminConfig,
+    /// This machine as a client of a remote server (`[client]`).
+    pub client: ClientConfig,
 }
 
 /// Logging settings.
@@ -246,6 +248,16 @@ impl Default for AdminConfig {
             session_hours: 8,
         }
     }
+}
+
+/// This machine as a client of a server's admin API.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ClientConfig {
+    /// The server's base URL, e.g. `https://docs.example.ts.net`. When set,
+    /// admin commands run on that server instead of the local store. Empty
+    /// means local.
+    pub server: String,
 }
 
 /// Where a configuration value came from.

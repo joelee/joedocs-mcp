@@ -45,6 +45,7 @@ Run `joedocs config paths` to see the search order and the selected file.
 | `documents.index_file` | boolean | `true` | `JOEDOCS__DOCUMENTS__INDEX_FILE` | | Write `INDEX.md`, a table of the live documents sorted by ID, in each project folder (see [reference](reference.md#documents)). When `false`, JoeDocs neither writes nor checks it, and leaves existing files in place. |
 | `admin.enabled` | boolean | `false` | `JOEDOCS__ADMIN__ENABLED` | `true` | Serve the remote admin API under `/admin/v1/`, so `joedocs` on another machine can run admin commands with an admin token and a TOTP code (see [deployment](deployment.md)). Off by default. |
 | `admin.session_hours` | integer | `8` | `JOEDOCS__ADMIN__SESSION_HOURS` | `12` | How long a session opened by `joedocs login` lasts, in hours: 1 to 168. |
+| `client.server` | string | `""` | `JOEDOCS__CLIENT__SERVER` | `"https://docs.example.ts.net"` | On a client machine: the server whose admin API `joedocs` uses. When set (or with `--server URL`), `project`, `key`, `archive`, `check`, `reindex`, `status`, `get` and `backup` run on that server after `joedocs login`. Must be `https://`, or `http://` to `localhost`, `127.0.0.1` or `[::1]`. Empty means the local store. |
 
 A slug is 1 to 64 characters of `a-z`, `0-9` and `-`, starting with a letter or digit. Lists of slugs must be non-empty and have no duplicates.
 
@@ -63,5 +64,6 @@ Secrets are read from environment variables only and are never part of the confi
 | Variable | Required | Description |
 | --- | --- | --- |
 | `JOEDOCS_API_TOKEN` | No | Example secret; replace with your own. |
+| `JOEDOCS_ADMIN_TOKEN` | For `login` and remote commands | The admin token (`jda_...`) printed once by `joedocs admin-token create` on the server. Read it from a password manager, for example `JOEDOCS_ADMIN_TOKEN="$(pass show joedocs/admin)" joedocs login`. |
 
 Keep `.env.example` listing every supported secret with a safe placeholder value.

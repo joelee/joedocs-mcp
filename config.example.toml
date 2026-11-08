@@ -48,3 +48,11 @@ index_file = true
 enabled = false
 # How long a session opened by `joedocs login` lasts, in hours (1 to 168).
 session_hours = 8
+
+[client]
+# The server whose admin API this machine uses, e.g.
+# "https://docs.example.ts.net". When set, admin commands (project, key,
+# archive, check, reindex, status, get, backup) run on that server after
+# `joedocs login`. Empty means the local store. The admin token comes from
+# JOEDOCS_ADMIN_TOKEN, never from this file.
+server = ""

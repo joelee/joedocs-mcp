@@ -20,6 +20,11 @@ pub struct Cli {
     #[arg(long, global = true, value_enum)]
     pub log_level: Option<LogLevel>,
 
+    /// Run admin commands on this server's admin API (overrides
+    /// `client.server`), e.g. `https://docs.example.ts.net`.
+    #[arg(long, global = true, value_name = "URL")]
+    pub server: Option<String>,
+
     /// Command to run.
     #[command(subcommand)]
     pub command: Command,
@@ -99,6 +104,16 @@ pub enum Command {
         #[command(subcommand)]
         command: AdminTokenCommand,
     },
+    /// Log in to the server's admin API with `JOEDOCS_ADMIN_TOKEN` and a
+    /// TOTP code, and keep the session for later commands.
+    Login {
+        /// The 6-digit code from your authenticator app (prompted for when
+        /// left out).
+        #[arg(long)]
+        code: Option<String>,
+    },
+    /// End the admin session with the server and forget it.
+    Logout,
     /// Print a document: its front matter and body, or one of them.
     Get {
         /// Document ID, e.g. JD-42.
@@ -249,6 +264,13 @@ impl Cli {
                 key: "log.level".to_owned(),
                 flag: "--log-level".to_owned(),
                 value: Value::String(level.as_str().to_owned()),
+            });
+        }
+        if let Some(server) = &self.server {
+            values.push(CliValue {
+                key: "client.server".to_owned(),
+                flag: "--server".to_owned(),
+                value: Value::String(server.clone()),
             });
         }
         values

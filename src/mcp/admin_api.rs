@@ -246,15 +246,42 @@ where
             .ok_or_else(ApiError::unauthorized)?;
         let identity = Some(admin.clone());
         let session = call.session.as_ref().ok_or_else(ApiError::no_session);
-        let result = session.and_then(|session| {
+        let checked = session.and_then(|session| {
             store
                 .admin_session(token, session)
                 .map_err(|e| ApiError::from(&e))
-                .and_then(|admin| work(store, state, &admin))
         });
+        let result = match checked {
+            Ok(admin) => work(store, state, &admin),
+            // A session can only be renewed by logging in, so say at once
+            // that the token is locked rather than inviting a code.
+            Err(refused) => Err(locked(store, &admin).unwrap_or(refused)),
+        };
         Ok((identity, result))
     })
     .await
+}
+
+/// The lock refusal for `admin`, when it is locked now.
+fn locked(store: &Store, admin: &AdminTokenRow) -> Option<ApiError> {
+    let until = admin.locked_until.as_ref()?;
+    let now = store.now();
+    if *until <= now {
+        return None;
+    }
+    let seconds = |t: &str| {
+        t.parse::<jiff::Timestamp>()
+            .map_or(0, jiff::Timestamp::as_second)
+    };
+    let retry_after = u64::try_from(seconds(until) - seconds(&now))
+        .unwrap_or(1)
+        .max(1);
+    Some(ApiError::from(&store::Error::AdminRefused(
+        AdminRefusal::Locked {
+            until: until.clone(),
+            retry_after,
+        },
+    )))
 }
 
 /// Runs `work` on the store in a blocking task, after the `Host`/`Origin`

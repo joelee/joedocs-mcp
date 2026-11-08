@@ -56,6 +56,15 @@ impl Config {
                 ));
             }
         }
+        if !self.client.server.is_empty() && !is_server_url(&self.client.server) {
+            return Err(Violation::new(
+                "client.server",
+                format!(
+                    "\"{}\" must be an https:// URL like https://docs.example.net (or http:// to localhost, 127.0.0.1 or [::1])",
+                    self.client.server
+                ),
+            ));
+        }
         if !(1..=168).contains(&self.admin.session_hours) {
             return Err(Violation::new(
                 "admin.session_hours",
@@ -152,6 +161,41 @@ fn member(
     }
 }
 
+/// `https://host[:port][/]`, or `http://` to a loopback host.
+fn is_server_url(url: &str) -> bool {
+    let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        (true, rest)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        (false, rest)
+    } else {
+        return false;
+    };
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@', ' ']) {
+        return false;
+    }
+    let host = if let Some(bracketed) = authority.strip_prefix('[') {
+        let Some((host, after)) = bracketed.split_once(']') else {
+            return false;
+        };
+        if !(after.is_empty() || after.strip_prefix(':').is_some_and(is_port)) {
+            return false;
+        }
+        host
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) if is_port(port) => host,
+            Some(_) => return false,
+            None => authority,
+        }
+    };
+    !host.is_empty() && (secure || matches!(host, "localhost" | "127.0.0.1" | "::1"))
+}
+
+fn is_port(port: &str) -> bool {
+    !port.is_empty() && port.len() <= 5 && port.bytes().all(|b| b.is_ascii_digit())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -197,6 +241,35 @@ mod tests {
         let mut config = Config::default();
         config.server.allowed_hosts = vec!["docs.example.net".into(), "localhost:8750".into()];
         assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn client_servers_are_https_or_loopback_http() {
+        for good in [
+            "https://docs.example.net",
+            "https://docs.example.net/",
+            "https://docs.example.net:8443",
+            "http://localhost:8750",
+            "http://127.0.0.1:8750",
+            "http://[::1]:8750",
+            "https://[2001:db8::1]",
+        ] {
+            assert!(is_server_url(good), "{good}");
+        }
+        for bad in [
+            "http://example.com",
+            "https://",
+            "https://host/path",
+            "https://user@host",
+            "ftp://host",
+            "https://host:port",
+            "http://[::1",
+            "docs.example.net",
+        ] {
+            assert!(!is_server_url(bad), "{bad}");
+        }
+        let v = violation(|c| c.client.server = "http://example.com".into());
+        assert_eq!(v.key, "client.server");
     }
 
     #[test]

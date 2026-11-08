@@ -15,6 +15,9 @@ use crate::env::Env;
 pub struct Secrets {
     /// Example secret read from `<PREFIX>_API_TOKEN`.
     pub api_token: Option<SecretString>,
+    /// The admin token for a remote server's admin API, from
+    /// `<PREFIX>_ADMIN_TOKEN`.
+    pub admin_token: Option<SecretString>,
 }
 
 impl Secrets {
@@ -25,6 +28,9 @@ impl Secrets {
             api_token: env
                 .non_empty(&app.secret_var("API_TOKEN"))
                 .map(SecretString::from),
+            admin_token: env
+                .non_empty(&app.secret_var("ADMIN_TOKEN"))
+                .map(SecretString::from),
         }
     }
 
@@ -32,7 +38,10 @@ impl Secrets {
     /// diagnostics that must not reveal values.
     #[must_use]
     pub fn status(&self, app: &AppId) -> Vec<(String, bool)> {
-        vec![(app.secret_var("API_TOKEN"), self.api_token.is_some())]
+        vec![
+            (app.secret_var("API_TOKEN"), self.api_token.is_some()),
+            (app.secret_var("ADMIN_TOKEN"), self.admin_token.is_some()),
+        ]
     }
 }
 
@@ -57,7 +66,10 @@ mod tests {
         );
         assert_eq!(
             secrets.status(&app),
-            vec![("MY_APP_API_TOKEN".into(), true)]
+            vec![
+                ("MY_APP_API_TOKEN".into(), true),
+                ("MY_APP_ADMIN_TOKEN".into(), false)
+            ]
         );
     }
 
@@ -77,7 +89,10 @@ mod tests {
         assert!(secrets.api_token.is_none());
         assert_eq!(
             secrets.status(&app),
-            vec![("MY_APP_API_TOKEN".into(), false)]
+            vec![
+                ("MY_APP_API_TOKEN".into(), false),
+                ("MY_APP_ADMIN_TOKEN".into(), false)
+            ]
         );
     }
 }

@@ -17,6 +17,7 @@ pub mod app_id;
 pub mod auth;
 pub mod backup;
 pub mod cli;
+pub mod client;
 pub mod clock;
 pub mod config;
 pub mod db;
@@ -79,6 +80,9 @@ pub enum Error {
     /// A systemd unit could not be installed or removed.
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+    /// A call to a remote server's admin API failed.
+    #[error(transparent)]
+    Client(#[from] client::Error),
     /// A backup could not be written or restored.
     #[error(transparent)]
     Backup(#[from] backup::Error),
@@ -104,6 +108,7 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Config(_) => EXIT_CONFIG,
+            Self::Client(error) => error.exit_code(),
             Self::Store(error) if error.is_user_error() => EXIT_DATA,
             Self::Backup(error) if error.is_user_error() => EXIT_DATA,
             Self::Systemd(error) if error.is_user_error() => EXIT_DATA,
@@ -132,6 +137,8 @@ pub struct Context<'a> {
     pub random: &'a dyn RandomSource,
     /// systemd, for `joedocs systemd`.
     pub services: &'a dyn ServiceManager,
+    /// Asks for a TOTP code when a remote session has expired.
+    pub prompt: &'a dyn client::Prompt,
 }
 
 /// Configuration and secrets resolved for one run.
@@ -182,6 +189,9 @@ pub fn execute(
     out: &mut dyn Write,
 ) -> Result<(), Error> {
     tracing::debug!(command = ?cli.command, file = ?loaded.resolved.file, "running command");
+    if let Some(done) = remote(cli, loaded, ctx, out) {
+        return done;
+    }
     match &cli.command {
         Command::Config {
             command: ConfigCommand::Show,
@@ -251,6 +261,7 @@ pub fn execute(
             let report = status::collect(&store, loaded, ctx.services)?;
             status::render(&report, out)?;
         }
+        Command::Login { .. } | Command::Logout => {}
         Command::Get {
             document_id,
             version,
@@ -267,6 +278,79 @@ pub fn execute(
             };
             let markdown = admin::fetch(&open_store(loaded, ctx)?, document_id, *version)?;
             admin::write_document(&markdown, part, file.as_deref(), out)?;
+        }
+    }
+    Ok(())
+}
+
+/// Runs `cli` against the admin API of `server`, or returns `None` when the
+/// command runs locally.
+fn remote(
+    cli: &Cli,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Option<Result<(), Error>> {
+    let server = loaded.config().client.server.as_str();
+    if server.is_empty() {
+        return matches!(cli.command, Command::Login { .. } | Command::Logout).then(|| {
+            Err(client::Error::Usage(
+                "set client.server, or pass --server URL, to log in to a server's admin API".into(),
+            )
+            .into())
+        });
+    }
+    match &cli.command {
+        Command::Login { .. } | Command::Logout | Command::Status => {
+            Some(run_remote(cli, server, loaded, ctx, out))
+        }
+        _ => None,
+    }
+}
+
+fn run_remote(
+    cli: &Cli,
+    server: &str,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let remote = client::Remote::new(
+        server,
+        loaded.secrets.admin_token.as_ref(),
+        ctx.env,
+        ctx.prompt,
+    )?;
+    match &cli.command {
+        Command::Login { code } => {
+            let (name, saved) = remote.login(code.as_deref())?;
+            writeln!(
+                out,
+                "Logged in to {} as {name}; the session expires at {}.",
+                remote.server(),
+                saved.expires_at
+            )?;
+        }
+        Command::Logout => {
+            if remote.logout()? {
+                writeln!(out, "Logged out of {}.", remote.server())?;
+            } else {
+                writeln!(out, "Not logged in to {}.", remote.server())?;
+            }
+        }
+        _ => {
+            let reply = remote.call(&reqwest::Method::GET, "status", None)?;
+            let report: status::StatusReport = serde_json::from_slice(&reply.body)
+                .map_err(|e| client::Error::Protocol(e.to_string()))?;
+            status::render(&report, out)?;
+            let expires = remote
+                .saved()?
+                .map_or_else(|| "unknown".to_owned(), |s| s.expires_at);
+            writeln!(
+                out,
+                "\nClient\n  server: {}\n  session expires: {expires}",
+                remote.server()
+            )?;
         }
     }
     Ok(())
@@ -430,6 +514,7 @@ mod tests {
             clock: Arc::new(FixedClock::at(1_793_000_000)),
             random: &CountingRandom(0),
             services: &NoServices,
+            prompt: &client::TerminalPrompt,
         }
     }
 
