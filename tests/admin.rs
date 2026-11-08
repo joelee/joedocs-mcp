@@ -1035,3 +1035,71 @@ fn restore_refuses_unknown_formats_newer_schemas_and_hostile_entries() {
         assert!(!root.path().join("evil").exists());
     }
 }
+
+#[test]
+fn admin_tokens_are_created_with_a_totp_secret_listed_and_revoked() {
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    let created = cmd(root.path())
+        .args(["admin-token", "create", "laptop"])
+        .assert()
+        .success();
+    let text = String::from_utf8(created.get_output().stdout.clone()).unwrap();
+    let token = text.lines().last().unwrap();
+    assert!(
+        token.starts_with("jda_") && token.len() == 4 + 12 + 1 + 64,
+        "{text}"
+    );
+    let uri = text
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("otpauth://totp/JoeDocs:laptop?secret="))
+        .unwrap_or_else(|| panic!("no otpauth URI in:\n{text}"));
+    assert!(
+        uri.ends_with("&issuer=JoeDocs&algorithm=SHA1&digits=6&period=30"),
+        "{uri}"
+    );
+    let secret = uri
+        .trim_start_matches("otpauth://totp/JoeDocs:laptop?secret=")
+        .split('&')
+        .next()
+        .unwrap();
+    assert_eq!(secret.len(), 32, "20 bytes in base32 without padding");
+    assert!(
+        text.lines().any(|l| l.trim() == secret),
+        "the secret on its own line:\n{text}"
+    );
+
+    cmd(root.path())
+        .args(["admin-token", "create", "laptop"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("already exists"));
+    let list = cmd(root.path())
+        .args(["admin-token", "list"])
+        .assert()
+        .success();
+    let listed = String::from_utf8(list.get_output().stdout.clone()).unwrap();
+    assert!(
+        listed.contains("laptop") && listed.contains("active"),
+        "{listed}"
+    );
+    assert!(
+        !listed.contains(secret) && !listed.contains("jda_"),
+        "{listed}"
+    );
+    cmd(root.path())
+        .args(["admin-token", "revoke", "laptop"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Revoked admin token laptop"));
+    cmd(root.path())
+        .args(["admin-token", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("revoked"));
+    cmd(root.path())
+        .args(["admin-token", "revoke", "nobody"])
+        .assert()
+        .code(65);
+}

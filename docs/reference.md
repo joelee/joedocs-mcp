@@ -25,6 +25,9 @@ joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
 | `backup --restore [--state-dir PATH] [--content-dir PATH] FILE.tgz` | Restore a backup into a state directory and a vault that are empty or do not exist yet (by default the configured `storage.state_dir` and `storage.home`). Refuses an unknown archive format, a database schema newer than this build, and any entry that is not a regular file or directory under `state/` or `content/` (absolute paths, `..`, links, devices); on any failure it removes what it extracted. Then it opens the restored store, which migrates an older database, runs `check`, and prints the `[storage]` settings to use when it restored elsewhere. Run it with the service stopped. |
 | `agents` | Print an AGENTS.md-style guide for AI agents that maintain this server: what is safe to run, what needs the operator's approval, what never to do, how to upgrade and troubleshoot. It is filled in with this installation's version, config file, vault and state paths, listen address and systemd unit, and never contains a secret. For example, `joedocs agents > AGENTS.md` in the directory an agent works from. |
 | `status` | Show where the service runs and what the store holds, without secrets: the version, host name and config file; `server.bind` and whether `GET /health` answers there; the systemd user and system unit state with its `MainPID`; the vault and state directory with their sizes and file counts, and the database and history sizes; the history head and last change; whether the index and `INDEX.md` files are current; API key counts; and live and archived documents per project. Changes nothing, and works with the service stopped. |
+| `admin-token create NAME` | Create an admin token for the remote admin API, with a new TOTP secret. Prints the secret in base32 (type it into Google Authenticator or another TOTP app) and the `otpauth://totp/JoeDocs:NAME?...` URI (pipe it to `qrencode -t ansiutf8` for a QR code), then the token alone on the last line, `jda_<12 hex id>_<64 hex secret>`. Both are shown once. Run it on the server only: no remote call can create, list or revoke admin tokens. |
+| `admin-token list` | List admin tokens: name, creation, last use, and whether each is active, locked after failed logins, or revoked. Never the secrets. |
+| `admin-token revoke NAME` | Revoke an admin token and end every session it opened, immediately and for good. |
 | `get DOCUMENT_ID [--version N] [--content-only \| --front-matter-only] [-f PATH]` | Print a document as `get_document` returns it: the front matter block and the body. `--content-only` prints only the body (what `update_document` takes as `content`); `--front-matter-only` prints only the front matter YAML, without the `---` lines, so it can be piped to a YAML tool. `--version N` prints an earlier revision. `-f`/`--file PATH` writes the same text to `PATH`, replacing it, instead of printing it. An archived document fails with exit `65`; `archive restore` brings it back. |
 | `reindex` | Rebuild the document index and search from the history, and rewrite each project's `INDEX.md`. Safe to rerun; projects and keys are kept. |
 | `check` | Report drift between the vault, the history and the index, and `INDEX.md` files that are missing or out of date, and say how to resolve it. Changes no document, index or `INDEX.md` (opening the store may add the `INDEX.md` rule to the history's `info/exclude` once). |
@@ -178,6 +181,19 @@ priority: 2
 | Custom | anything else | Names of up to 64 letters, digits, `_` or `-`. Values are strings, numbers, booleans or lists of those; `null` and nested objects are rejected (use `remove` to delete a key). |
 
 Server keys come first in a fixed order, then custom keys in the order they were added. Comments in client-supplied YAML are not kept.
+
+### Database
+
+`<storage.state_dir>/joedocs.db` is SQLite. Its schema changes only through numbered migrations, applied when the store opens; `PRAGMA user_version` records how many have run. A build refuses a database with a newer schema than it knows, so going back to an older JoeDocs after an upgrade that added a migration means restoring a backup taken before it.
+
+| Version | Migration | Adds |
+| --- | --- | --- |
+| 1 | `0001_core` | projects, API keys and grants, documents and revisions |
+| 2 | `0002_audit` | the audit log |
+| 3 | `0003_search` | the search index |
+| 4 | `0004_admin` (0.3.0) | admin tokens, with their TOTP secrets, and admin sessions |
+
+Only SHA-256 hashes of API keys, admin tokens and session tokens are stored. TOTP secrets are stored as they are, because checking a code needs them: keep the database and backups private.
 
 ### Backups
 

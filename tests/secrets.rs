@@ -51,12 +51,22 @@ fn an_upper_case_joedocs_key_is_reported() {
 }
 
 #[test]
+fn admin_and_session_tokens_are_reported() {
+    for prefix in ["jda", "jds"] {
+        let token = format!("{prefix}{}", &fake_key("ab", "cd")[2..]);
+        let line = format!("JOEDOCS_ADMIN_TOKEN={token}\n");
+        assert_eq!(scan(&line).unwrap(), Some(1), "gitleaks missed {line}");
+    }
+}
+
+#[test]
 fn documentation_placeholders_are_not_reported() {
     let placeholders = "\
 --header \"Authorization: Bearer jd_...\"
 clients send `Authorization: Bearer jd_<id>_<secret>`
 API keys: `jd_<12 hex id>_<64 hex secret>`
 JOEDOCS_TEST_TOKEN=jd_... just docker-test
+admin tokens look like `jda_<12 hex id>_<64 hex secret>`; sessions `jds_...`
 ";
     assert_eq!(scan(placeholders).unwrap(), Some(0));
 }

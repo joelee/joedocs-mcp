@@ -6,6 +6,7 @@
 //! them inside a transaction (which dereferences to a connection). See
 //! `docs/plan.md` section 10.
 
+mod admin;
 mod documents;
 mod keys;
 mod projects;
@@ -13,6 +14,11 @@ mod search;
 
 use std::path::Path;
 
+pub use admin::{
+    AdminSecrets, AdminTokenRow, SessionRow, admin_secrets, find_admin_token_by_id,
+    find_admin_token_by_name, find_session, insert_admin_token, insert_session, list_admin_tokens,
+    record_failed_login, record_login, revoke_admin_token, revoke_session, touch_session,
+};
 pub use documents::{
     DocumentRow, ListQuery, RevisionRow, Sort, archived_documents, document_counts, get_document,
     get_revision, insert_document, insert_revision, last_change_at, list_documents, list_revisions,
@@ -39,6 +45,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0001_core.sql"),
     include_str!("migrations/0002_audit.sql"),
     include_str!("migrations/0003_search.sql"),
+    include_str!("migrations/0004_admin.sql"),
 ];
 
 /// The schema version this build expects.

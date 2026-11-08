@@ -19,6 +19,10 @@ const ID_BYTES: usize = 6;
 const SECRET_BYTES: usize = 32;
 /// Prefix of every API key.
 pub const KEY_PREFIX: &str = "jd_";
+/// Prefix of every admin token (`jda_<id>_<secret>`).
+pub const ADMIN_PREFIX: &str = "jda_";
+/// Prefix of every admin session token (`jds_<id>_<secret>`).
+pub const SESSION_PREFIX: &str = "jds_";
 
 /// A source of cryptographically secure random bytes.
 pub trait RandomSource {
@@ -140,9 +144,19 @@ pub struct NewKey {
 ///
 /// Returns an error when random bytes are unavailable.
 pub fn generate(random: &dyn RandomSource) -> Result<NewKey, RandomError> {
+    generate_prefixed(KEY_PREFIX, random)
+}
+
+/// Generates a new token with `prefix` ([`KEY_PREFIX`], [`ADMIN_PREFIX`] or
+/// [`SESSION_PREFIX`]).
+///
+/// # Errors
+///
+/// Returns an error when random bytes are unavailable.
+pub fn generate_prefixed(prefix: &str, random: &dyn RandomSource) -> Result<NewKey, RandomError> {
     let mut id = [0u8; ID_BYTES];
     random.fill(&mut id)?;
-    new_secret(&hex(&id), random)
+    secret_for(prefix, &hex(&id), random)
 }
 
 /// Generates a new secret, and so a new token, for the key with this ID.
@@ -151,12 +165,16 @@ pub fn generate(random: &dyn RandomSource) -> Result<NewKey, RandomError> {
 ///
 /// Returns an error when random bytes are unavailable.
 pub fn new_secret(id: &str, random: &dyn RandomSource) -> Result<NewKey, RandomError> {
+    secret_for(KEY_PREFIX, id, random)
+}
+
+fn secret_for(prefix: &str, id: &str, random: &dyn RandomSource) -> Result<NewKey, RandomError> {
     let mut secret = [0u8; SECRET_BYTES];
     random.fill(&mut secret)?;
     let id = id.to_owned();
     let secret = hex(&secret);
     let secret_sha256 = hash_secret(&secret);
-    let token = SecretString::from(format!("{KEY_PREFIX}{id}_{secret}"));
+    let token = SecretString::from(format!("{prefix}{id}_{secret}"));
     Ok(NewKey {
         id,
         secret_sha256,
@@ -168,7 +186,13 @@ pub fn new_secret(id: &str, random: &dyn RandomSource) -> Result<NewKey, RandomE
 /// the `jd_<id>_<secret>` format.
 #[must_use]
 pub fn parse_token(token: &SecretString) -> Option<(String, SecretString)> {
-    let rest = token.expose_secret().strip_prefix(KEY_PREFIX)?;
+    parse_prefixed(KEY_PREFIX, token)
+}
+
+/// Splits a `<prefix><id>_<secret>` token into its public ID and secret.
+#[must_use]
+pub fn parse_prefixed(prefix: &str, token: &SecretString) -> Option<(String, SecretString)> {
+    let rest = token.expose_secret().strip_prefix(prefix)?;
     let (id, secret) = rest.split_once('_')?;
     let is_hex = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit());
     (is_hex(id, ID_BYTES * 2) && is_hex(secret, SECRET_BYTES * 2))

@@ -10,8 +10,8 @@ use secrecy::ExposeSecret as _;
 
 use crate::Error;
 use crate::auth::{Grant, RandomSource};
-use crate::cli::{ArchiveCommand, KeyCommand, ProjectCommand};
-use crate::db::KeyRow;
+use crate::cli::{AdminTokenCommand, ArchiveCommand, KeyCommand, ProjectCommand};
+use crate::db::{AdminTokenRow, KeyRow};
 use crate::store::{Actor, CheckReport, InitOutcome, Paths, Reindexed, Store};
 
 /// The author recorded for changes made with admin commands.
@@ -139,6 +139,76 @@ pub fn archive(
         }
     }
     Ok(())
+}
+
+/// Runs `joedocs admin-token`.
+///
+/// # Errors
+///
+/// Returns store errors and [`Error::Output`].
+pub fn admin_token(
+    store: &mut Store,
+    command: &AdminTokenCommand,
+    random: &dyn RandomSource,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    match command {
+        AdminTokenCommand::Create { name } => {
+            let created = store.create_admin_token(name, random)?;
+            writeln!(out, "Created admin token {name}.")?;
+            writeln!(
+                out,
+                "Add it to Google Authenticator (or another TOTP app) with this secret:"
+            )?;
+            writeln!(out, "  {}", created.totp_secret.expose_secret())?;
+            writeln!(
+                out,
+                "or this URI (pipe it to `qrencode -t ansiutf8` for a QR code):"
+            )?;
+            writeln!(out, "  {}", created.uri.expose_secret())?;
+            writeln!(
+                out,
+                "The admin token follows, shown once. Keep it in a password manager; on the client, set JOEDOCS_ADMIN_TOKEN to it."
+            )?;
+            writeln!(out, "{}", created.token.expose_secret())?;
+        }
+        AdminTokenCommand::List => {
+            let tokens = store.admin_tokens()?;
+            if tokens.is_empty() {
+                writeln!(out, "No admin tokens.")?;
+                return Ok(());
+            }
+            let now = store.now();
+            let rows: Vec<Vec<String>> = tokens.iter().map(|t| admin_token_row(t, &now)).collect();
+            write_table(out, &["NAME", "CREATED", "LAST USED", "STATE"], &rows)?;
+        }
+        AdminTokenCommand::Revoke { name } => {
+            let row = store.revoke_admin_token(name)?;
+            writeln!(
+                out,
+                "Revoked admin token {name} and ended its sessions ({}).",
+                row.revoked_at.unwrap_or_default()
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn admin_token_row(token: &AdminTokenRow, now: &str) -> Vec<String> {
+    let state = match (&token.revoked_at, &token.locked_until) {
+        (Some(at), _) => format!("revoked {at}"),
+        (None, Some(until)) if until.as_str() > now => format!("locked until {until}"),
+        _ => "active".to_owned(),
+    };
+    vec![
+        token.name.clone(),
+        token.created_at.clone(),
+        token
+            .last_used_at
+            .clone()
+            .unwrap_or_else(|| "never".to_owned()),
+        state,
+    ]
 }
 
 /// Reports what `joedocs backup` wrote.

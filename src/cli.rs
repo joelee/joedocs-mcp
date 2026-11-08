@@ -92,6 +92,13 @@ pub enum Command {
     /// Show where the service runs, the storage sizes, and the state of the
     /// store (changes nothing).
     Status,
+    /// Create, list and revoke admin tokens for the remote admin API (run
+    /// on the server only).
+    AdminToken {
+        /// What to do.
+        #[command(subcommand)]
+        command: AdminTokenCommand,
+    },
     /// Print a document: its front matter and body, or one of them.
     Get {
         /// Document ID, e.g. JD-42.
@@ -202,6 +209,23 @@ pub enum KeyCommand {
     /// Revoke a key immediately.
     Revoke {
         /// Key name.
+        name: String,
+    },
+}
+
+/// `admin-token` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum AdminTokenCommand {
+    /// Create an admin token and its TOTP secret, and print both once.
+    Create {
+        /// Token name, recorded in the audit log for every call made with it.
+        name: String,
+    },
+    /// List admin tokens (never their secrets).
+    List,
+    /// Revoke an admin token and end its sessions immediately.
+    Revoke {
+        /// Token name.
         name: String,
     },
 }

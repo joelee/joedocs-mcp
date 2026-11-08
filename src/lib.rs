@@ -30,6 +30,7 @@ pub mod secrets;
 pub mod status;
 pub mod store;
 pub mod systemd;
+pub mod totp;
 
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -218,6 +219,9 @@ pub fn execute(
         }
         Command::Key { command } => {
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
+        }
+        Command::AdminToken { command } => {
+            admin::admin_token(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
         Command::Agents => agents::run(loaded, ctx, out)?,
         Command::Backup {

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::auth::{CountingRandom, Permission};
+use crate::auth::{CountingRandom, OsRandom, Permission};
 use crate::clock::FixedClock;
 use crate::document::front_matter::Fields;
 use crate::history::{Commit, GitCli, Logged};
@@ -1283,4 +1283,146 @@ fn check_reports_an_index_file_outside_a_project_as_unknown() {
     let report = fx.store.check().unwrap();
     assert_eq!(report.unknown_files, ["stray/INDEX.md"]);
     assert!(report.stale_index_files.is_empty(), "{report:?}");
+}
+
+// --- Admin tokens -----------------------------------------------------------
+
+/// The current TOTP code of `created`, `offset` steps from the clock's.
+fn admin_code(fx: &Fixture, created: &CreatedAdminToken, offset: i64) -> String {
+    use secrecy::ExposeSecret as _;
+    let secret = crate::totp::base32_decode(created.totp_secret.expose_secret()).unwrap();
+    let step = crate::totp::step_at(fx.clock.now().as_second()) + offset;
+    crate::totp::code(&secret, step)
+}
+
+#[test]
+fn admin_login_accepts_one_step_of_skew_and_each_step_once() {
+    let mut fx = fixture();
+    let random = CountingRandom(40);
+    let created = fx.store.create_admin_token("laptop", &random).unwrap();
+    assert!(matches!(
+        fx.store.create_admin_token("laptop", &random),
+        Err(Error::AlreadyExists(_))
+    ));
+    for offset in [-1, 0, 1] {
+        // A fresh minute for each, so the steps do not overlap.
+        fx.clock.advance(120);
+        let code = admin_code(&fx, &created, offset);
+        let session = fx
+            .store
+            .admin_login(&created.token, &code, 8, &OsRandom)
+            .unwrap();
+        assert!(session.expires_at > fx.store.now());
+        // The same code (the same step) is refused the second time.
+        let again = fx.store.admin_login(&created.token, &code, 8, &OsRandom);
+        assert!(matches!(
+            again,
+            Err(Error::AdminRefused(AdminRefusal::Unauthorized))
+        ));
+    }
+    for offset in [-2, 2] {
+        fx.clock.advance(120);
+        let code = admin_code(&fx, &created, offset);
+        assert!(
+            fx.store
+                .admin_login(&created.token, &code, 8, &OsRandom)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn five_failed_logins_lock_the_token_for_fifteen_minutes() {
+    let mut fx = fixture();
+    let random = CountingRandom(40);
+    let created = fx.store.create_admin_token("laptop", &random).unwrap();
+    // Four failures, then a success, reset the count.
+    for _ in 0..4 {
+        assert!(
+            fx.store
+                .admin_login(&created.token, "000000", 8, &OsRandom)
+                .is_err()
+        );
+    }
+    let code = admin_code(&fx, &created, 0);
+    fx.store
+        .admin_login(&created.token, &code, 8, &OsRandom)
+        .unwrap();
+    assert_eq!(fx.store.admin_tokens().unwrap()[0].failed_logins, 0);
+    // Five in a row lock it, even for the right code.
+    for _ in 0..MAX_FAILED_LOGINS {
+        let refused = fx.store.admin_login(&created.token, "000000", 8, &OsRandom);
+        assert!(matches!(
+            refused,
+            Err(Error::AdminRefused(AdminRefusal::Unauthorized))
+        ));
+    }
+    fx.clock.advance(60);
+    let code = admin_code(&fx, &created, 0);
+    let locked = fx.store.admin_login(&created.token, &code, 8, &OsRandom);
+    match locked {
+        Err(Error::AdminRefused(AdminRefusal::Locked { retry_after, .. })) => {
+            assert!(retry_after > 0 && retry_after <= 900, "{retry_after}");
+        }
+        other => panic!("expected a lock, got {other:?}"),
+    }
+    fx.clock.advance(LOCK_SECONDS);
+    let code = admin_code(&fx, &created, 0);
+    fx.store
+        .admin_login(&created.token, &code, 8, &OsRandom)
+        .unwrap();
+}
+
+#[test]
+fn sessions_expire_belong_to_their_token_and_end_with_it() {
+    let mut fx = fixture();
+    let random = CountingRandom(40);
+    let a = fx.store.create_admin_token("a", &random).unwrap();
+    let b = fx
+        .store
+        .create_admin_token("b", &CountingRandom(90))
+        .unwrap();
+    let code = admin_code(&fx, &a, 0);
+    let session = fx.store.admin_login(&a.token, &code, 8, &OsRandom).unwrap();
+    assert_eq!(
+        fx.store
+            .admin_session(&a.token, &session.token)
+            .unwrap()
+            .name,
+        "a"
+    );
+    assert!(matches!(
+        fx.store.admin_session(&b.token, &session.token),
+        Err(Error::AdminRefused(AdminRefusal::NoSession))
+    ));
+    let bogus = secrecy::SecretString::from("jda_000000000000_".to_owned() + &"0".repeat(64));
+    assert!(matches!(
+        fx.store.admin_session(&bogus, &session.token),
+        Err(Error::AdminRefused(AdminRefusal::Unauthorized))
+    ));
+    fx.clock.advance(8 * 3600);
+    assert!(matches!(
+        fx.store.admin_session(&a.token, &session.token),
+        Err(Error::AdminRefused(AdminRefusal::SessionExpired))
+    ));
+
+    let code = admin_code(&fx, &a, 0);
+    let second = fx.store.admin_login(&a.token, &code, 8, &OsRandom).unwrap();
+    fx.store.end_admin_session(&a.token, &second.token).unwrap();
+    assert!(matches!(
+        fx.store.admin_session(&a.token, &second.token),
+        Err(Error::AdminRefused(AdminRefusal::NoSession))
+    ));
+
+    fx.clock.advance(60);
+    let code = admin_code(&fx, &a, 0);
+    let third = fx.store.admin_login(&a.token, &code, 8, &OsRandom).unwrap();
+    let revoked = fx.store.revoke_admin_token("a").unwrap();
+    assert!(revoked.revoked_at.is_some());
+    assert!(fx.store.admin_session(&a.token, &third.token).is_err());
+    assert!(fx.store.admin_token_for(&a.token).unwrap().is_none());
+    assert!(matches!(
+        fx.store.revoke_admin_token("nobody"),
+        Err(Error::NotFound(_))
+    ));
 }

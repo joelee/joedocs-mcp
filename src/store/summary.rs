@@ -25,6 +25,10 @@ pub struct Summary {
     pub keys_active: u64,
     /// Revoked API keys.
     pub keys_revoked: u64,
+    /// Admin tokens that are not revoked.
+    pub admin_tokens_active: u64,
+    /// Revoked admin tokens.
+    pub admin_tokens_revoked: u64,
     /// The history's latest commit.
     pub history_head: Option<String>,
     /// When the latest revision was recorded.
@@ -53,7 +57,11 @@ impl Store {
             .collect();
         let keys = db::list_keys(&self.conn)?;
         let revoked = keys.iter().filter(|k| k.revoked_at.is_some()).count();
+        let admins = db::list_admin_tokens(&self.conn)?;
+        let admins_revoked = admins.iter().filter(|t| t.revoked_at.is_some()).count();
         Ok(Summary {
+            admin_tokens_active: u64::try_from(admins.len() - admins_revoked).unwrap_or(u64::MAX),
+            admin_tokens_revoked: u64::try_from(admins_revoked).unwrap_or(u64::MAX),
             projects,
             keys_active: u64::try_from(keys.len() - revoked).unwrap_or(u64::MAX),
             keys_revoked: u64::try_from(revoked).unwrap_or(u64::MAX),

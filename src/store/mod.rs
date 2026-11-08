@@ -18,6 +18,7 @@
 //! A failure before step 5 undoes the file writes and rolls the
 //! transaction back, so nothing changes.
 
+mod admin_tokens;
 mod archive;
 mod backup;
 mod check;
@@ -36,6 +37,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub use admin_tokens::{
+    AdminRefusal, CreatedAdminToken, LOCK_SECONDS, MAX_FAILED_LOGINS, OpenedSession,
+};
 pub use archive::ArchivedInfo;
 pub use backup::Snapshot;
 pub use check::CheckReport;
@@ -54,7 +58,7 @@ use crate::AppId;
 use crate::clock::Clock;
 use crate::config::{Config, ConfigError};
 use crate::db::{self, Connection, DbError};
-pub use crate::db::{KeyRow, ProjectRow, Sort};
+pub use crate::db::{AdminTokenRow, KeyRow, ProjectRow, Sort};
 use crate::env::Env;
 use crate::history::{History, HistoryError};
 
@@ -162,6 +166,9 @@ pub enum Error {
         /// Cause.
         source: io::Error,
     },
+    /// An admin login or session was refused.
+    #[error(transparent)]
+    AdminRefused(AdminRefusal),
     /// The database failed.
     #[error(transparent)]
     Db(#[from] DbError),
@@ -464,7 +471,9 @@ impl Store {
         &self.settings
     }
 
-    fn now(&self) -> String {
+    /// The store clock's current time, formatted as in the database.
+    #[must_use]
+    pub fn now(&self) -> String {
         crate::clock::format_timestamp(self.clock.now())
     }
 }

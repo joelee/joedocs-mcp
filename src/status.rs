@@ -349,6 +349,11 @@ fn render_store(text: &mut String, store: &Summary) {
         "  API keys: {} active, {} revoked",
         store.keys_active, store.keys_revoked
     );
+    let _ = writeln!(
+        *text,
+        "  admin tokens: {} active, {} revoked",
+        store.admin_tokens_active, store.admin_tokens_revoked
+    );
     let _ = writeln!(*text, "\nProjects");
     if store.projects.is_empty() {
         let _ = writeln!(*text, "  none (add one with `joedocs project add`)");
@@ -538,6 +543,8 @@ mod tests {
                 projects: Vec::new(),
                 keys_active: 0,
                 keys_revoked: 2,
+                admin_tokens_active: 1,
+                admin_tokens_revoked: 0,
                 history_head: None,
                 last_change: None,
                 index_current: false,
@@ -558,6 +565,7 @@ mod tests {
             "index: behind the history",
             "INDEX.md files: 1 missing or out of date",
             "API keys: 0 active, 2 revoked",
+            "admin tokens: 1 active, 0 revoked",
             "none (add one with `joedocs project add`)",
         ] {
             assert!(
