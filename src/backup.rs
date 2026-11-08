@@ -113,15 +113,36 @@ pub struct Created {
     pub skipped_links: Vec<String>,
 }
 
-/// Writes a backup of `store` to `file`, which must not exist yet.
+/// A snapshot copied into a private staging directory, ready to compress
+/// without the store. Dropping it removes the staging directory.
+#[derive(Debug)]
+pub struct Staged {
+    staging: Staging,
+    manifest: Manifest,
+    skipped_links: Vec<String>,
+}
+
+impl Staged {
+    /// The manifest the archive will hold.
+    #[must_use]
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    /// Vault symlinks that were left out.
+    #[must_use]
+    pub fn skipped_links(&self) -> &[String] {
+        &self.skipped_links
+    }
+}
+
+/// Copies a consistent snapshot of `store` (under its write lock) into a
+/// new staging directory in the state directory.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Exists`] when `file` exists, and I/O or store errors.
-pub fn create(store: &Store, file: &Path) -> Result<Created, Error> {
-    if fs::symlink_metadata(file).is_ok() {
-        return Err(Error::Exists(file.to_path_buf()));
-    }
+/// Returns I/O and store errors.
+pub fn stage(store: &Store) -> Result<Staged, Error> {
     let staging = Staging::new(&store.paths().state_dir)?;
     let snapshot = store.snapshot(&staging.0)?;
     let manifest = Manifest {
@@ -134,8 +155,27 @@ pub fn create(store: &Store, file: &Path) -> Result<Created, Error> {
         vault: store.paths().home.clone(),
         state_dir: store.paths().state_dir.clone(),
     };
+    Ok(Staged {
+        staging,
+        manifest,
+        skipped_links: snapshot.skipped_links,
+    })
+}
+
+/// Compresses `staged` into `file` (mode 0600, through a temporary file),
+/// which must not exist. Needs no store. Returns the archive's size.
+///
+/// # Errors
+///
+/// Returns [`Error::Exists`] and I/O errors.
+pub fn write_staged(staged: &Staged, file: &Path) -> Result<u64, Error> {
+    if fs::symlink_metadata(file).is_ok() {
+        return Err(Error::Exists(file.to_path_buf()));
+    }
     let temp = temp_beside(file);
-    let written = write_private(&temp, |out| write_archive(&staging.0, &manifest, out));
+    let written = write_private(&temp, |out| {
+        write_archive(&staged.staging.0, &staged.manifest, out)
+    });
     if let Err(error) = written {
         let _ = fs::remove_file(&temp);
         return Err(error);
@@ -145,11 +185,24 @@ pub fn create(store: &Store, file: &Path) -> Result<Created, Error> {
         return Err(Error::Exists(file.to_path_buf()));
     }
     fs::rename(&temp, file).map_err(Error::io("write", file))?;
-    let bytes = fs::metadata(file).map_err(Error::io("read", file))?.len();
+    Ok(fs::metadata(file).map_err(Error::io("read", file))?.len())
+}
+
+/// Writes a backup of `store` to `file`, which must not exist yet.
+///
+/// # Errors
+///
+/// Returns [`Error::Exists`] when `file` exists, and I/O or store errors.
+pub fn create(store: &Store, file: &Path) -> Result<Created, Error> {
+    if fs::symlink_metadata(file).is_ok() {
+        return Err(Error::Exists(file.to_path_buf()));
+    }
+    let staged = stage(store)?;
+    let bytes = write_staged(&staged, file)?;
     Ok(Created {
-        manifest,
+        manifest: staged.manifest.clone(),
         bytes,
-        skipped_links: snapshot.skipped_links,
+        skipped_links: staged.skipped_links.clone(),
     })
 }
 
@@ -247,6 +300,7 @@ fn temp_beside(file: &Path) -> PathBuf {
 }
 
 /// A staging directory in the state directory, removed when dropped.
+#[derive(Debug)]
 struct Staging(PathBuf);
 
 impl Staging {

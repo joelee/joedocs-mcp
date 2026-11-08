@@ -35,8 +35,15 @@ pub struct AdminOptions {
     pub config_file: Option<PathBuf>,
 }
 
+/// A test hook run between staging and compressing a remote backup.
+#[cfg(test)]
+type StagingHook = Arc<dyn Fn(&Shared) + Send + Sync>;
+
 struct ApiState {
     shared: Arc<Shared>,
+    /// Called by a remote backup between staging and compressing (tests).
+    #[cfg(test)]
+    after_staging: Option<StagingHook>,
     session_hours: u32,
     config_file: Option<PathBuf>,
     bind: SocketAddr,
@@ -52,6 +59,8 @@ pub(super) fn routes(
 ) -> Router {
     let state = Arc::new(ApiState {
         shared: Arc::clone(shared),
+        #[cfg(test)]
+        after_staging: None,
         session_hours: admin.session_hours,
         config_file: admin.config_file.clone(),
         bind: options.bind,
@@ -238,27 +247,64 @@ where
     F: FnOnce(&mut Store, &ApiState, &AdminTokenRow) -> Result<Response, ApiError> + Send + 'static,
 {
     run(state, call, move |store, state, call| {
-        let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
-        let admin = store
-            .admin_token_for(token)
-            .map_err(|e| ApiError::from(&e))?
-            .ok_or_else(ApiError::unauthorized)?;
-        let identity = Some(admin.clone());
-        let session = call.session.as_ref().ok_or_else(ApiError::no_session);
-        let checked = session.and_then(|session| {
+        match authenticate(store, call) {
+            Ok(admin) => {
+                let result = work(store, state, &admin);
+                Ok((Some(admin), result))
+            }
+            Err(refusal) => Ok((refusal.who, Err(refusal.error))),
+        }
+    })
+    .await
+}
+
+/// A refused call, and who made it when the admin token is valid.
+struct Refused {
+    who: Option<AdminTokenRow>,
+    error: ApiError,
+}
+
+fn refused(who: Option<AdminTokenRow>, error: ApiError) -> Box<Refused> {
+    Box::new(Refused { who, error })
+}
+
+/// The admin token and session of `call`, or the refusal and who called
+/// (when the token is valid).
+fn authenticate(store: &Store, call: &Call) -> Result<AdminTokenRow, Box<Refused>> {
+    let token = call
+        .token
+        .as_ref()
+        .ok_or_else(|| refused(None, ApiError::unauthorized()))?;
+    let admin = store
+        .admin_token_for(token)
+        .map_err(|e| refused(None, ApiError::from(&e)))?
+        .ok_or_else(|| refused(None, ApiError::unauthorized()))?;
+    let checked = call
+        .session
+        .as_ref()
+        .ok_or_else(ApiError::no_session)
+        .and_then(|session| {
             store
                 .admin_session(token, session)
                 .map_err(|e| ApiError::from(&e))
         });
-        let result = match checked {
-            Ok(admin) => work(store, state, &admin),
-            // A session can only be renewed by logging in, so say at once
-            // that the token is locked rather than inviting a code.
-            Err(refused) => Err(locked(store, &admin).unwrap_or(refused)),
-        };
-        Ok((identity, result))
-    })
-    .await
+    // A session can only be renewed by logging in, so say at once that the
+    // token is locked rather than inviting a code.
+    checked.map_err(|error| refused(Some(admin.clone()), locked(store, &admin).unwrap_or(error)))
+}
+
+/// Writes the audit row for `call`.
+fn write_audit(store: &Store, who: Option<&AdminTokenRow>, call: &Call, outcome: &str) {
+    let (id, name) = who.map_or(("unknown", "unknown"), |w| (w.id.as_str(), w.name.as_str()));
+    if let Err(error) = store.audit(
+        id,
+        &Actor::new(name, &call.client),
+        call.operation,
+        None,
+        outcome,
+    ) {
+        tracing::error!(%error, "cannot write the admin audit entry");
+    }
 }
 
 /// The lock refusal for `admin`, when it is locked now.
@@ -323,18 +369,7 @@ where
             Ok(_) => "ok",
             Err(error) => error.code,
         };
-        let (id, name) = who.map_or(("unknown".to_owned(), "unknown".to_owned()), |w| {
-            (w.id, w.name)
-        });
-        if let Err(error) = store.audit(
-            &id,
-            &Actor::new(name, &call.client),
-            call.operation,
-            None,
-            outcome,
-        ) {
-            tracing::error!(%error, "cannot write the admin audit entry");
-        }
+        write_audit(&store, who.as_ref(), &call, outcome);
         result.unwrap_or_else(IntoResponse::into_response)
     });
     match task.await {
@@ -769,48 +804,184 @@ async fn document(state: Arc<ApiState>, call: Call, id: String, uri: axum::http:
 
 /// `GET /admin/v1/backup`: a backup archive, streamed.
 async fn backup(state: Arc<ApiState>, call: Call) -> Response {
-    authorized(state, call, |store, _, _| {
-        let path = store
-            .paths()
-            .state_dir
-            .join(format!("backup-download-{}.tgz", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let created = crate::backup::create(store, &path)
-            .map_err(|e| from_crate(&crate::Error::Backup(e)))?;
-        let file = std::fs::File::open(&path);
-        // The open file stays readable after its name is removed.
-        let _ = std::fs::remove_file(&path);
-        let file = file.map_err(|e| {
-            tracing::error!(error = %e, "cannot open the backup for download");
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal",
-                "internal error",
-            )
-        })?;
-        let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file));
-        let mut response = axum::body::Body::from_stream(stream).into_response();
-        let headers = response.headers_mut();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/gzip"),
-        );
-        if let Ok(value) = HeaderValue::from_str(&created.manifest.documents.to_string()) {
-            headers.insert("joedocs-documents", value);
-        }
-        if let Ok(value) = HeaderValue::from_str(
-            &serde_json::to_string(&created.skipped_links).unwrap_or_default(),
-        ) {
-            headers.insert("joedocs-skipped-links", value);
-        }
-        Ok(response)
+    let task = tokio::task::spawn_blocking(move || backup_blocking(&state, &call));
+    task.await.unwrap_or_else(|error| {
+        tracing::error!(%error, "admin API backup task failed");
+        internal().into_response()
     })
-    .await
+}
+
+fn internal() -> ApiError {
+    ApiError::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal",
+        "internal error",
+    )
+}
+
+/// The backup in three phases: check, authenticate and stage under the
+/// store mutex (the snapshot also takes the write lock); compress without
+/// it, so MCP and admin calls carry on; then take it briefly to audit.
+fn backup_blocking(state: &ApiState, call: &Call) -> Response {
+    let staged = {
+        let Ok(store) = state.shared.store.lock() else {
+            return internal().into_response();
+        };
+        let checked = match &call.allowed {
+            Err(forbidden) => {
+                let who = call
+                    .token
+                    .as_ref()
+                    .and_then(|t| store.admin_token_for(t).ok().flatten());
+                Err(refused(who, forbidden.clone()))
+            }
+            Ok(()) => authenticate(&store, call),
+        };
+        let admin = match checked {
+            Ok(admin) => admin,
+            Err(refusal) => {
+                write_audit(&store, refusal.who.as_ref(), call, refusal.error.code);
+                return refusal.error.into_response();
+            }
+        };
+        match crate::backup::stage(&store) {
+            Ok(staged) => (admin, staged, store.paths().state_dir.clone()),
+            Err(error) => {
+                let refused = from_crate(&crate::Error::Backup(error));
+                write_audit(&store, Some(&admin), call, refused.code);
+                return refused.into_response();
+            }
+        }
+    };
+    let (admin, staged, state_dir) = staged;
+    #[cfg(test)]
+    if let Some(hook) = &state.after_staging {
+        hook(&state.shared);
+    }
+    let mut random = [0_u8; 8];
+    let _ = getrandom::fill(&mut random);
+    let path = state_dir.join(format!(
+        "backup-download-{}-{}.tgz",
+        std::process::id(),
+        crate::auth::hex(&random)
+    ));
+    let written = crate::backup::write_staged(&staged, &path);
+    let result = written
+        .map_err(|e| from_crate(&crate::Error::Backup(e)))
+        .and_then(|_| {
+            let file = std::fs::File::open(&path);
+            // The open file stays readable after its name is removed.
+            let _ = std::fs::remove_file(&path);
+            file.map_err(|e| {
+                tracing::error!(error = %e, "cannot open the backup for download");
+                internal()
+            })
+        })
+        .map(|file| {
+            let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file));
+            let mut response = axum::body::Body::from_stream(stream).into_response();
+            let headers = response.headers_mut();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/gzip"),
+            );
+            if let Ok(value) = HeaderValue::from_str(&staged.manifest().documents.to_string()) {
+                headers.insert("joedocs-documents", value);
+            }
+            if let Ok(value) = HeaderValue::from_str(
+                &serde_json::to_string(staged.skipped_links()).unwrap_or_default(),
+            ) {
+                headers.insert("joedocs-skipped-links", value);
+            }
+            response
+        });
+    drop(staged);
+    let outcome = result.as_ref().map_or_else(|e| e.code, |_| "ok");
+    if let Ok(store) = state.shared.store.lock() {
+        write_audit(&store, Some(&admin), call, outcome);
+    } else {
+        tracing::error!("cannot write the admin audit entry: the store lock is poisoned");
+    }
+    result.unwrap_or_else(IntoResponse::into_response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remote_backup_compresses_without_holding_the_store() {
+        use secrecy::ExposeSecret as _;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::TempDir::new().unwrap();
+        let paths = crate::store::Paths {
+            home: dir.path().join("vault"),
+            state_dir: dir.path().join("state"),
+        };
+        let git = crate::history::GitCli::new(paths.git_dir(), &paths.home);
+        Store::init(&paths, &git).unwrap();
+        let clock = Arc::new(crate::clock::FixedClock::at(1_793_000_000));
+        let mut store = Store::open(
+            paths.clone(),
+            crate::store::Settings::from_config(&crate::Config::default()),
+            Box::new(git),
+            Arc::clone(&clock) as Arc<dyn crate::clock::Clock>,
+        )
+        .unwrap();
+        let created = store.create_admin_token("laptop", &OsRandom).unwrap();
+        let secret = crate::totp::base32_decode(created.totp_secret.expose_secret()).unwrap();
+        let code = crate::totp::code(&secret, crate::totp::step_at(1_793_000_000));
+        let session = store
+            .admin_login(&created.token, &code, 8, &OsRandom)
+            .unwrap();
+        let free = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&free);
+        let state = ApiState {
+            shared: Shared::new(store),
+            after_staging: Some(Arc::new(move |shared: &Shared| {
+                seen.store(shared.store.try_lock().is_ok(), Ordering::SeqCst);
+            })),
+            session_hours: 8,
+            config_file: None,
+            bind: "127.0.0.1:8750".parse().unwrap(),
+            allowed_hosts: vec!["127.0.0.1".into()],
+            allowed_origins: Vec::new(),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1"));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", created.token.expose_secret())).unwrap(),
+        );
+        headers.insert(
+            SESSION_HEADER,
+            HeaderValue::from_str(session.token.expose_secret()).unwrap(),
+        );
+        let call = Call::new(&state, "admin:backup", &headers);
+        let response = backup_blocking(&state, &call);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            free.load(Ordering::SeqCst),
+            "the store mutex was held while compressing"
+        );
+        let store = state.shared.store.lock().unwrap();
+        let rows: i64 = rusqlite::Connection::open(paths.db())
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE tool = 'admin:backup' AND outcome = 'ok'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(store);
+        assert_eq!(rows, 1);
+        let leftovers = std::fs::read_dir(&paths.state_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("backup-"))
+            .count();
+        assert_eq!(leftovers, 0, "staging and download files are removed");
+    }
 
     #[test]
     fn ports_are_stripped_from_hosts() {
