@@ -769,8 +769,9 @@ fn http_client(
 }
 
 /// Checks a server URL typed by the user and returns it without a trailing
-/// `/`: `https`, or `http` to a loopback host, with no credentials, query or
-/// fragment.
+/// `/`: `https://host[:port]`, or `http://` to `localhost`, `127.0.0.1` or
+/// `[::1]`, with no path, credentials, query or fragment (what
+/// `client.server` accepts).
 ///
 /// # Errors
 ///
@@ -779,34 +780,30 @@ pub fn server_url(text: &str) -> Result<String, String> {
     let url = reqwest::Url::parse(text.trim())
         .map_err(|e| format!("`{}` is not a URL ({e})", text.trim()))?;
     let host = url.host_str().unwrap_or_default();
-    let loopback = host.eq_ignore_ascii_case("localhost")
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback());
     match url.scheme() {
         "https" => {}
-        "http" if loopback => {}
+        "http" if matches!(host, "localhost" | "127.0.0.1" | "[::1]") => {}
         "http" => {
             return Err(format!(
-                "{url} is plain http to another machine; use https (http is only for this machine)"
+                "{url} is plain http to another machine; use https (http is only for localhost, 127.0.0.1 or [::1])"
             ));
         }
         other => return Err(format!("{url} is not http or https ({other})")),
     }
-    if host.is_empty() {
-        return Err(format!("{url} has no host"));
-    }
     if !url.username().is_empty() || url.password().is_some() {
         return Err("put no user name or password in the server URL".into());
     }
-    if url.query().is_some() || url.fragment().is_some() {
+    if url.query().is_some() || url.fragment().is_some() || url.path() != "/" {
         return Err(format!(
-            "{url} has a query or fragment; give the server's base URL"
+            "{url} has a path, query or fragment; give the server's base URL, like https://docs.example.ts.net"
         ));
     }
-    Ok(url.as_str().trim_end_matches('/').to_owned())
+    let server = url.as_str().trim_end_matches('/').to_owned();
+    if crate::config::is_server_url(&server) {
+        Ok(server)
+    } else {
+        Err(format!("{server} cannot be used as client.server"))
+    }
 }
 
 /// Checks that `server` is a `joedocs serve`: `GET /health` answers `200`
@@ -957,11 +954,11 @@ mod tests {
                 "https://docs.example.ts.net",
             ),
             (
-                " https://docs.example.ts.net/joedocs/ ",
-                "https://docs.example.ts.net/joedocs",
+                " HTTPS://Docs.Example.ts.net:8443 ",
+                "https://docs.example.ts.net:8443",
             ),
             ("http://127.0.0.1:8750", "http://127.0.0.1:8750"),
-            ("http://localhost:8750/", "http://localhost:8750"),
+            ("http://LOCALHOST:8750/", "http://localhost:8750"),
             ("http://[::1]:8750", "http://[::1]:8750"),
         ] {
             assert_eq!(server_url(text).as_deref(), Ok(want), "{text}");
@@ -970,10 +967,21 @@ mod tests {
             ("docs.example.ts.net", "not a URL"),
             ("http://docs.example.ts.net", "plain http"),
             ("http://10.0.0.2:8750", "plain http"),
+            ("http://127.0.0.2:8750", "plain http"),
+            (
+                "https://docs.example.ts.net/joedocs",
+                "path, query or fragment",
+            ),
             ("ftp://docs.example.ts.net", "not http or https"),
             ("https://me:pw@docs.example.ts.net", "user name or password"),
-            ("https://docs.example.ts.net/?a=1", "query or fragment"),
-            ("https://docs.example.ts.net/#top", "query or fragment"),
+            (
+                "https://docs.example.ts.net/?a=1",
+                "path, query or fragment",
+            ),
+            (
+                "https://docs.example.ts.net/#top",
+                "path, query or fragment",
+            ),
         ] {
             let err = server_url(text).unwrap_err();
             assert!(err.contains(why), "{text}: {err}");

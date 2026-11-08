@@ -19,6 +19,7 @@ pub use resolve::{CliValue, Resolved, candidate_paths, resolve, select_file};
 pub use save::{client_file, set_client_server};
 pub use show::{render_paths, render_show};
 pub use validate::Violation;
+pub(crate) use validate::is_server_url;
 
 use crate::app_id::AppId;
 use crate::env::Env;
@@ -208,6 +209,9 @@ pub struct DocumentsConfig {
     /// Whether to write `INDEX.md`, a table of the live documents, in
     /// each project folder.
     pub index_file: bool,
+    /// Most live sub-files a multi-file document may hold, besides its main
+    /// file.
+    pub max_files: u32,
 }
 
 impl Default for DocumentsConfig {
@@ -228,6 +232,7 @@ impl Default for DocumentsConfig {
             default_type: "home".to_owned(),
             default_status: "draft".to_owned(),
             index_file: true,
+            max_files: 500,
         }
     }
 }

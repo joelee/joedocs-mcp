@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(resolved.config, Config::default());
         assert_eq!(resolved.file, None);
         assert!(resolved.sources.values().all(|s| *s == Source::Default));
-        assert_eq!(resolved.sources.len(), 15);
+        assert_eq!(resolved.sources.len(), 16);
     }
 
     #[test]

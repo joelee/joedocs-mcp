@@ -239,6 +239,114 @@ pub fn apply(
     Ok(())
 }
 
+/// Keys only the server writes in a sub-file of a multi-file document, in
+/// the order they are serialised.
+pub const FILE_SERVER_OWNED: [&str; 3] = ["document", "revision", "updated"];
+
+/// The server-owned keys of a sub-file, written first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHeader {
+    /// The ID of the document the file belongs to, e.g. `JD-42`.
+    pub document: String,
+    /// The document revision at which this file last changed.
+    pub revision: u64,
+    /// The time of that revision (RFC 3339).
+    pub updated: String,
+}
+
+/// Serialises a sub-file: `---`, the [`FILE_SERVER_OWNED`] keys, `aliases`
+/// and `tags` if present, the other `extra` keys in their order (`status`
+/// among them: it is a custom key in sub-files), `---`, then `body`.
+///
+/// # Errors
+///
+/// Returns an error if the YAML serialiser fails.
+pub fn render_file(
+    header: &FileHeader,
+    extra: &Fields,
+    body: &str,
+) -> Result<String, FrontMatterError> {
+    let mut map = Fields::new();
+    map.insert("document".into(), header.document.clone().into());
+    map.insert("revision".into(), header.revision.into());
+    map.insert("updated".into(), header.updated.clone().into());
+    for key in ["aliases", "tags"] {
+        if let Some(value) = extra.get(key) {
+            map.insert(key.to_owned(), value.clone());
+        }
+    }
+    for (key, value) in extra {
+        if !FILE_SERVER_OWNED.contains(&key.as_str()) {
+            map.insert(key.clone(), value.clone());
+        }
+    }
+    let yaml = serde_saphyr::to_string(&map)
+        .map_err(|e| FrontMatterError(format!("cannot write front matter: {e}")))?;
+    let newline = if yaml.ends_with('\n') { "" } else { "\n" };
+    Ok(format!("---\n{yaml}{newline}---\n{body}"))
+}
+
+/// The keys of a sub-file's `fields` that are not the server's.
+#[must_use]
+pub fn file_extras(fields: &Fields) -> Fields {
+    fields
+        .iter()
+        .filter(|(key, _)| !FILE_SERVER_OWNED.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Applies a client's change to a sub-file's keys. Every key but
+/// [`FILE_SERVER_OWNED`] is custom (settable and removable); `tags` and
+/// `aliases` must still be lists of strings. Every rule is checked before
+/// anything changes, so on error nothing has changed.
+///
+/// # Errors
+///
+/// Returns the first broken rule: a server-owned key, removing an unset
+/// key, a key both set and removed, a bad key name, `null`, a nested value,
+/// or malformed `tags` or `aliases`.
+pub fn apply_file(
+    extra: &mut Fields,
+    set: &Fields,
+    remove: &[String],
+) -> Result<(), FrontMatterError> {
+    let owned = |key: &str| {
+        if FILE_SERVER_OWNED.contains(&key) {
+            fail(format!("\"{key}\" is owned by the server"))
+        } else {
+            Ok(())
+        }
+    };
+    for key in remove {
+        owned(key)?;
+        if set.contains_key(key) {
+            return fail(format!("\"{key}\" is both set and removed"));
+        }
+        if !extra.contains_key(key) {
+            return fail(format!("\"{key}\" is not set, so it cannot be removed"));
+        }
+    }
+    for (key, value) in set {
+        owned(key)?;
+        match key.as_str() {
+            "tags" => check_list(key, value, check_tag)?,
+            "aliases" => check_list(key, value, check_alias)?,
+            _ => {
+                check_key_name(key)?;
+                check_custom_value(key, value)?;
+            }
+        }
+    }
+    for key in remove {
+        extra.shift_remove(key);
+    }
+    for (key, value) in set {
+        extra.insert(key.clone(), value.clone());
+    }
+    Ok(())
+}
+
 /// Adds `alias` to the `aliases` list unless it is already there.
 pub fn add_alias(extra: &mut Fields, alias: &str) {
     let entry = extra
@@ -535,5 +643,79 @@ mod tests {
         assert!(is_reserved("id"));
         assert!(is_reserved("tags"));
         assert!(!is_reserved("owner"));
+    }
+
+    fn file_header() -> FileHeader {
+        FileHeader {
+            document: "JD-42".into(),
+            revision: 7,
+            updated: "2026-11-05T14:40:10Z".into(),
+        }
+    }
+
+    #[test]
+    fn sub_files_start_with_their_document_revision_and_time() {
+        let extra = fields(json!({
+            "status": "planned",
+            "tags": ["x"],
+            "document": "JD-1",
+            "revision": 99,
+            "aliases": ["Item"],
+            "owner": "joel"
+        }));
+        let text = render_file(&file_header(), &extra, "# Item\n").unwrap();
+        assert_eq!(
+            text,
+            "---\ndocument: JD-42\nrevision: 7\nupdated: \"2026-11-05T14:40:10Z\"\n\
+             aliases:\n- Item\ntags:\n- x\nowner: joel\nstatus: planned\n---\n# Item\n"
+        );
+        let parsed = parse(&text).unwrap();
+        assert_eq!(parsed.body, "# Item\n");
+        let kept = file_extras(&parsed.fields);
+        assert_eq!(
+            kept.keys().collect::<Vec<_>>(),
+            ["aliases", "tags", "owner", "status"]
+        );
+    }
+
+    #[test]
+    fn sub_file_keys_are_custom_but_the_header_is_the_servers() {
+        let mut extra = fields(json!({"tags": ["a"], "owner": "joel"}));
+        let set = fields(json!({"status": "planned", "id": "free here", "priority": 2}));
+        apply_file(&mut extra, &set, &["owner".into()]).unwrap();
+        assert_eq!(
+            extra,
+            fields(json!({"tags": ["a"], "status": "planned", "id": "free here", "priority": 2}))
+        );
+        apply_file(
+            &mut extra,
+            &Fields::new(),
+            &["tags".into(), "status".into()],
+        )
+        .unwrap();
+        assert_eq!(extra, fields(json!({"id": "free here", "priority": 2})));
+
+        for key in ["document", "revision", "updated"] {
+            let err = apply_file(&mut extra, &fields(json!({key: "x"})), &[]).unwrap_err();
+            assert!(err.0.contains("owned by the server"), "{key}: {}", err.0);
+            let err = apply_file(&mut extra, &Fields::new(), &[key.into()]).unwrap_err();
+            assert!(err.0.contains("owned by the server"), "{key}: {}", err.0);
+        }
+        for (set, remove, why) in [
+            (json!({"tags": "x"}), &[][..], "list of strings"),
+            (json!({"aliases": [1]}), &[], "list of strings"),
+            (json!({"tags": ["123"]}), &[], "not only digits"),
+            (json!({"bad key": 1}), &[], "ASCII letters"),
+            (json!({"n": null}), &[], "null"),
+            (json!({"n": {"a": 1}}), &[], "nested"),
+            (json!({}), &["missing"], "not set"),
+            (json!({"id": 1}), &["id"], "both set and removed"),
+        ] {
+            let before = extra.clone();
+            let remove: Vec<String> = remove.iter().map(|s: &&str| (*s).to_owned()).collect();
+            let err = apply_file(&mut extra, &fields(set), &remove).unwrap_err();
+            assert!(err.0.contains(why), "{why}: {}", err.0);
+            assert_eq!(extra, before, "nothing changes on error");
+        }
     }
 }

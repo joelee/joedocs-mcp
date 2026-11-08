@@ -3,11 +3,13 @@
 //!
 //! Pure code with no I/O. See `docs/plan.md` sections 4 and 5.
 
+mod file;
 pub mod front_matter;
 mod id;
 mod title;
 
-pub use front_matter::{FrontMatterError, Header};
+pub use file::{FilePath, INDEX_STEM, MAX_FILE_DEPTH};
+pub use front_matter::{FileHeader, FrontMatterError, Header};
 pub use id::{DocumentId, InvalidId, MAX_KEY_LEN, is_project_key};
 pub use title::{MAX_STEM_BYTES, MAX_TITLE_CHARS, check_title, file_stem};
 

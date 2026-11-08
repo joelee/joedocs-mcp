@@ -40,6 +40,8 @@ default_status = "draft"
 # Write INDEX.md, a table of the live documents sorted by ID, in each project
 # folder. When false, existing INDEX.md files are left in place.
 index_file = true
+# Most live sub-files a multi-file document may hold, besides its main file.
+max_files = 500
 
 [admin]
 # Serve the remote admin API under /admin/v1/ so `joedocs` on another
