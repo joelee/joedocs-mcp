@@ -20,10 +20,18 @@ Run the admin commands from another machine, protected by an admin token and a T
 - Exit code `77` (admin credentials refused); `69` now also means the `client.server` cannot be reached.
 - The secret scan recognises admin and session tokens (`jda_...`, `jds_...`).
 
+### Security
+
+- **The state directory is private.** `init` creates it `0700`, with the database and its `-wal` and `-shm` files `0600`, because it now holds admin TOTP secrets. Every start tightens an older install's state directory and database and logs each change; backups are staged in a private directory and written `0600`.
+- **The admin client** never follows a redirect (a `3xx` exits `70` and names the target), gives up after 60 seconds without data from the server (exit `69`), refuses a reply that is not what the admin API sends (exit `70`, before printing anything or replacing a file), and never logs a `--code`.
+- **The admin API** reads request bodies up to 64 KiB (`413` `payload_too_large` beyond), and audits every request, including refused, oversized and unknown ones.
+- `get -f` writes through a randomly named temporary file created exclusively, so a file or link planted there is never followed, and keeps the destination's mode (a new file is `0600`).
+
 ### Upgrading
 
 - Database migration 4 adds admin tokens and sessions: **JoeDocs 0.2.x cannot open the database afterwards**. Take a backup first; 0.2.x has no `backup` command, so stop the service and `tar` the vault and state directory, as [upgrading.md](docs/upgrading.md) describes.
-- Nothing else changes until you turn the admin API on.
+- On its first start, 0.3.0 makes the state directory private and logs it; run admin commands as the account that owns it. Nothing else changes until you turn the admin API on.
+- A remote backup no longer pauses the server while it compresses, and a restore that cannot open the restored store leaves its targets empty again, so it can be retried.
 
 ## [0.2.0] - 2026-11-07
 
