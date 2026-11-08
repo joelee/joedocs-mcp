@@ -414,20 +414,7 @@ impl<'a> Remote<'a> {
                     .into(),
             )
         })?;
-        // ring for every rustls connection in this process; a second install
-        // (by another remote in the same process) keeps the first.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let http = reqwest::Client::builder()
-            .user_agent(concat!("joedocs-cli/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(15))
-            .read_timeout(read_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| Error::Protocol(e.to_string()))?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| Error::Protocol(e.to_string()))?;
+        let (http, runtime) = http_client(read_timeout)?;
         Ok(Self {
             server: server.trim_end_matches('/').to_owned(),
             token,
@@ -760,6 +747,138 @@ impl Remote<'_> {
     }
 }
 
+/// An HTTP client that never follows redirects, and the runtime to drive it.
+fn http_client(
+    read_timeout: Duration,
+) -> Result<(reqwest::Client, tokio::runtime::Runtime), Error> {
+    // ring for every rustls connection in this process; a second install
+    // (by another remote in the same process) keeps the first.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let http = reqwest::Client::builder()
+        .user_agent(concat!("joedocs-cli/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(read_timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| Error::Protocol(e.to_string()))?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::Protocol(e.to_string()))?;
+    Ok((http, runtime))
+}
+
+/// Checks a server URL typed by the user and returns it without a trailing
+/// `/`: `https`, or `http` to a loopback host, with no credentials, query or
+/// fragment.
+///
+/// # Errors
+///
+/// Returns why the URL cannot be used.
+pub fn server_url(text: &str) -> Result<String, String> {
+    let url = reqwest::Url::parse(text.trim())
+        .map_err(|e| format!("`{}` is not a URL ({e})", text.trim()))?;
+    let host = url.host_str().unwrap_or_default();
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    match url.scheme() {
+        "https" => {}
+        "http" if loopback => {}
+        "http" => {
+            return Err(format!(
+                "{url} is plain http to another machine; use https (http is only for this machine)"
+            ));
+        }
+        other => return Err(format!("{url} is not http or https ({other})")),
+    }
+    if host.is_empty() {
+        return Err(format!("{url} has no host"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("put no user name or password in the server URL".into());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(format!(
+            "{url} has a query or fragment; give the server's base URL"
+        ));
+    }
+    Ok(url.as_str().trim_end_matches('/').to_owned())
+}
+
+/// Checks that `server` is a `joedocs serve`: `GET /health` answers `200`
+/// with `ok`, without a redirect.
+///
+/// # Errors
+///
+/// Returns why the server cannot be used.
+pub fn probe_health(server: &str) -> Result<(), String> {
+    let (http, runtime) = http_client(READ_TIMEOUT).map_err(|e| e.to_string())?;
+    let unreachable = |e: &reqwest::Error| format!("cannot reach {server}: {}", without_url(e));
+    runtime.block_on(async {
+        let mut response = http
+            .get(format!("{server}/health"))
+            .send()
+            .await
+            .map_err(|e| unreachable(&e))?;
+        let status = response.status();
+        if status.is_redirection() {
+            let target = location(&response).map_or_else(String::new, |l| format!(" to {l}"));
+            return Err(format!(
+                "{server}/health redirects{target}; give the URL it should go to"
+            ));
+        }
+        // `ok` is two bytes; read no more than a little past that.
+        let mut body = Vec::new();
+        while body.len() <= 16 {
+            match response.chunk().await.map_err(|e| unreachable(&e))? {
+                Some(chunk) => body.extend_from_slice(&chunk),
+                None => break,
+            }
+        }
+        if status == reqwest::StatusCode::OK && body.trim_ascii() == b"ok" {
+            Ok(())
+        } else {
+            Err(format!(
+                "{server} does not look like a JoeDocs server (/health answered {status})"
+            ))
+        }
+    })
+}
+
+/// Asks for the server URL on the terminal, up to three times, and returns
+/// the first one that [`server_url`] accepts and [`probe_health`] reaches.
+///
+/// # Errors
+///
+/// Returns [`Error::Usage`] after three unusable answers, and [`Error::Io`]
+/// when the terminal cannot be read.
+pub fn ask_server(prompt: &dyn Prompt) -> Result<String, Error> {
+    let mut last = String::new();
+    for attempt in 1..=ATTEMPTS {
+        let message = if attempt == 1 {
+            "Server URL (for example https://docs.example.ts.net): ".to_owned()
+        } else {
+            format!("{last}.\nServer URL: ")
+        };
+        let answer = prompt.ask(&message).map_err(|e| Error::Io {
+            action: "read",
+            path: PathBuf::from("the terminal"),
+            source: e,
+        })?;
+        match server_url(&answer).and_then(|url| probe_health(&url).map(|()| url)) {
+            Ok(url) => return Ok(url),
+            Err(why) => last = why,
+        }
+    }
+    Err(Error::Usage(format!(
+        "no usable server after {ATTEMPTS} tries (last: {last}); set client.server, or pass --server URL"
+    )))
+}
+
 /// The `Location` header of `response`, if any.
 fn location(response: &reqwest::Response) -> Option<String> {
     response
@@ -828,6 +947,37 @@ mod tests {
         assert!(sessions.get("https://a").unwrap().is_none());
         assert_eq!(sessions.get("https://b").unwrap().unwrap().token, "two");
         assert!(!format!("{:?}", saved("secret")).contains("secret"));
+    }
+
+    #[test]
+    fn server_urls_are_https_or_loopback_http_without_extras() {
+        for (text, want) in [
+            (
+                "https://docs.example.ts.net/",
+                "https://docs.example.ts.net",
+            ),
+            (
+                " https://docs.example.ts.net/joedocs/ ",
+                "https://docs.example.ts.net/joedocs",
+            ),
+            ("http://127.0.0.1:8750", "http://127.0.0.1:8750"),
+            ("http://localhost:8750/", "http://localhost:8750"),
+            ("http://[::1]:8750", "http://[::1]:8750"),
+        ] {
+            assert_eq!(server_url(text).as_deref(), Ok(want), "{text}");
+        }
+        for (text, why) in [
+            ("docs.example.ts.net", "not a URL"),
+            ("http://docs.example.ts.net", "plain http"),
+            ("http://10.0.0.2:8750", "plain http"),
+            ("ftp://docs.example.ts.net", "not http or https"),
+            ("https://me:pw@docs.example.ts.net", "user name or password"),
+            ("https://docs.example.ts.net/?a=1", "query or fragment"),
+            ("https://docs.example.ts.net/#top", "query or fragment"),
+        ] {
+            let err = server_url(text).unwrap_err();
+            assert!(err.contains(why), "{text}: {err}");
+        }
     }
 
     #[test]

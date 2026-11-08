@@ -290,6 +290,12 @@ fn remote(
 ) -> Option<Result<(), Error>> {
     let server = loaded.config().client.server.as_str();
     if server.is_empty() {
+        if matches!(cli.command, Command::Login { .. }) && ctx.prompt.interactive() {
+            return Some(
+                set_up_server(loaded, ctx, out)
+                    .and_then(|server| run_remote(cli, &server, loaded, ctx, out)),
+            );
+        }
         return matches!(cli.command, Command::Login { .. } | Command::Logout).then(|| {
             Err(client::Error::Usage(
                 "set client.server, or pass --server URL, to log in to a server's admin API".into(),
@@ -314,6 +320,26 @@ fn remote(
         .into()));
     }
     Some(run_remote(cli, server, loaded, ctx, out))
+}
+
+/// `joedocs login` at a terminal with no server: asks for one, checks it,
+/// and saves it as `client.server` in the config file in use (or the
+/// user's own config file).
+fn set_up_server(loaded: &Loaded, ctx: &Context<'_>, out: &mut dyn Write) -> Result<String, Error> {
+    let target = config::client_file(loaded.resolved.file.as_deref(), &ctx.app, ctx.env)
+        .ok_or_else(|| {
+            client::Error::Usage(
+                "set HOME or XDG_CONFIG_HOME so `joedocs login` can save client.server, or pass --server URL".into(),
+            )
+        })?;
+    let server = client::ask_server(ctx.prompt)?;
+    config::set_client_server(&target, &server).map_err(|source| client::Error::Io {
+        action: "save client.server in",
+        path: target.clone(),
+        source,
+    })?;
+    writeln!(out, "Saved client.server in {}.", target.display())?;
+    Ok(server)
 }
 
 fn run_remote(

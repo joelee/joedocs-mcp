@@ -207,18 +207,17 @@ The admin commands can also run from another machine, through the server's admin
    ```
 
    It prints a TOTP secret and an `otpauth://` URI: add the secret to Google Authenticator (or another TOTP app), or show the URI as a QR code with `... | qrencode -t ansiutf8`. The admin token is on the last line. Both are shown once.
-3. On the client, keep the token in a password manager, for example `pass insert joedocs/admin`, and point `joedocs` at the server in `~/.config/joedocs/config.toml`:
+3. On the client, keep the token in a password manager, for example `pass insert joedocs/admin`.
+4. Log in, then use the admin commands as on the server. The first `joedocs login` asks for the server's URL, checks it, and saves it as `client.server` in `~/.config/joedocs/config.toml` (or the config file in use); you can also set it there yourself:
 
    ```toml
    [client]
    server = "https://docs.example.ts.net"
    ```
 
-4. Log in, then use the admin commands as on the server:
-
    ```bash
    export JOEDOCS_ADMIN_TOKEN="$(pass show joedocs/admin)"
-   joedocs login            # asks for the 6-digit code
+   joedocs login            # asks for the server's URL the first time, then the 6-digit code
    joedocs status
    joedocs key create ci --grant joedocs:read
    joedocs backup ~/joedocs-$(date +%F).tgz

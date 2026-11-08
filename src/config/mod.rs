@@ -5,6 +5,7 @@
 //! defaults. See `docs/configuration.md` for the full rules.
 
 mod resolve;
+mod save;
 mod show;
 mod validate;
 
@@ -15,6 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use resolve::{CliValue, Resolved, candidate_paths, resolve, select_file};
+pub use save::{client_file, set_client_server};
 pub use show::{render_paths, render_show};
 pub use validate::Violation;
 
