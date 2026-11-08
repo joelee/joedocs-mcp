@@ -90,6 +90,7 @@ impl Store {
             &row.title,
             &row.id,
             None,
+            row.multifile,
         )?;
         row.revision += 1;
         row.main_revision = row.revision;
@@ -113,6 +114,7 @@ impl Store {
             id: row.id.clone(),
             revision: row.revision,
             path: row.path.clone(),
+            file: None,
             front_matter: fields,
         };
         let commit = Change {
@@ -122,6 +124,7 @@ impl Store {
             summary: "",
             actor,
             paths: &[&row.path],
+            files: &[],
         };
         finish(tx, history.as_ref(), journal, &commit)?;
         index_file::refresh(conn, &paths.home, settings, &row.project);

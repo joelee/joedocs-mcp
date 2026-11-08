@@ -107,6 +107,7 @@ fn vault() -> TestResult<Vault> {
                 content: content.into(),
                 front_matter: fields(&extra),
                 summary: None,
+                multifile: false,
             },
         )?;
         clock.advance(60);

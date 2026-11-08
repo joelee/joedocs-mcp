@@ -21,8 +21,8 @@ use super::{Caller, Shared, ToolError};
 use crate::auth::Permission;
 use crate::document::front_matter::Fields;
 use crate::store::{
-    self, Actor, Changed, DocumentInfo, ListRequest, NewDocument, Replacement, RevisionInfo,
-    SearchHit, SearchRequest, Sort, Store, Update,
+    self, Actor, Changed, DocumentInfo, FileInfo, ListRequest, NewDocument, NewFile, Replacement,
+    RevisionInfo, SearchHit, SearchRequest, Sort, Store, Update,
 };
 
 /// A tool's result. Tool signatures spell this out, because rmcp's macro
@@ -50,7 +50,11 @@ since the revision you last read. restore_document_version brings back an earlie
 a new one.
 - Front matter: id, title, project, type, revision, created*, updated*, client are set by the \
 server; status, tags and aliases are validated; other keys are yours. Values are strings, \
-numbers, booleans or lists of those.";
+numbers, booleans or lists of those.
+- A multi-file document (new_document with multifile: true) is a folder: its main file plus \
+files such as backlog/item-1 that new_document_file adds, each with its own front matter. \
+list_document_files lists them; get_document with file reads one. Every change to any file \
+raises the document's one revision number.";
 
 /// The MCP server: one instance per session, sharing the store.
 #[derive(Clone)]
@@ -287,6 +291,46 @@ pub struct GetDocumentParams {
     /// Revision to read; omit for the latest.
     #[serde(default)]
     pub version: Option<u64>,
+    /// For a multi-file document, the file to read, e.g. backlog/item-1;
+    /// omit for the main file.
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+/// Arguments of `new_document_file`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewDocumentFileParams {
+    /// Document ID of a multi-file document, e.g. JD-42.
+    pub document_id: String,
+    /// Path of the new file inside the document's folder, e.g.
+    /// backlog/item-1 (with or without .md).
+    pub file: String,
+    /// Markdown body, without front matter.
+    pub content: String,
+    /// The file's own front matter: any keys but document, revision and
+    /// updated (status here is yours, not checked).
+    #[serde(default)]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub front_matter: Option<Fields>,
+    /// The document revision you last read, if you want the call refused
+    /// when it is ahead of the document.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    /// One-line description of the change, for the history.
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Arguments of `list_document_files`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListDocumentFilesParams {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Document revision to list the files of; omit for the latest.
+    #[serde(default)]
+    pub version: Option<u64>,
 }
 
 /// Arguments of `new_document`.
@@ -312,6 +356,10 @@ pub struct NewDocumentParams {
     /// One-line description of the change, for the history.
     #[serde(default)]
     pub summary: Option<String>,
+    /// Create a multi-file document: a folder holding the main file
+    /// <title>/<title>.md, to which new_document_file adds files.
+    #[serde(default)]
+    pub multifile: bool,
 }
 
 /// Arguments of `update_document`.
@@ -434,6 +482,13 @@ pub struct DocumentOut {
     pub updated_by: String,
     /// Client that wrote the latest revision.
     pub client: String,
+    /// True for a multi-file document (left out otherwise).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub multifile: bool,
+    /// For a multi-file document, how many files it has besides the main
+    /// file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<u64>,
 }
 
 impl From<DocumentInfo> for DocumentOut {
@@ -451,6 +506,8 @@ impl From<DocumentInfo> for DocumentOut {
             updated: doc.updated,
             updated_by: doc.updated_by,
             client: doc.client,
+            multifile: doc.multifile,
+            files: doc.multifile.then_some(doc.files),
         }
     }
 }
@@ -495,6 +552,50 @@ pub struct GetDocumentOut {
     pub document: DocumentOut,
     /// The revision returned.
     pub revision: RevisionOut,
+    /// The file returned, when a file of a multi-file document was asked
+    /// for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// For a multi-file document, its files besides the main file at that
+    /// revision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
+}
+
+/// One file of a document.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct FileOut {
+    /// Path inside the document's folder, without .md; the main file's name
+    /// for the main file.
+    pub file: String,
+    /// True for the main file.
+    pub main: bool,
+    /// The document revision at which the file last changed.
+    pub revision: u64,
+    /// When it last changed (UTC).
+    pub updated: String,
+}
+
+impl From<FileInfo> for FileOut {
+    fn from(file: FileInfo) -> Self {
+        Self {
+            file: file.file,
+            main: file.main,
+            revision: file.revision,
+            updated: file.updated,
+        }
+    }
+}
+
+/// Result of `list_document_files`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ListDocumentFilesOut {
+    /// Document ID.
+    pub document_id: String,
+    /// The document revision listed.
+    pub revision: u64,
+    /// The main file first, then the other files by path.
+    pub files: Vec<FileOut>,
 }
 
 /// Result of `get_document_history`.
@@ -582,7 +683,10 @@ pub struct ChangedOut {
     pub revision: u64,
     /// Path within the vault.
     pub path: String,
-    /// The complete front matter now in the document.
+    /// The file changed, for a file of a multi-file document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The complete front matter now in the document (or file).
     #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
     pub front_matter: Fields,
 }
@@ -593,6 +697,7 @@ impl From<Changed> for ChangedOut {
             document_id: changed.id,
             revision: changed.revision,
             path: changed.path,
+            file: changed.file,
             front_matter: changed.front_matter,
         }
     }
@@ -840,11 +945,17 @@ impl JoeDocsServer {
     ) -> Result<Json<GetDocumentOut>, CallToolResult> {
         self.read(&ctx, move |store, caller| {
             require_document(store, caller, &params.document_id, Permission::Read)?;
-            let fetched = store.get(&params.document_id, params.version)?;
+            let fetched = match &params.file {
+                Some(file) => store.get_file(&params.document_id, file, params.version)?,
+                None => store.get(&params.document_id, params.version)?,
+            };
+            let multifile = fetched.document.multifile;
             Ok(GetDocumentOut {
                 markdown: fetched.markdown,
                 document: fetched.document.into(),
                 revision: fetched.revision.into(),
+                file: fetched.file,
+                files: multifile.then_some(fetched.files),
             })
         })
         .await
@@ -920,9 +1031,72 @@ impl JoeDocsServer {
                     content: params.content,
                     front_matter: params.front_matter.unwrap_or_default(),
                     summary: params.summary,
+                    multifile: params.multifile,
                 },
             )?;
             Ok(changed.into())
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Add a file to a multi-file document (one made with new_document multifile: true), e.g. backlog/item-1, with its own front matter. Raises the document's revision by one; give expected_revision (the document revision you last read) to be refused if the document moved past it. Returns the new revision.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    async fn new_document_file(
+        &self,
+        Parameters(params): Parameters<NewDocumentFileParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ChangedOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "new_document_file",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let changed = store.create_file(
+                    actor,
+                    &NewFile {
+                        document_id: params.document_id,
+                        file: params.file,
+                        content: params.content,
+                        front_matter: params.front_matter.unwrap_or_default(),
+                        expected_revision: params.expected_revision,
+                        summary: params.summary,
+                    },
+                )?;
+                Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "List a document's files: the main file first, then the other files of a multi-file document by path, each with the document revision at which it last changed. Pass version to list them as they were at an earlier revision.",
+        annotations(read_only_hint = true)
+    )]
+    async fn list_document_files(
+        &self,
+        Parameters(params): Parameters<ListDocumentFilesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ListDocumentFilesOut>, CallToolResult> {
+        self.read(&ctx, move |store, caller| {
+            require_document(store, caller, &params.document_id, Permission::Read)?;
+            let files = store.list_files(&params.document_id, params.version)?;
+            let revision = match params.version {
+                Some(version) => version,
+                None => store.get(&params.document_id, None)?.document.revision,
+            };
+            Ok(ListDocumentFilesOut {
+                document_id: params.document_id.trim().to_owned(),
+                revision,
+                files: files.into_iter().map(FileOut::from).collect(),
+            })
         })
         .await
     }

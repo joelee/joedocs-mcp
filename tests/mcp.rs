@@ -136,10 +136,12 @@ async fn tools_are_listed_with_schemas_and_hints() {
             "edit_document",
             "get_document",
             "get_document_history",
+            "list_document_files",
             "list_documents",
             "list_projects",
             "move_document",
             "new_document",
+            "new_document_file",
             "rename_document",
             "restore_document_version",
             "search_documents",
@@ -157,6 +159,7 @@ async fn tools_are_listed_with_schemas_and_hints() {
             "diff_document",
             "get_document",
             "get_document_history",
+            "list_document_files",
             "list_documents",
             "list_projects",
             "search_documents",
@@ -325,6 +328,162 @@ async fn every_tool_round_trips() {
         ]
     );
     server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn multi_file_documents_round_trip() {
+    let server = start().await.unwrap();
+    let client = server.client(&server.writer).await.unwrap();
+    let viewer = server.client(&server.reader).await.unwrap();
+
+    let created = ok(
+        &client,
+        "new_document",
+        json!({"project": "joedocs", "type": "plans", "title": "Roadmap",
+               "content": "# Roadmap\n", "multifile": true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(created["path"], "joedocs/plans/Roadmap/Roadmap.md");
+    assert_eq!(created.get("file"), None);
+
+    let added = ok(
+        &client,
+        "new_document_file",
+        json!({"document_id": "JD-1", "file": "backlog/item-1", "content": "# Item\n",
+               "front_matter": {"status": "planned"}, "expected_revision": 1}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(added["revision"], 2);
+    assert_eq!(added["file"], "backlog/item-1");
+    assert_eq!(added["path"], "joedocs/plans/Roadmap/backlog/item-1.md");
+    assert_eq!(added["front_matter"]["document"], "JD-1");
+    assert_eq!(added["front_matter"]["status"], "planned");
+
+    let refused = error(
+        &viewer,
+        "new_document_file",
+        json!({"document_id": "JD-1", "file": "x", "content": "x"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refused["code"], "permission_denied");
+    let bad = error(
+        &client,
+        "new_document_file",
+        json!({"document_id": "JD-1", "file": "../x", "content": "x"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (bad["code"].as_str(), bad["field"].as_str()),
+        (Some("invalid_argument"), Some("file"))
+    );
+
+    multi_file_reads(&viewer).await.unwrap();
+
+    let single = ok(
+        &client,
+        "new_document",
+        json!({"project": "joedocs", "title": "Plain", "content": "x\n"}),
+    )
+    .await
+    .unwrap();
+    let plain = ok(
+        &viewer,
+        "get_document",
+        json!({"document_id": single["document_id"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        plain["document"].get("multifile"),
+        None,
+        "single-file output is unchanged"
+    );
+    assert_eq!(plain["document"].get("files"), None);
+    assert_eq!(plain.get("files"), None);
+
+    client.cancel().await.unwrap();
+    viewer.cancel().await.unwrap();
+    let audit = audit_log(&server.root).unwrap();
+    assert_eq!(
+        audit,
+        [
+            "new_document JD-1 ok",
+            "new_document_file JD-1 ok",
+            "new_document_file JD-1 permission_denied",
+            "new_document_file JD-1 invalid_argument",
+            "new_document JD-2 ok",
+        ]
+    );
+    server.stop().await.unwrap();
+}
+
+/// The reading half of the multi-file round trip, on JD-1 holding the
+/// file `backlog/item-1`.
+async fn multi_file_reads(viewer: &Client) -> TestResult<()> {
+    let files = ok(
+        viewer,
+        "list_document_files",
+        json!({"document_id": "JD-1"}),
+    )
+    .await?;
+    assert_eq!(files["revision"], 2);
+    let names: Vec<(Value, Value, Value)> = files["files"]
+        .as_array()
+        .ok_or("no files")?
+        .iter()
+        .map(|f| (f["file"].clone(), f["main"].clone(), f["revision"].clone()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            (json!("Roadmap"), json!(true), json!(1)),
+            (json!("backlog/item-1"), json!(false), json!(2))
+        ]
+    );
+    let earlier = ok(
+        viewer,
+        "list_document_files",
+        json!({"document_id": "JD-1", "version": 1}),
+    )
+    .await?;
+    assert_eq!(earlier["files"].as_array().map(Vec::len), Some(1));
+
+    let item = ok(
+        viewer,
+        "get_document",
+        json!({"document_id": "JD-1", "file": "backlog/item-1"}),
+    )
+    .await?;
+    assert_eq!(item["file"], "backlog/item-1");
+    let markdown = item["markdown"].as_str().ok_or("no markdown")?;
+    assert!(
+        markdown.ends_with("status: planned\n---\n# Item\n"),
+        "{markdown}"
+    );
+    assert_eq!(item["document"]["multifile"], true);
+    assert_eq!(item["document"]["files"], 1);
+    let main = ok(viewer, "get_document", json!({"document_id": "JD-1"})).await?;
+    assert_eq!(main.get("file"), None);
+    assert_eq!(main["files"], json!(["backlog/item-1"]));
+    let missing = error(
+        viewer,
+        "get_document",
+        json!({"document_id": "JD-1", "file": "nope"}),
+    )
+    .await?;
+    assert_eq!(
+        (missing["code"].as_str(), missing["file"].as_str()),
+        (Some("not_found"), Some("nope"))
+    );
+
+    let listed = ok(viewer, "list_documents", json!({"project": "joedocs"})).await?;
+    assert_eq!(listed["items"][0]["multifile"], true);
+    assert_eq!(listed["items"][0]["files"], 1);
+    Ok(())
 }
 
 /// `search_documents` covers only what the key can read.

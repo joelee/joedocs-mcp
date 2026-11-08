@@ -80,7 +80,8 @@ Every tool returns structured JSON. A tool takes only the parameters listed; an 
 | `list_projects` | none | The projects this key can use, with `permission` and document count, plus the allowed `types`, `statuses`, `default_type` and `default_status`. Call it first. |
 | `list_documents` | `project`, `type` (default `all`), `status`, `limit` (1 to 1000, default 200), `start` (default 1), `sort` (`updated_desc` (default), `updated_asc`, `created_desc`, `created_asc`, `title`) | Metadata only: `items`, `total`, `next_start`. |
 | `search_documents` | `project` (a name, or `"*"` for every project the key can read), `type` (default `all`), `query`, `filters`, `limit` (1 to 200, default 20), `start` | `items` with metadata, `score` and `snippet`, best first; `total`, `next_start`. See [Search](#search). |
-| `get_document` | `document_id`, `version` (omit for the latest) | `markdown` (front matter and body), `document` (metadata) and `revision`. |
+| `get_document` | `document_id`, `version` (omit for the latest), `file` (a file of a multi-file document; omit for the main file) | `markdown` (front matter and body), `document` (metadata) and `revision`. For a multi-file document also `files` (its other files at that revision) and, when `file` was given, `file`. |
+| `list_document_files` | `document_id`, `version` (omit for the latest) | `document_id`, `revision` and `files`: the main file first, then the other files by path, each with `file`, `main`, `revision` (the document revision at which it last changed) and `updated`. |
 | `get_document_history` | `document_id`, `limit` (1 to 1000, default 50), `start` | Revisions newest first: number, action, author key, client, summary and time. |
 | `diff_document` | `document_id`, `from`, `to` (omit for the latest), `context` (0 to 100, default 3) | A unified diff of the whole file, front matter included, and `changed`. |
 
@@ -90,7 +91,8 @@ Every change is one new revision and one git commit. `update_document`, `edit_do
 
 | Tool | Parameters | Effect |
 | --- | --- | --- |
-| `new_document` | `project`, `title`, `content` (the body), `type`, `status`, `front_matter` (custom keys, `tags`, `aliases`), `summary` | Creates revision 1 and returns the new ID and path. |
+| `new_document` | `project`, `title`, `content` (the body), `type`, `status`, `front_matter` (custom keys, `tags`, `aliases`), `summary`, `multifile` (default `false`) | Creates revision 1 and returns the new ID and path. With `multifile: true` the document is a folder (see [Multi-file documents](#multi-file-documents)). |
+| `new_document_file` | `document_id` (a multi-file document), `file` (its path in the folder, e.g. `backlog/item-1`, with or without `.md`), `content`, `front_matter`, `expected_revision`, `summary` | Adds a file as one new revision and returns the revision, `path` and `file`. Refused with `conflict` only when `expected_revision` is ahead of the document, since no existing file changes. |
 | `update_document` | `document_id`, `content`, `expected_revision`, `front_matter`, `summary` | Replaces the body; `front_matter` keys are set as in `change_document_front_matter`. Refused (`field: content`) if neither the body nor the front matter would change. |
 | `edit_document` | `document_id`, `edits` (1 to 64 of `{old, new}`), `expected_revision`, `summary` | Exact replacements in the body, in order. Each `old` must occur exactly once; if any edit fails, nothing changes and the error names it. Refused (`field: edits`) if the edits leave the body as it was. |
 | `append_to_document` | `document_id`, `content`, `expected_revision`, `summary` | Adds Markdown to the end of the body, after a blank line. |
@@ -190,6 +192,15 @@ Every key works the same way, server keys and custom keys alike. Text compares i
 
 Each document is `<storage.home>/<project>/<type>/<Title>.md`. Characters that Obsidian rejects in file names are left out of the file name, and a clash in one folder gets ` (JD-42)` appended.
 
+### Multi-file documents
+
+A document created with `multifile: true` is a folder, `<project>/<type>/<Title>/`, holding its main file `<Title>/<Title>.md` (an Obsidian folder note, so `[[Title]]` still links to it) and any other files, such as `<Title>/backlog/item-1.md`, under the same ID. A folder named `INDEX` in any case gets ` (JD-42)` appended, since `INDEX.md` is the folder's file list.
+
+- The main file holds the document's front matter. Every other file has its own: `document` (the ID), `revision` and `updated` first, written by JoeDocs, then any keys of yours. In those files every other key is custom, `status` included (it is not checked against `documents.statuses`); `tags` and `aliases` must still be lists of strings.
+- A file is named by its path inside the folder, with or without `.md`: up to 4 directories deep, each part following the title rules (none of `` * " \ < > : | ? # ^ [ ] `` or control characters, not starting with `.`, not ending with a space or `.`, at most 100 bytes). `INDEX` (in any case) and the main file's own name at the top level are reserved, and two files whose paths differ only in case cannot both exist. A document holds at most `documents.max_files` files besides its main file (500 by default).
+- Every change to any file raises the document's one revision number and is one history commit. Each file's `revision` is the document revision at which it last changed; changing another file leaves the main file as it is.
+- `<Title>/INDEX.md`, generated like the project `INDEX.md`, lists the ID, title and revision and a table of the files with an Obsidian link to each, the revision at which each last changed and its date. The project `INDEX.md` lists the document once, linking its main file, with `(+N files)`.
+
 ### INDEX.md
 
 With `documents.index_file` on (the default), each project folder also holds `<storage.home>/<project>/INDEX.md`, a table of the project's live documents for finding and opening one by ID:
@@ -207,7 +218,7 @@ Generated by JoeDocs after every change. Do not edit: changes are overwritten.
 - Rows are sorted by the number in the ID (`JD-2` before `JD-10`); archived documents are left out. A project with no documents shows "No documents yet."
 - Each title links to its file with a path relative to `INDEX.md`, percent-encoded, so the link works in Obsidian, on GitHub and in any editor, wherever the folder is copied. Updated is the UTC date of the latest revision.
 - JoeDocs rewrites the file after every change to the project's documents and when the project is added, and leaves it alone when its content would not change. A failure to write it is logged as a warning and does not fail the change.
-- It is not a document and never enters the history: `init` and every later start add `/*/INDEX.md` to the history's `info/exclude`. `<project>/INDEX.md` of a registered project is a reserved path: `check` never reports it as an unknown file, but reports it when it is missing or out of date.
+- It is not a document and never enters the history: `init` and every later start add `/*/INDEX.md` and `/*/*/*/INDEX.md` (the folder lists of multi-file documents) to the history's `info/exclude`. `<project>/INDEX.md` of a registered project, and `INDEX.md` in a live multi-file document's folder, are reserved paths: `check` never reports them as unknown files, but reports them when missing or out of date.
 - `serve` rewrites every project's `INDEX.md` when it starts, and so does `reindex`.
 - With `documents.index_file` off, JoeDocs neither writes nor checks it, and leaves an existing one in place.
 
@@ -282,4 +293,4 @@ JoeDocs-Action: update
 JoeDocs-Client: claude-code
 ```
 
-Actions are `create`, `update`, `edit`, `append`, `front_matter`, `rename`, `move`, `restore`, `archive` and `unarchive`. Inspect it with plain git, for example `git --git-dir <state_dir>/history.git log --format='%ad %an | %s'`.
+Actions are `create`, `update`, `edit`, `append`, `front_matter`, `rename`, `move`, `restore`, `archive`, `unarchive` and, for multi-file documents, `create_file`. A commit of a multi-file document also names every file it adds, changes or removes in a `JoeDocs-File` trailer: its path inside the folder with `.md`, the main file under its own name. A renamed file's `JoeDocs-File` is followed by `JoeDocs-File-From` with its old path. Commits of single-file documents have none. Inspect it with plain git, for example `git --git-dir <state_dir>/history.git log --format='%ad %an | %s'`.

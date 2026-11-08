@@ -7,14 +7,17 @@
 //! and API keys live only in the database; a project missing from it is
 //! recreated from the documents' front matter.
 
+use std::collections::HashSet;
 use std::fs;
 
 use indexmap::IndexMap;
 
-use super::documents::sha256;
+use super::documents::{FILE_FROM_TRAILER, FILE_TRAILER, sha256};
 use super::{Error, Store, index_file, lock};
 use crate::clock::format_timestamp;
-use crate::db::{self, Connection, DocumentRow, ProjectRow, RevisionRow};
+use crate::db::{
+    self, Connection, DocumentRow, FileChange, FileRow, ProjectRow, RevisionFileRow, RevisionRow,
+};
 use crate::document::DocumentId;
 use crate::document::front_matter::{self, Fields};
 use crate::history::{Change, History, Logged};
@@ -47,10 +50,39 @@ pub struct Reindexed {
 #[derive(Default)]
 struct Replay {
     revisions: Vec<RevisionRow>,
-    /// Commit and path of the latest revision that has content.
+    /// Commit and path of the latest revision that has content (of the
+    /// main file, for a multi-file document).
     content: Option<(String, String)>,
     /// Time, key name and reason, if the latest revision archived it.
     archived: Option<(String, String, String)>,
+    /// Whether its commits name files (`JoeDocs-File`).
+    multifile: bool,
+    /// The revision at which the main file last changed.
+    main_revision: u64,
+    /// Live sub-files by case-folded path.
+    files: IndexMap<String, ReplayFile>,
+    /// Archived sub-files.
+    gone: Vec<ReplayFile>,
+    /// The file changes of every revision.
+    changes: Vec<RevisionFileRow>,
+}
+
+/// One sub-file, as replayed so far.
+struct ReplayFile {
+    /// Position among every sub-file created, in history order, so the
+    /// rebuilt rows get the IDs the live store gave them.
+    order: usize,
+    path: String,
+    created_at: String,
+    created_by: String,
+    revision: u64,
+    updated_at: String,
+    updated_by: String,
+    client: String,
+    /// Commit and vault path of its latest content.
+    content: (String, String),
+    /// Time and key name, if archived.
+    archived: Option<(String, String)>,
 }
 
 /// A document ready to insert.
@@ -60,6 +92,15 @@ struct Rebuilt {
     revisions: Vec<RevisionRow>,
     fields: Fields,
     body: String,
+    files: Vec<RebuiltFile>,
+    changes: Vec<RevisionFileRow>,
+}
+
+/// A sub-file ready to insert, with its search entries when live.
+struct RebuiltFile {
+    order: usize,
+    row: FileRow,
+    indexed: Option<(Fields, String)>,
 }
 
 fn bad(commit: &str, message: impl Into<String>) -> Error {
@@ -100,9 +141,10 @@ impl Store {
         let head = history.head()?;
         let mut report = Reindexed::default();
         let mut replays: IndexMap<String, Replay> = IndexMap::new();
+        let mut created = 0;
         for commit in history.log()? {
             if commit.trailer(DOCUMENT).is_some() {
-                replay(&mut replays, &commit)?;
+                replay(&mut replays, &commit, &mut created)?;
             } else {
                 report.skipped_commits += 1;
             }
@@ -114,8 +156,24 @@ impl Store {
 
         let tx = conn.transaction()?;
         db::clear_documents(&tx)?;
-        for document in documents {
+        let mut files = Vec::new();
+        let mut changes = Vec::new();
+        for mut document in documents {
+            files.append(&mut document.files);
+            changes.append(&mut document.changes);
             insert(&tx, document, &mut report)?;
+        }
+        // In the order the live store created them, so they get its IDs.
+        files.sort_by_key(|file| file.order);
+        for file in files {
+            let mut row = file.row;
+            row.id = db::insert_file(&tx, &row)?;
+            if let Some((fields, body)) = file.indexed {
+                db::index_file(&tx, &row, &fields, &body)?;
+            }
+        }
+        for change in &changes {
+            db::insert_revision_file(&tx, change)?;
         }
         match &head {
             Some(head) => db::set_history_head(&tx, head)?,
@@ -130,8 +188,13 @@ impl Store {
     }
 }
 
-/// Adds one commit to its document's replay.
-fn replay(replays: &mut IndexMap<String, Replay>, commit: &Logged) -> Result<(), Error> {
+/// Adds one commit to its document's replay. `created` counts the sub-files
+/// created so far.
+fn replay(
+    replays: &mut IndexMap<String, Replay>,
+    commit: &Logged,
+    created: &mut usize,
+) -> Result<(), Error> {
     let trailer = |key| {
         commit
             .trailer(key)
@@ -154,13 +217,32 @@ fn replay(replays: &mut IndexMap<String, Replay>, commit: &Logged) -> Result<(),
         ));
     }
     let archive = action == "archive";
-    let path = commit
-        .changes
-        .iter()
-        .find(|(change, _)| (*change == Change::Deleted) == archive)
-        .map(|(_, path)| path.clone())
-        .ok_or_else(|| bad(&commit.id, format!("no file for {id}")))?;
     let at = format_timestamp(commit.at);
+    let client = commit.trailer(CLIENT).unwrap_or("unknown").to_owned();
+    let files = file_trailers(commit)?;
+    let path = if files.is_empty() {
+        if doc.multifile {
+            return Err(bad(
+                &commit.id,
+                format!("{id} is a multi-file document, but the commit names no {FILE_TRAILER}"),
+            ));
+        }
+        commit
+            .changes
+            .iter()
+            .find(|(change, _)| (*change == Change::Deleted) == archive)
+            .map(|(_, path)| path.clone())
+            .ok_or_else(|| bad(&commit.id, format!("no file for {id}")))?
+    } else {
+        let step = Step {
+            commit,
+            id: &id,
+            revision,
+            at: &at,
+            client: &client,
+        };
+        replay_files(doc, &step, &files, created)?
+    };
     if archive {
         let reason = commit
             .subject
@@ -169,7 +251,9 @@ fn replay(replays: &mut IndexMap<String, Replay>, commit: &Logged) -> Result<(),
         doc.archived = Some((at.clone(), commit.author.clone(), reason.to_owned()));
     } else {
         doc.archived = None;
-        doc.content = Some((commit.id.clone(), path.clone()));
+        if !doc.multifile {
+            doc.content = Some((commit.id.clone(), path.clone()));
+        }
     }
     doc.revisions.push(RevisionRow {
         document_id: id,
@@ -178,10 +262,201 @@ fn replay(replays: &mut IndexMap<String, Replay>, commit: &Logged) -> Result<(),
         path,
         action: action.to_owned(),
         author: commit.author.clone(),
-        client: commit.trailer(CLIENT).unwrap_or("unknown").to_owned(),
+        client,
         summary: commit.subject.clone(),
         created_at: at,
     });
+    Ok(())
+}
+
+/// The `JoeDocs-File` trailers of `commit` in order, each with the
+/// `JoeDocs-File-From` that follows it, if any.
+fn file_trailers(commit: &Logged) -> Result<Vec<(String, Option<String>)>, Error> {
+    let mut files: Vec<(String, Option<String>)> = Vec::new();
+    for (key, value) in &commit.trailers {
+        if key == FILE_TRAILER {
+            files.push((value.clone(), None));
+        } else if key == FILE_FROM_TRAILER {
+            match files.last_mut() {
+                Some((_, from @ None)) => *from = Some(value.clone()),
+                _ => {
+                    return Err(bad(
+                        &commit.id,
+                        format!("{FILE_FROM_TRAILER} without a {FILE_TRAILER} before it"),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// Whether `path` is the main file of a multi-file document's folder:
+/// `<project>/<type>/<name>/<name>.md`.
+fn is_main_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() == 4 && parts[3].strip_suffix(".md") == Some(parts[2])
+}
+
+/// The commit being replayed, for [`replay_files`].
+struct Step<'a> {
+    commit: &'a Logged,
+    id: &'a str,
+    revision: u64,
+    at: &'a str,
+    client: &'a str,
+}
+
+/// Replays a multi-file document's commit: each `JoeDocs-File` names a file
+/// inside the folder that the commit adds, changes or removes, and every
+/// path the commit changes must be named. Returns the main file's path.
+fn replay_files(
+    doc: &mut Replay,
+    step: &Step<'_>,
+    files: &[(String, Option<String>)],
+    created: &mut usize,
+) -> Result<String, Error> {
+    let commit = step.commit;
+    let fail = |message: String| bad(&commit.id, message);
+    doc.multifile = true;
+    // The folder: where a main file this commit adds is, else where the
+    // main file was.
+    let added_main = commit
+        .changes
+        .iter()
+        .filter(|(change, path)| *change != Change::Deleted && is_main_path(path))
+        .map(|(_, path)| path.as_str())
+        .find(|path| {
+            let name = path.rsplit_once('/').map_or(*path, |(_, name)| name);
+            files.iter().any(|(file, _)| file == name)
+        });
+    let previous = doc.revisions.last().map(|r| r.path.clone());
+    let main_path = match (added_main, &previous) {
+        (Some(path), _) => path.to_owned(),
+        (None, Some(path)) if is_main_path(path) => path.clone(),
+        _ => return Err(fail(format!("no main file for {} in the commit", step.id))),
+    };
+    let folder = main_path.rsplit_once('/').map_or("", |(folder, _)| folder);
+    let folder_name = folder.rsplit_once('/').map_or(folder, |(_, name)| name);
+    let mut named: HashSet<String> = HashSet::new();
+    for (file, from) in files {
+        let rel = file
+            .strip_suffix(".md")
+            .ok_or_else(|| fail(format!("{FILE_TRAILER} {file} does not end in .md")))?;
+        let vault = format!("{folder}/{file}");
+        let kind = commit
+            .changes
+            .iter()
+            .find(|(_, path)| *path == vault)
+            .map(|(change, _)| *change)
+            .ok_or_else(|| {
+                fail(format!(
+                    "{FILE_TRAILER} {file} names a file the commit does not change"
+                ))
+            })?;
+        named.insert(vault.clone());
+        let from_rel = match from {
+            Some(from) => {
+                named.insert(format!("{folder}/{from}"));
+                Some(
+                    from.strip_suffix(".md")
+                        .ok_or_else(|| {
+                            fail(format!("{FILE_FROM_TRAILER} {from} does not end in .md"))
+                        })?
+                        .to_owned(),
+                )
+            }
+            None => None,
+        };
+        let change = match (kind, &from_rel) {
+            (Change::Deleted, _) => FileChange::Removed,
+            (Change::Added, Some(_)) => FileChange::Renamed,
+            (Change::Added, None) => FileChange::Added,
+            (Change::Modified, _) => FileChange::Modified,
+        };
+        let main = rel == folder_name;
+        if main {
+            doc.main_revision = step.revision;
+            if kind != Change::Deleted {
+                doc.content = Some((commit.id.clone(), vault));
+            }
+        } else {
+            replay_file(doc, step, rel, change, from_rel.as_deref(), vault, created)?;
+        }
+        doc.changes.push(RevisionFileRow {
+            document_id: step.id.to_owned(),
+            revision: step.revision,
+            path: rel.to_owned(),
+            main,
+            change,
+            from_path: from_rel,
+        });
+    }
+    if let Some((_, path)) = commit
+        .changes
+        .iter()
+        .find(|(_, path)| !named.contains(path))
+    {
+        return Err(fail(format!(
+            "it changes {path}, which no {FILE_TRAILER} trailer names"
+        )));
+    }
+    Ok(main_path)
+}
+
+/// Applies one sub-file's change to the replay.
+fn replay_file(
+    doc: &mut Replay,
+    step: &Step<'_>,
+    rel: &str,
+    change: FileChange,
+    from: Option<&str>,
+    vault: String,
+    created: &mut usize,
+) -> Result<(), Error> {
+    let fail = |message: String| bad(&step.commit.id, message);
+    let key = rel.to_lowercase();
+    let author = &step.commit.author;
+    let mut file = match (change, from) {
+        (FileChange::Added, _) => {
+            if doc.files.contains_key(&key) {
+                return Err(fail(format!("{} already has a file {rel}", step.id)));
+            }
+            *created += 1;
+            ReplayFile {
+                order: *created,
+                path: rel.to_owned(),
+                created_at: step.at.to_owned(),
+                created_by: author.clone(),
+                revision: 0,
+                updated_at: String::new(),
+                updated_by: String::new(),
+                client: String::new(),
+                content: (String::new(), String::new()),
+                archived: None,
+            }
+        }
+        (FileChange::Renamed, Some(from)) => doc
+            .files
+            .shift_remove(&from.to_lowercase())
+            .ok_or_else(|| fail(format!("{} has no file {from} to rename", step.id)))?,
+        _ => doc
+            .files
+            .shift_remove(&key)
+            .ok_or_else(|| fail(format!("{} has no file {rel}", step.id)))?,
+    };
+    rel.clone_into(&mut file.path);
+    file.revision = step.revision;
+    step.at.clone_into(&mut file.updated_at);
+    author.clone_into(&mut file.updated_by);
+    step.client.clone_into(&mut file.client);
+    if change == FileChange::Removed {
+        file.archived = Some((step.at.to_owned(), author.clone()));
+        doc.gone.push(file);
+    } else {
+        file.content = (step.commit.id.clone(), vault);
+        doc.files.insert(key, file);
+    }
     Ok(())
 }
 
@@ -191,6 +466,11 @@ fn rebuild(history: &dyn History, id: &str, replay: Replay) -> Result<Rebuilt, E
         revisions,
         content,
         archived,
+        multifile,
+        main_revision,
+        files: live,
+        gone,
+        changes,
     } = replay;
     let (Some((commit, path)), Some(last)) = (content, revisions.last()) else {
         let commit = revisions.first().map_or("(none)", |r| r.commit_id.as_str());
@@ -238,16 +518,74 @@ fn rebuild(history: &dyn History, id: &str, replay: Replay) -> Result<Rebuilt, E
         archived_at,
         archived_by,
         archive_reason,
-        multifile: false,
-        main_revision: last.revision,
+        multifile,
+        main_revision: if multifile {
+            main_revision
+        } else {
+            last.revision
+        },
     };
     let body = parsed.body.to_owned();
+    let mut files = Vec::with_capacity(live.len() + gone.len());
+    for (file, is_live) in live
+        .into_values()
+        .map(|f| (f, true))
+        .chain(gone.into_iter().map(|f| (f, false)))
+    {
+        files.push(rebuild_file(history, id, file, is_live)?);
+    }
     Ok(Rebuilt {
         row,
         key: parsed_id.key().to_owned(),
         revisions,
         fields: parsed.fields,
         body,
+        files,
+        changes,
+    })
+}
+
+/// Reads a sub-file's latest content and builds its row, with its search
+/// entries when it is live.
+fn rebuild_file(
+    history: &dyn History,
+    id: &str,
+    file: ReplayFile,
+    live: bool,
+) -> Result<RebuiltFile, Error> {
+    let (commit, path) = &file.content;
+    let bytes = history.show(commit, path)?;
+    let content_sha256 = sha256(&bytes);
+    let indexed = if live {
+        let text =
+            String::from_utf8(bytes).map_err(|_| bad(commit, format!("{path} is not UTF-8")))?;
+        let parsed =
+            front_matter::parse(&text).map_err(|e| bad(commit, format!("{path}: {}", e.0)))?;
+        Some((parsed.fields, parsed.body.to_owned()))
+    } else {
+        None
+    };
+    let (archived_at, archived_by) = match file.archived {
+        Some((at, by)) => (Some(at), Some(by)),
+        None => (None, None),
+    };
+    Ok(RebuiltFile {
+        order: file.order,
+        row: FileRow {
+            id: 0,
+            document_id: id.to_owned(),
+            path: file.path,
+            revision: file.revision,
+            created_at: file.created_at,
+            created_by: file.created_by,
+            updated_at: file.updated_at,
+            updated_by: file.updated_by,
+            client: file.client,
+            content_sha256,
+            archived_at,
+            archived_by,
+        },
+        indexed,
     })
 }
 
@@ -260,6 +598,7 @@ fn insert(tx: &Connection, document: Rebuilt, report: &mut Reindexed) -> Result<
         revisions,
         fields,
         body,
+        ..
     } = document;
     let existing = db::find_project(tx, &key)?.filter(|p| p.key == key);
     let project = if let Some(project) = existing {
@@ -313,11 +652,20 @@ pub(super) fn drifted(
     home: &std::path::Path,
 ) -> Result<Vec<(String, String)>, Error> {
     let mut drifted = Vec::new();
+    let same = |path: &str, hash: &[u8]| {
+        fs::read(home.join(path)).is_ok_and(|bytes| sha256(&bytes) == hash)
+    };
     for row in db::live_documents(conn)? {
-        let same =
-            fs::read(home.join(&row.path)).is_ok_and(|bytes| sha256(&bytes) == row.content_sha256);
-        if !same {
-            drifted.push((row.id, row.path));
+        if !same(&row.path, &row.content_sha256) {
+            drifted.push((row.id.clone(), row.path.clone()));
+        }
+        if row.multifile {
+            for file in db::live_files(conn, &row.id)? {
+                let path = super::files::vault_path(&row, &file.path);
+                if !same(&path, &file.content_sha256) {
+                    drifted.push((row.id.clone(), path));
+                }
+            }
         }
     }
     Ok(drifted)

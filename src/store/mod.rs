@@ -24,6 +24,7 @@ mod backup;
 mod check;
 mod documents;
 mod editing;
+mod files;
 mod index_file;
 mod journal;
 mod registry;
@@ -48,6 +49,7 @@ pub use documents::{
     RevisionInfo, Update,
 };
 pub use editing::{MAX_EDITS, Replacement};
+pub use files::{FileInfo, NewFile};
 pub use registry::CreatedKey;
 pub use reindex::Reindexed;
 pub use revisions::{Diff, HistoryPage, MAX_DIFF_CONTEXT, MAX_HISTORY_LIMIT};
@@ -76,6 +78,16 @@ pub enum Error {
     /// No document has this ID.
     #[error("document {0} does not exist")]
     NotFound(String),
+    /// The document has no live file at this path (at that revision).
+    #[error("document {id} has no file {file}{at}")]
+    FileNotFound {
+        /// Document ID.
+        id: String,
+        /// The file, as asked for.
+        file: String,
+        /// `" at revision N"` when an earlier revision was asked for.
+        at: String,
+    },
     /// The document is archived.
     #[error("document {0} is archived")]
     Archived(String),
@@ -280,6 +292,8 @@ pub struct Settings {
     pub max_document_bytes: u64,
     /// Whether each project folder gets a generated `INDEX.md`.
     pub index_file: bool,
+    /// Most live sub-files a multi-file document may hold.
+    pub max_files: u64,
 }
 
 impl Settings {
@@ -293,6 +307,7 @@ impl Settings {
             default_status: config.documents.default_status.clone(),
             max_document_bytes: config.server.max_document_bytes,
             index_file: config.documents.index_file,
+            max_files: u64::from(config.documents.max_files),
         }
     }
 }
