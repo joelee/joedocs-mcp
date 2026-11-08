@@ -26,6 +26,7 @@ Nothing.
 
 ## Done
 
+- **0.4.0** (2026-11-09): multi-file documents (a folder of files under one ID and one revision, each file with its own front matter, searchable, with per-file conflicts), four new MCP tools and `file` on the existing ones, `joedocs document convert|move-file|restore-file`, `get --part` and `--archive`, and `joedocs login` asking for and saving the server. Plan JD-12.
 - **0.3.0** (2026-11-08): remote administration through an admin API that is off by default, with admin tokens, TOTP logins, expiring sessions and a re-login prompt; `joedocs get`, `status`, `agents` and `backup` (with `--restore`); [upgrading.md](upgrading.md). Plan JD-8.
 - **0.2.0** (2026-11-07): `INDEX.md` per project, and tag-triggered releases to crates.io and the Homebrew tap. Plan JD-5, reviews JD-6 and JD-7.
 - **0.1.2** (2026-11-07): `edit_document`, `update_document` and `change_document_front_matter` refuse no-op changes; a gitleaks rule for JoeDocs API keys; a committed pre-commit hook (`.githooks/pre-commit`) with `actionlint` in the hook and CI; client setup with keys from the environment; signed release tags. Plan JD-3, review JD-4.

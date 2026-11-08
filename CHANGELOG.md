@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+Multi-file documents: a document can be a folder of Markdown files under one ID and one revision number, such as a roadmap with a backlog of items, each file with its own front matter and searchable on its own. And `joedocs login` sets up the server for you.
+
+### Added
+
+- **Multi-file documents.** `new_document` with `multifile: true` makes the document a folder, `<project>/<type>/<Title>/<Title>.md` (an Obsidian folder note, so `[[Title]]` still links to it). Its other files, such as `<Title>/backlog/item-1.md`, have their own front matter (`document`, `revision` and `updated` first, then any keys of yours, `status` included). Every change to any file raises the document's revision; each file records the revision at which it last changed, and a change conflicts only when that file changed after the revision you read. Renaming, moving, archiving and restoring the document act on the whole folder. A generated `<Title>/INDEX.md` lists the files.
+- **MCP tools:** `new_document_file`, `list_document_files`, `write_document_files` (several files in one revision, all or nothing) and `archive_document_file`, for nineteen in all. `get_document`, `update_document`, `edit_document`, `append_to_document`, `change_document_front_matter`, `get_document_history` and `diff_document` take `file`, and `rename_document` takes `file` and `new_file`. `search_documents` finds a document's files on their own (hits carry `file`; filters test the matched file's front matter) and takes `document_id` to search one document. Documents carry `multifile` and `files` (a count).
+- **`joedocs document convert`, `move-file` and `restore-file`**, administrator commands (never MCP tools) that make a single-file document multi-file, move a file to another multi-file document in one commit, and bring back one file as it was at an earlier revision. They also run remotely, through `POST /admin/v1/documents/{id}/convert`, `files/move` and `files/restore`.
+- **`joedocs get --part FILE`** prints one file of a multi-file document, and **`--archive OUT.tgz`** writes all of them to a gzip tar; `get` on a multi-file document lists its other files after the main file. Both work remotely too.
+- **`joedocs login` asks for the server.** At a terminal with no `client.server` and no `--server`, it asks for the URL, checks it (`https`, or `http` to this machine, and `/health` answering `ok` without a redirect), asks again up to three times, and saves `client.server` in the config file in use, or `~/.config/joedocs/config.toml`, keeping that file's comments.
+- `documents.max_files` (default 500; `JOEDOCS__DOCUMENTS__MAX_FILES`): the most files a multi-file document may hold besides its main file.
+- History commits of multi-file documents name each file they change in `JoeDocs-File` trailers (`JoeDocs-File-From` for a rename; `JoeDocs-Target-Document`, `-Target-Revision` and `-Target-File` for a move between documents), and `reindex` rebuilds every file from them. New actions: `create_file`, `write_files`, `archive_file`, `convert`, `move_file` and `restore_file`.
+
+### Changed
+
+- A missing admin token now says to *export* `JOEDOCS_ADMIN_TOKEN`, and so does `joedocs admin-token create`: a shell variable that is set but not exported is not seen by `joedocs`.
+- `rename_document` takes `title`, or `file` and `new_file`; `title` is no longer required on its own. Calls that worked before work the same.
+- `conflict` errors for a file of a multi-file document also give `file` and `file_revision`.
+
+### Upgrading
+
+- Database migration 5 adds multi-file documents: **JoeDocs 0.3.x cannot open the database afterwards**. Take a backup first with `joedocs backup FILE.tgz` (see [upgrading.md](docs/upgrading.md)).
+- The index layout changes, so the first `serve` rebuilds the index from the history once; existing documents are unchanged.
+
 ## [0.3.0] - 2026-11-08
 
 Run the admin commands from another machine, protected by an admin token and a TOTP code, and new commands to read a document, see where and how the server runs, brief a maintenance agent, and back up and restore.
@@ -83,7 +108,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/joelee/joedocs-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/joelee/joedocs-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/joelee/joedocs-mcp/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/joelee/joedocs-mcp/compare/v0.1.1...v0.1.2

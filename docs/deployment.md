@@ -140,7 +140,7 @@ claude mcp add --transport http --scope user joedocs https://docs.example.ts.net
 claude mcp get joedocs        # Connected
 ```
 
-In a session, `/mcp` should list fifteen JoeDocs tools. Ask *"List my JoeDocs projects"* to check the key's grants.
+In a session, `/mcp` should list nineteen JoeDocs tools. Ask *"List my JoeDocs projects"* to check the key's grants.
 
 To create a key from the client machine without copying it by hand, run `key create` over SSH and capture the last line (non-interactive SSH may not have `~/.cargo/bin` on `PATH`, so give the full path):
 
