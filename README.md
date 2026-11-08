@@ -10,7 +10,7 @@
 
 **One home for every project's plans, ideas, issues, reviews and specs, shared by all your coding agents, on every machine.**
 
-JoeDocs is a small, self-hosted [MCP](https://modelcontextprotocol.io) server. Claude Code (or any MCP client) on your laptop, desktop and servers reads and writes the same documents through it. Every document is a plain Markdown file with YAML front matter, so you can open the whole collection as an [Obsidian](https://obsidian.md) vault. Every change is a git commit, so nothing is ever lost.
+JoeDocs is a self-hosted [MCP](https://modelcontextprotocol.io) server. Claude Code (or any MCP client) on your laptop, desktop and servers reads and writes the same documents through it. Every document is a plain Markdown file with YAML front matter, so you can open the whole collection as an [Obsidian](https://obsidian.md) vault. Every change is a git commit, so nothing is ever lost.
 
 ```text
 You:    Plan the rate-limit work from the idea we captured yesterday.

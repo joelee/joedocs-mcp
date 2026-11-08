@@ -168,7 +168,7 @@ pub fn admin_token(
             writeln!(out, "  {}", created.uri.expose_secret())?;
             writeln!(
                 out,
-                "The admin token follows, shown once. Keep it in a password manager; on the client, set JOEDOCS_ADMIN_TOKEN to it."
+                "The admin token follows, shown once. Keep it in a password manager; on the client, export JOEDOCS_ADMIN_TOKEN with it."
             )?;
             writeln!(out, "{}", created.token.expose_secret())?;
         }

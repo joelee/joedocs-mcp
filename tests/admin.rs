@@ -1060,6 +1060,10 @@ fn admin_tokens_are_created_with_a_totp_secret_listed_and_revoked() {
         token.starts_with("jda_") && token.len() == 4 + 12 + 1 + 64,
         "{text}"
     );
+    assert!(
+        text.contains("on the client, export JOEDOCS_ADMIN_TOKEN with it"),
+        "{text}"
+    );
     let uri = text
         .lines()
         .map(str::trim)

@@ -410,7 +410,7 @@ impl<'a> Remote<'a> {
     ) -> Result<Self, Error> {
         let token = token.cloned().ok_or_else(|| {
             Error::Auth(
-                "set JOEDOCS_ADMIN_TOKEN to your admin token (printed once by `joedocs admin-token create` on the server)"
+                "export JOEDOCS_ADMIN_TOKEN with your admin token (printed once by `joedocs admin-token create` on the server)"
                     .into(),
             )
         })?;

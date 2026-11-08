@@ -207,7 +207,7 @@ fn login_failures_exit_77_and_an_unreachable_server_69() {
         .args(["login", "--code", &server.code()])
         .assert()
         .code(77)
-        .stderr(predicate::str::contains("JOEDOCS_ADMIN_TOKEN"));
+        .stderr(predicate::str::contains("export JOEDOCS_ADMIN_TOKEN"));
     server
         .cmd()
         .args(["login", "--code", "000000"])
