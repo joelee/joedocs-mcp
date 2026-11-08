@@ -742,6 +742,84 @@ fn backup_writes_a_private_consistent_archive() {
 }
 
 #[test]
+fn a_backup_restores_multi_file_documents_intact() {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let mut store = library_store(root.path()).unwrap();
+    let actor = Actor::new("laptop", "test");
+    store
+        .create(
+            &actor,
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Roadmap".into(),
+                content: "x\n".into(),
+                multifile: true,
+                ..NewDocument::default()
+            },
+        )
+        .unwrap();
+    for file in ["backlog/item-1", "notes"] {
+        store
+            .create_file(
+                &actor,
+                &NewFile {
+                    document_id: "JD-1".into(),
+                    file: file.into(),
+                    content: format!("{file}\n"),
+                    ..NewFile::default()
+                },
+            )
+            .unwrap();
+    }
+    let files = store.list_files("JD-1", None).unwrap();
+    drop(store);
+    let backup = root.path().join("b.tgz");
+    cmd(root.path())
+        .args(["backup", backup.to_str().unwrap()])
+        .assert()
+        .success();
+    let (names, manifest) = archive_entries(&backup).unwrap();
+    assert!(
+        names
+            .iter()
+            .any(|n| n == "content/joedocs/home/Roadmap/backlog/item-1.md"),
+        "{names:?}"
+    );
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(manifest["format"], 1);
+
+    let home = root.path().join("restored/vault");
+    let state = root.path().join("restored/state");
+    cmd_at(root.path(), &home, &state)
+        .args(["backup", "--restore", backup.to_str().unwrap()])
+        .assert()
+        .success();
+    cmd_at(root.path(), &home, &state)
+        .arg("check")
+        .assert()
+        .success();
+    let paths = joedocs::store::Paths {
+        home: home.clone(),
+        state_dir: state.clone(),
+    };
+    let git = joedocs::history::GitCli::new(paths.git_dir(), &paths.home);
+    let restored = joedocs::store::Store::open(
+        paths,
+        joedocs::store::Settings::from_config(&joedocs::Config::default()),
+        Box::new(git),
+        std::sync::Arc::new(joedocs::clock::SystemClock),
+    )
+    .unwrap();
+    assert_eq!(restored.list_files("JD-1", None).unwrap(), files);
+}
+
+#[test]
 fn backup_waits_for_a_writer_holding_the_lock() {
     let root = TempDir::new().unwrap();
     cmd(root.path()).arg("init").assert().success();

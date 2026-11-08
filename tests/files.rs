@@ -1186,3 +1186,148 @@ fn a_file_edited_by_hand_blocks_every_folder_operation() {
     assert_eq!(snapshot(dir.path()).unwrap(), before);
     assert_eq!(fs::read_to_string(&item).unwrap(), "edited by hand\n");
 }
+
+// --- History and diff by file (STEP-08) -------------------------------------
+
+/// JD-1 after: 4 append notes, 5 rename notes → n2, 6 append main,
+/// 7 append n2.
+fn roadmap_with_history(store: &mut Store) -> TestResult<()> {
+    roadmap_with_files(store)?;
+    store.append_file(&actor(), "JD-1", "notes", "later\n", None, None)?;
+    store.rename_file(&actor(), "JD-1", "notes", "n2", None)?;
+    store.append(&actor(), "JD-1", "main later\n", None, None)?;
+    store.append_file(&actor(), "JD-1", "n2", "last\n", None, None)?;
+    Ok(())
+}
+
+#[test]
+fn a_files_history_follows_its_renames() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_history(&mut store).unwrap();
+    let page = store.history_file("JD-1", "n2", 1, 50).unwrap();
+    let entries: Vec<(u64, Option<String>, String)> = page
+        .revisions
+        .iter()
+        .map(|r| (r.revision, r.file.clone(), r.action.clone()))
+        .collect();
+    let entry = |revision: u64, file: &str, action: &str| {
+        (revision, Some(file.to_owned()), action.to_owned())
+    };
+    assert_eq!(
+        entries,
+        [
+            entry(7, "n2", "append"),
+            entry(5, "n2", "rename"),
+            entry(4, "notes", "append"),
+            entry(3, "notes", "create_file"),
+        ]
+    );
+    assert_eq!((page.total, page.next_start), (4, None));
+    assert_eq!(page.revisions[2].path, "joedocs/plans/Roadmap/notes.md");
+    let paged = store.history_file("JD-1", "n2", 2, 2).unwrap();
+    assert_eq!(
+        paged
+            .revisions
+            .iter()
+            .map(|r| r.revision)
+            .collect::<Vec<_>>(),
+        [5, 4]
+    );
+    assert_eq!(paged.next_start, Some(4));
+    let main: Vec<u64> = store
+        .history_file("JD-1", "Roadmap", 1, 50)
+        .unwrap()
+        .revisions
+        .iter()
+        .map(|r| r.revision)
+        .collect();
+    assert_eq!(main, [6, 1]);
+
+    // An archived file's history is still there.
+    store
+        .archive_file(&actor(), "JD-1", "backlog/item-1", None, None)
+        .unwrap();
+    let gone: Vec<u64> = store
+        .history_file("JD-1", "backlog/item-1", 1, 50)
+        .unwrap()
+        .revisions
+        .iter()
+        .map(|r| r.revision)
+        .collect();
+    assert_eq!(gone, [8, 2]);
+    let err = store.history_file("JD-1", "never", 1, 50).unwrap_err();
+    assert!(matches!(err, Error::FileNotFound { .. }), "{err}");
+    // Whole-document history is unchanged, with no file on its entries.
+    let whole = store.history("JD-1", 1, 50).unwrap();
+    assert_eq!(whole.total, 8);
+    assert!(whole.revisions.iter().all(|r| r.file.is_none()));
+}
+
+#[test]
+fn diffs_cover_one_file_or_every_file_that_changed() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_history(&mut store).unwrap();
+    let one = store.diff_file("JD-1", "n2", 3, Some(7), 0).unwrap();
+    assert_eq!(one.files, ["n2"]);
+    assert!(
+        one.diff
+            .starts_with("--- JD-1 revision 3: notes\n+++ JD-1 revision 7: n2\n"),
+        "{}",
+        one.diff
+    );
+    assert!(
+        one.diff.contains("+later\n") && one.diff.contains("+last\n"),
+        "{}",
+        one.diff
+    );
+    assert!(
+        one.diff.contains("-revision: 3\n+revision: 7\n"),
+        "{}",
+        one.diff
+    );
+    let none = store
+        .diff_file("JD-1", "backlog/item-1", 2, Some(7), 3)
+        .unwrap();
+    assert_eq!(none.diff, "");
+    let before = store.diff_file("JD-1", "n2", 2, None, 3).unwrap_err();
+    assert!(before.to_string().contains("revision 2"), "{before}");
+
+    let all = store.diff("JD-1", 3, Some(7), 0).unwrap();
+    assert_eq!(all.files, ["Roadmap", "n2", "notes"]);
+    let text = &all.diff;
+    assert!(
+        text.contains("--- JD-1 revision 3: Roadmap\n+++ JD-1 revision 7: Roadmap\n"),
+        "{text}"
+    );
+    assert!(text.contains("+main later\n"), "{text}");
+    assert!(
+        text.contains(
+            "--- JD-1 revision 3: notes\n+++ JD-1 revision 7: notes (removed)\n@@ -1,6 +0,0 @@\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "--- JD-1 revision 3: n2 (added)\n+++ JD-1 revision 7: n2\n@@ -0,0 +1,10 @@\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("item-1"), "{text}");
+    assert_eq!(store.diff("JD-1", 7, None, 3).unwrap().diff, "");
+
+    // Single-file diffs keep their form.
+    store
+        .append(&actor(), "JD-2", "more\n", None, None)
+        .unwrap();
+    let single = store.diff("JD-2", 1, None, 0).unwrap();
+    assert!(
+        single
+            .diff
+            .starts_with("--- JD-2 revision 1\n+++ JD-2 revision 2\n"),
+        "{}",
+        single.diff
+    );
+    assert_eq!(single.files, Vec::<String>::new());
+}

@@ -169,6 +169,9 @@ pub struct RevisionInfo {
     pub commit: String,
     /// Vault-relative path at that revision.
     pub path: String,
+    /// In a file's history, the file's path inside the folder at that
+    /// revision.
+    pub file: Option<String>,
 }
 
 impl From<RevisionRow> for RevisionInfo {
@@ -182,6 +185,7 @@ impl From<RevisionRow> for RevisionInfo {
             at: row.created_at,
             commit: row.commit_id,
             path: row.path,
+            file: None,
         }
     }
 }

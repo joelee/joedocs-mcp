@@ -193,6 +193,10 @@ pub struct HistoryParams {
     /// 1-based position of the first revision, newest first; use `next_start` from the previous page.
     #[serde(default = "one")]
     pub start: u64,
+    /// For a multi-file document, list only the revisions that changed this
+    /// file, following its renames.
+    #[serde(default)]
+    pub file: Option<String>,
 }
 
 /// Arguments of `diff_document`.
@@ -209,6 +213,10 @@ pub struct DiffParams {
     /// Unchanged lines to show around each change (0 to 100).
     #[serde(default = "three")]
     pub context: u32,
+    /// For a multi-file document, diff only this file (its path at `to`);
+    /// without it, every file that changed is diffed.
+    #[serde(default)]
+    pub file: Option<String>,
 }
 
 /// Arguments of `restore_document_version`.
@@ -594,7 +602,8 @@ pub struct RevisionOut {
     /// Revision number.
     pub revision: u64,
     /// What happened: `create`, `update`, `edit`, `append`, `rename`, `move`,
-    /// `front_matter`, `restore`, `archive` or `unarchive`.
+    /// `front_matter`, `restore`, `archive` or `unarchive`; for multi-file
+    /// documents also `create_file`, `write_files` and `archive_file`.
     pub action: String,
     /// Key that made it.
     pub author: String,
@@ -604,6 +613,9 @@ pub struct RevisionOut {
     pub summary: String,
     /// Time (UTC).
     pub at: String,
+    /// In a file's history, the file's path at that revision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 impl From<RevisionInfo> for RevisionOut {
@@ -615,6 +627,7 @@ impl From<RevisionInfo> for RevisionOut {
             client: rev.client,
             summary: rev.summary,
             at: rev.at,
+            file: rev.file,
         }
     }
 }
@@ -699,8 +712,12 @@ pub struct DiffOut {
     /// Whether anything differs.
     pub changed: bool,
     /// Unified diff of the whole file, front matter included; empty when
-    /// nothing differs.
+    /// nothing differs. For a multi-file document, one diff per changed
+    /// file, each headed by its path.
     pub diff: String,
+    /// For a multi-file document, the files the diff covers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
 }
 
 /// Result of `list_documents`.
@@ -1106,7 +1123,12 @@ impl JoeDocsServer {
     ) -> Result<Json<HistoryOut>, CallToolResult> {
         self.read(&ctx, move |store, caller| {
             require_document(store, caller, &params.document_id, Permission::Read)?;
-            let page = store.history(&params.document_id, params.start, params.limit)?;
+            let page = match &params.file {
+                Some(file) => {
+                    store.history_file(&params.document_id, file, params.start, params.limit)?
+                }
+                None => store.history(&params.document_id, params.start, params.limit)?,
+            };
             Ok(HistoryOut {
                 document: page.document.into(),
                 revisions: page.revisions.into_iter().map(RevisionOut::from).collect(),
@@ -1128,13 +1150,24 @@ impl JoeDocsServer {
     ) -> Result<Json<DiffOut>, CallToolResult> {
         self.read(&ctx, move |store, caller| {
             require_document(store, caller, &params.document_id, Permission::Read)?;
-            let diff = store.diff(&params.document_id, params.from, params.to, params.context)?;
+            let multifile = store.document_info(&params.document_id)?.multifile;
+            let diff = match &params.file {
+                Some(file) => store.diff_file(
+                    &params.document_id,
+                    file,
+                    params.from,
+                    params.to,
+                    params.context,
+                )?,
+                None => store.diff(&params.document_id, params.from, params.to, params.context)?,
+            };
             Ok(DiffOut {
                 document_id: diff.id,
                 from: diff.from,
                 to: diff.to,
                 changed: !diff.diff.is_empty(),
                 diff: diff.diff,
+                files: multifile.then_some(diff.files),
             })
         })
         .await
@@ -1279,7 +1312,7 @@ impl JoeDocsServer {
             let files = store.list_files(&params.document_id, params.version)?;
             let revision = match params.version {
                 Some(version) => version,
-                None => store.get(&params.document_id, None)?.document.revision,
+                None => store.document_info(&params.document_id)?.revision,
             };
             Ok(ListDocumentFilesOut {
                 document_id: params.document_id.trim().to_owned(),

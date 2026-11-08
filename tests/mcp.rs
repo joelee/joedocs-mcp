@@ -620,6 +620,82 @@ async fn folder_operations_round_trip() {
     server.stop().await.unwrap();
 }
 
+#[tokio::test]
+async fn file_history_and_diffs_round_trip() {
+    let server = start().await.unwrap();
+    let client = server.client(&server.writer).await.unwrap();
+    ok(
+        &client,
+        "new_document",
+        json!({"project": "joedocs", "title": "Roadmap", "content": "x\n", "multifile": true}),
+    )
+    .await
+    .unwrap();
+    for (tool, args) in [
+        ("new_document_file", json!({"file": "a", "content": "a\n"})),
+        (
+            "append_to_document",
+            json!({"file": "a", "content": "more"}),
+        ),
+        ("rename_document", json!({"file": "a", "new_file": "b"})),
+    ] {
+        let mut args = args;
+        args["document_id"] = json!("JD-1");
+        ok(&client, tool, args).await.unwrap();
+    }
+    let history = ok(
+        &client,
+        "get_document_history",
+        json!({"document_id": "JD-1", "file": "b"}),
+    )
+    .await
+    .unwrap();
+    let entries: Vec<(Value, Value)> = history["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["revision"].clone(), r["file"].clone()))
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            (json!(4), json!("b")),
+            (json!(3), json!("a")),
+            (json!(2), json!("a"))
+        ]
+    );
+    let whole = ok(
+        &client,
+        "get_document_history",
+        json!({"document_id": "JD-1"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(whole["total"], 4);
+    assert_eq!(whole["revisions"][0].get("file"), None);
+
+    let one = ok(
+        &client,
+        "diff_document",
+        json!({"document_id": "JD-1", "file": "b", "from": 2}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(one["files"], json!(["b"]));
+    assert!(one["diff"].as_str().unwrap().contains("+more"), "{one}");
+    let all = ok(
+        &client,
+        "diff_document",
+        json!({"document_id": "JD-1", "from": 1}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(all["files"], json!(["b"]));
+    assert_eq!(all["changed"], true);
+    client.cancel().await.unwrap();
+    server.stop().await.unwrap();
+}
+
 /// The refusals of the file round trip, on JD-1 at revision 8 with file
 /// `a` last changed at revision 6.
 async fn file_refusals(client: &Client) -> TestResult<()> {

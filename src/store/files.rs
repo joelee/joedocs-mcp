@@ -253,6 +253,17 @@ fn file_path(row: &DocumentRow, file: &str) -> Result<FilePath, Error> {
 }
 
 impl Store {
+    /// A live document's index entry, with its files counted, without
+    /// reading its file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotFound`], [`Error::Archived`] and database errors.
+    pub fn document_info(&self, id: &str) -> Result<super::DocumentInfo, Error> {
+        let row = live_row(&self.conn, &parse_id(id)?)?;
+        document_info(&self.conn, &row)
+    }
+
     /// Adds a sub-file to a multi-file document as a new revision.
     ///
     /// # Errors
