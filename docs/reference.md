@@ -21,6 +21,7 @@ joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
 | `key revoke NAME` | Revoke a key immediately and for good. |
 | `archive list [--project NAME]` | List archived documents, most recently archived first. |
 | `archive restore DOCUMENT_ID` | Bring an archived document back as it was before it was archived. |
+| `backup FILE.tgz` | Write a backup of the vault, the database and the history to `FILE.tgz` (see [Backups](#backups)). Safe while `serve` runs: writes wait for the snapshot, which takes the write lock only while copying. Refuses an existing `FILE`. The file is created with mode `0600` because it holds API key hashes. |
 | `agents` | Print an AGENTS.md-style guide for AI agents that maintain this server: what is safe to run, what needs the operator's approval, what never to do, how to upgrade and troubleshoot. It is filled in with this installation's version, config file, vault and state paths, listen address and systemd unit, and never contains a secret. For example, `joedocs agents > AGENTS.md` in the directory an agent works from. |
 | `status` | Show where the service runs and what the store holds, without secrets: the version, host name and config file; `server.bind` and whether `GET /health` answers there; the systemd user and system unit state with its `MainPID`; the vault and state directory with their sizes and file counts, and the database and history sizes; the history head and last change; whether the index and `INDEX.md` files are current; API key counts; and live and archived documents per project. Changes nothing, and works with the service stopped. |
 | `get DOCUMENT_ID [--version N] [--content-only \| --front-matter-only] [-f PATH]` | Print a document as `get_document` returns it: the front matter block and the body. `--content-only` prints only the body (what `update_document` takes as `content`); `--front-matter-only` prints only the front matter YAML, without the `---` lines, so it can be piped to a YAML tool. `--version N` prints an earlier revision. `-f`/`--file PATH` writes the same text to `PATH`, replacing it, instead of printing it. An archived document fails with exit `65`; `archive restore` brings it back. |
@@ -176,6 +177,19 @@ priority: 2
 | Custom | anything else | Names of up to 64 letters, digits, `_` or `-`. Values are strings, numbers, booleans or lists of those; `null` and nested objects are rejected (use `remove` to delete a key). |
 
 Server keys come first in a fixed order, then custom keys in the order they were added. Comments in client-supplied YAML are not kept.
+
+### Backups
+
+`joedocs backup FILE.tgz` writes a gzip-compressed tar archive, format 1:
+
+| Entry | What it is |
+| --- | --- |
+| `manifest.json` | `format` (1), `joedocs_version`, `schema_version` (the database's `PRAGMA user_version`), `created_at` (UTC), `history_head` (the history's latest commit), `documents` (live documents), and `vault` and `state_dir`, where they were (for information only). |
+| `state/joedocs.db` | A copy of the database made with SQLite `VACUUM INTO`. |
+| `state/history.git/` | The history repository. |
+| `content/` | Every regular file and directory of the vault, including `INDEX.md` files and dot folders such as `.obsidian`. Symlinks are left out and reported. |
+
+The lock file is not included. The snapshot is taken under the write lock, so it never holds half of a change.
 
 ### History
 

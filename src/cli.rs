@@ -70,6 +70,13 @@ pub enum Command {
         #[command(subcommand)]
         command: KeyCommand,
     },
+    /// Write a backup of the vault, the database and the history to a
+    /// `.tgz` file (safe while `serve` runs; the file holds key hashes, so
+    /// keep it private).
+    Backup {
+        /// The archive to create; it must not exist yet.
+        file: PathBuf,
+    },
     /// Print an AGENTS.md-style guide for AI agents that maintain this
     /// server, filled in with this installation's paths (no secrets).
     Agents,

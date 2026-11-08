@@ -231,7 +231,7 @@ fn dir_size(dir: &Path) -> DirSize {
 }
 
 /// `1536` → `1.5 KiB`.
-fn human(bytes: u64) -> String {
+pub(crate) fn human(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["bytes", "KiB", "MiB", "GiB", "TiB"];
     #[expect(clippy::cast_precision_loss, reason = "a rounded display value")]
     let mut value = bytes as f64;

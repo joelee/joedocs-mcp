@@ -197,6 +197,7 @@ bearer_token_env_var = "JOEDOCS_API_KEY"
 | Give a machine access | `joedocs key create NAME --grant PROJECT:PERMISSION`, or `joedocs key grant NAME PROJECT:PERMISSION` for an existing key. |
 | Replace a leaked token | `joedocs key rotate NAME`, then update the client's header. `joedocs key revoke NAME` cuts a machine off for good. |
 | Bring back an archived document | `joedocs archive list`, then `joedocs archive restore JD-42`. |
+| Back up | `joedocs backup ~/joedocs-$(date +%F).tgz`, safe while the service runs. Keep the file private: it holds API key hashes. |
 | Check consistency | `joedocs check` (exits `1` if it finds problems, and says how to fix each). `joedocs reindex` rebuilds the index from the history. |
 | Back up | Back up `state_dir` (the database holds the projects and keys; `history.git` holds every revision) and the vault. The document index can be rebuilt from `history.git` alone. |
 | Browse in Obsidian | Copy the vault one way into an Obsidian vault on a schedule, for example `rsync -a --delete <home>/ <obsidian-vault>/JoeDocs/`. Edit through JoeDocs, not in the vault: JoeDocs refuses to overwrite files changed behind its back. |

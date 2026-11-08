@@ -15,6 +15,7 @@ pub mod admin;
 pub mod agents;
 pub mod app_id;
 pub mod auth;
+pub mod backup;
 pub mod cli;
 pub mod clock;
 pub mod config;
@@ -77,6 +78,9 @@ pub enum Error {
     /// A systemd unit could not be installed or removed.
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+    /// A backup could not be written or restored.
+    #[error(transparent)]
+    Backup(#[from] backup::Error),
     /// The document is archived; the admin command can bring it back.
     #[error("document {0} is archived; run `joedocs archive restore {0}` to bring it back")]
     Archived(String),
@@ -99,11 +103,14 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Config(_) => EXIT_CONFIG,
-            Self::Output(_) | Self::Systemd(systemd::Error::Output(_)) => EXIT_IO,
             Self::Store(error) if error.is_user_error() => EXIT_DATA,
-            Self::Archived(_) => EXIT_DATA,
+            Self::Backup(error) if error.is_user_error() => EXIT_DATA,
             Self::Systemd(error) if error.is_user_error() => EXIT_DATA,
-            Self::Store(_) => EXIT_SOFTWARE,
+            Self::Archived(_) => EXIT_DATA,
+            Self::Output(_)
+            | Self::Systemd(systemd::Error::Output(_))
+            | Self::Backup(backup::Error::Io { .. }) => EXIT_IO,
+            Self::Store(_) | Self::Backup(_) => EXIT_SOFTWARE,
             Self::Serve { .. } | Self::Systemd(_) => EXIT_UNAVAILABLE,
             Self::Problems(_) => EXIT_PROBLEMS,
         }
@@ -213,6 +220,11 @@ pub fn execute(
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
         Command::Agents => agents::run(loaded, ctx, out)?,
+        Command::Backup { file } => {
+            let store = open_store(loaded, ctx)?;
+            let created = backup::create(&store, ctx.clock.as_ref(), file)?;
+            admin::report_backup(file, &created, out)?;
+        }
         Command::Status => {
             let store = open_store(loaded, ctx)?;
             let report = status::collect(&store, loaded, ctx.services)?;

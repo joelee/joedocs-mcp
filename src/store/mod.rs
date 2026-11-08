@@ -19,6 +19,7 @@
 //! transaction back, so nothing changes.
 
 mod archive;
+mod backup;
 mod check;
 mod documents;
 mod editing;
@@ -36,6 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use archive::ArchivedInfo;
+pub use backup::Snapshot;
 pub use check::CheckReport;
 pub use documents::{
     Archived, Changed, DocumentInfo, Fetched, ListRequest, Listing, MAX_LIST_LIMIT, NewDocument,

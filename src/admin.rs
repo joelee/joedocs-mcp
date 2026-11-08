@@ -141,6 +141,31 @@ pub fn archive(
     Ok(())
 }
 
+/// Reports what `joedocs backup` wrote.
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails.
+pub fn report_backup(
+    file: &Path,
+    created: &crate::backup::Created,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let count = created.manifest.documents;
+    let noun = if count == 1 { "document" } else { "documents" };
+    writeln!(
+        out,
+        "Backed up {count} {noun} to {} ({}).",
+        file.display(),
+        crate::status::human(created.bytes)
+    )?;
+    for link in &created.skipped_links {
+        writeln!(out, "  skipped the symlink {link} in the vault")?;
+    }
+    writeln!(out, "The file holds API key hashes: keep it private.")?;
+    Ok(())
+}
+
 /// Which part of a document `joedocs get` prints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Part {

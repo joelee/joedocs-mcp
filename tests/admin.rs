@@ -643,3 +643,120 @@ fn agents_prints_the_guide_for_this_installation() {
     assert!(!text.contains("{{"), "unfilled placeholder:\n{text}");
     assert!(!text.contains("secretvalue"), "{text}");
 }
+
+/// The entry names in a `.tgz` and the text of `manifest.json`.
+fn archive_entries(path: &Path) -> std::io::Result<(Vec<String>, String)> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path)?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let mut names = Vec::new();
+    let mut manifest = String::new();
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let name = entry.path()?.to_string_lossy().into_owned();
+        if name == "manifest.json" {
+            entry.read_to_string(&mut manifest)?;
+        }
+        names.push(name);
+    }
+    Ok((names, manifest))
+}
+
+#[test]
+fn backup_writes_a_private_consistent_archive() {
+    use joedocs::store::{Actor, NewDocument};
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let mut store = library_store(root.path()).unwrap();
+    store
+        .create(
+            &Actor::new("laptop", "test"),
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Plan".into(),
+                content: "x".into(),
+                ..NewDocument::default()
+            },
+        )
+        .unwrap();
+    let head = store.summary().unwrap().history_head.unwrap();
+    drop(store);
+
+    let file = root.path().join("backup.tgz");
+    cmd(root.path())
+        .args(["backup", file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Backed up 1 document"));
+    let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let (names, manifest) = archive_entries(&file).unwrap();
+    for expected in [
+        "manifest.json",
+        "state/joedocs.db",
+        "state/history.git/HEAD",
+        "content/joedocs/home/Plan.md",
+        "content/joedocs/INDEX.md",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "{expected} missing: {names:?}"
+        );
+    }
+    assert!(
+        !names.iter().any(|n| n.contains("joedocs.lock")),
+        "{names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.contains("backup-staging")),
+        "{names:?}"
+    );
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(manifest["format"], 1);
+    assert_eq!(manifest["history_head"], head.as_str());
+    assert_eq!(manifest["joedocs_version"], env!("CARGO_PKG_VERSION"));
+    assert!(manifest["schema_version"].as_u64().unwrap() >= 3);
+    let leftovers: Vec<_> = std::fs::read_dir(root.path().join("state"))
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("backup-staging")
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "staging left behind");
+
+    // An existing file is never replaced.
+    cmd(root.path())
+        .args(["backup", file.to_str().unwrap()])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("already exists"));
+    assert_eq!(archive_entries(&file).unwrap().0, names);
+}
+
+#[test]
+fn backup_waits_for_a_writer_holding_the_lock() {
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .open(root.path().join("state/joedocs.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let file = root.path().join("waited.tgz");
+    let mut backup = cmd(root.path());
+    backup.args(["backup", file.to_str().unwrap()]);
+    let running = std::thread::spawn(move || backup.assert().success());
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(!file.exists(), "backup ran while the lock was held");
+    lock.unlock().unwrap();
+    running.join().unwrap();
+    assert!(file.exists());
+}
