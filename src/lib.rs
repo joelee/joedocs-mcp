@@ -12,9 +12,12 @@
 //! external dependencies as parameters, so it is unit-testable.
 
 pub mod admin;
+pub mod agents;
 pub mod app_id;
 pub mod auth;
+pub mod backup;
 pub mod cli;
+pub mod client;
 pub mod clock;
 pub mod config;
 pub mod db;
@@ -25,14 +28,18 @@ pub mod history;
 pub mod mcp;
 pub mod search;
 pub mod secrets;
+pub mod status;
 pub mod store;
 pub mod systemd;
+pub mod totp;
 
 use std::io::{self, Write};
 use std::sync::Arc;
 
 pub use app_id::AppId;
-pub use cli::{ArchiveCommand, Cli, Command, ConfigCommand, SystemdCommand};
+pub use cli::{
+    ArchiveCommand, Cli, Command, ConfigCommand, KeyCommand, ProjectCommand, SystemdCommand,
+};
 pub use config::{Config, ConfigError, Resolved};
 
 use crate::auth::RandomSource;
@@ -75,6 +82,15 @@ pub enum Error {
     /// A systemd unit could not be installed or removed.
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+    /// A call to a remote server's admin API failed.
+    #[error(transparent)]
+    Client(#[from] client::Error),
+    /// A backup could not be written or restored.
+    #[error(transparent)]
+    Backup(#[from] backup::Error),
+    /// The document is archived; the admin command can bring it back.
+    #[error("document {0} is archived; run `joedocs archive restore {0}` to bring it back")]
+    Archived(String),
     /// `check` found problems (already reported on standard output).
     #[error("check found {0} problems")]
     Problems(usize),
@@ -94,10 +110,15 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Config(_) => EXIT_CONFIG,
-            Self::Output(_) | Self::Systemd(systemd::Error::Output(_)) => EXIT_IO,
+            Self::Client(error) => error.exit_code(),
             Self::Store(error) if error.is_user_error() => EXIT_DATA,
+            Self::Backup(error) if error.is_user_error() => EXIT_DATA,
             Self::Systemd(error) if error.is_user_error() => EXIT_DATA,
-            Self::Store(_) => EXIT_SOFTWARE,
+            Self::Archived(_) => EXIT_DATA,
+            Self::Output(_)
+            | Self::Systemd(systemd::Error::Output(_))
+            | Self::Backup(backup::Error::Io { .. }) => EXIT_IO,
+            Self::Store(_) | Self::Backup(_) => EXIT_SOFTWARE,
             Self::Serve { .. } | Self::Systemd(_) => EXIT_UNAVAILABLE,
             Self::Problems(_) => EXIT_PROBLEMS,
         }
@@ -118,6 +139,8 @@ pub struct Context<'a> {
     pub random: &'a dyn RandomSource,
     /// systemd, for `joedocs systemd`.
     pub services: &'a dyn ServiceManager,
+    /// Asks for a TOTP code when a remote session has expired.
+    pub prompt: &'a dyn client::Prompt,
 }
 
 /// Configuration and secrets resolved for one run.
@@ -167,7 +190,11 @@ pub fn execute(
     ctx: &Context<'_>,
     out: &mut dyn Write,
 ) -> Result<(), Error> {
-    tracing::debug!(command = ?cli.command, file = ?loaded.resolved.file, "running command");
+    // The name only: arguments can hold a TOTP code (`login --code`).
+    tracing::debug!(command = cli.command.name(), file = ?loaded.resolved.file, "running command");
+    if let Some(done) = remote(cli, loaded, ctx, out) {
+        return done;
+    }
     match &cli.command {
         Command::Config {
             command: ConfigCommand::Show,
@@ -192,7 +219,7 @@ pub fn execute(
             let mut store = open_store(loaded, ctx)?;
             catch_up(&mut store)?;
             store.refresh_index_files();
-            mcp::run(store, loaded.config(), out)?;
+            mcp::run(store, loaded.config(), loaded.resolved.file.as_deref(), out)?;
         }
         Command::Reindex => admin::reindex(&mut open_store(loaded, ctx)?, out)?,
         Command::Archive { command } => {
@@ -206,8 +233,330 @@ pub fn execute(
         Command::Key { command } => {
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
+        Command::AdminToken { command } => {
+            admin::admin_token(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
+        }
+        Command::Agents => agents::run(loaded, ctx, out)?,
+        Command::Backup {
+            file,
+            restore: false,
+            ..
+        } => {
+            let store = open_store(loaded, ctx)?;
+            let created = backup::create(&store, file)?;
+            admin::report_backup(file, &created, out)?;
+        }
+        Command::Backup {
+            file,
+            restore: true,
+            state_dir,
+            content_dir,
+        } => restore(
+            file,
+            state_dir.as_deref(),
+            content_dir.as_deref(),
+            loaded,
+            ctx,
+            out,
+        )?,
+        Command::Status => {
+            let store = open_store(loaded, ctx)?;
+            let report = status::collect(&store, loaded, ctx.services)?;
+            status::render(&report, out)?;
+        }
+        Command::Login { .. } | Command::Logout => {}
+        Command::Get {
+            document_id,
+            version,
+            content_only,
+            front_matter_only,
+            file,
+        } => {
+            let part = admin::Part::new(*content_only, *front_matter_only);
+            let markdown = admin::fetch(&open_store(loaded, ctx)?, document_id, *version)?;
+            admin::write_document(&markdown, part, file.as_deref(), out)?;
+        }
     }
     Ok(())
+}
+
+/// Runs `cli` against the admin API of `client.server`, or returns `None`
+/// when the command runs locally.
+fn remote(
+    cli: &Cli,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Option<Result<(), Error>> {
+    let server = loaded.config().client.server.as_str();
+    if server.is_empty() {
+        return matches!(cli.command, Command::Login { .. } | Command::Logout).then(|| {
+            Err(client::Error::Usage(
+                "set client.server, or pass --server URL, to log in to a server's admin API".into(),
+            )
+            .into())
+        });
+    }
+    let local_only = match &cli.command {
+        Command::Config { .. } => return None,
+        Command::Init => Some("init"),
+        Command::Serve => Some("serve"),
+        Command::Systemd { .. } => Some("systemd"),
+        Command::AdminToken { .. } => Some("admin-token"),
+        Command::Agents => Some("agents"),
+        Command::Backup { restore: true, .. } => Some("backup --restore"),
+        _ => None,
+    };
+    if let Some(name) = local_only {
+        return Some(Err(client::Error::Usage(format!(
+            "`joedocs {name}` runs only on the server; drop --server (or clear client.server) to run it here"
+        ))
+        .into()));
+    }
+    Some(run_remote(cli, server, loaded, ctx, out))
+}
+
+fn run_remote(
+    cli: &Cli,
+    server: &str,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let remote = client::Remote::new(
+        server,
+        loaded.secrets.admin_token.as_ref(),
+        ctx.env,
+        ctx.prompt,
+    )?;
+    match &cli.command {
+        Command::Login { code } => {
+            let (name, saved) = remote.login(code.as_deref())?;
+            writeln!(
+                out,
+                "Logged in to {} as {name}; the session expires at {}.",
+                remote.server(),
+                saved.expires_at
+            )?;
+        }
+        Command::Logout => {
+            if remote.logout()? {
+                writeln!(out, "Logged out of {}.", remote.server())?;
+            } else {
+                writeln!(out, "Not logged in to {}.", remote.server())?;
+            }
+        }
+        Command::Status => {
+            let reply = remote.call(&reqwest::Method::GET, "status", None)?;
+            let report: status::StatusReport = remote.parse(&reply, "status report")?;
+            status::render(&report, out)?;
+            let expires = remote
+                .saved()?
+                .map_or_else(|| "unknown".to_owned(), |s| s.expires_at);
+            writeln!(
+                out,
+                "\nClient\n  server: {}\n  session expires: {expires}",
+                remote.server()
+            )?;
+        }
+        command => remote_admin(&remote, command, out)?,
+    }
+    Ok(())
+}
+
+/// Prints the `output` of an admin API call, as the local command would,
+/// and turns `check` problems into exit `1`.
+fn remote_text(
+    remote: &client::Remote<'_>,
+    method: &reqwest::Method,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let reply = remote.call(method, path, body)?;
+    let text: client::TextReply = remote.parse(&reply, "command reply")?;
+    out.write_all(text.output.as_bytes())?;
+    match text.problems {
+        0 => Ok(()),
+        count => Err(Error::Problems(
+            usize::try_from(count).unwrap_or(usize::MAX),
+        )),
+    }
+}
+
+/// The admin commands that run remotely and print what they print locally.
+fn remote_admin(
+    remote: &client::Remote<'_>,
+    command: &Command,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    use reqwest::Method;
+    use serde_json::json;
+    let grants =
+        |grants: &[auth::Grant]| grants.iter().map(ToString::to_string).collect::<Vec<_>>();
+    match command {
+        Command::Project {
+            command: ProjectCommand::List,
+        } => remote_text(remote, &Method::GET, "projects", None, out),
+        Command::Project {
+            command: ProjectCommand::Add { name, key, title },
+        } => {
+            let body = json!({"name": name, "key": key, "title": title});
+            remote_text(remote, &Method::POST, "projects", Some(&body), out)
+        }
+        Command::Key {
+            command: KeyCommand::List,
+        } => remote_text(remote, &Method::GET, "keys", None, out),
+        Command::Key {
+            command: KeyCommand::Create { name, grants: g },
+        } => {
+            let body = json!({"name": name, "grants": grants(g)});
+            remote_text(remote, &Method::POST, "keys", Some(&body), out)
+        }
+        Command::Key {
+            command: KeyCommand::Grant { name, grants: g },
+        } => {
+            let body = json!({"grants": grants(g)});
+            remote_text(
+                remote,
+                &Method::POST,
+                &format!("keys/{name}/grants"),
+                Some(&body),
+                out,
+            )
+        }
+        Command::Key {
+            command: KeyCommand::Rotate { name },
+        } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("keys/{name}/rotate"),
+            None,
+            out,
+        ),
+        Command::Key {
+            command: KeyCommand::Revoke { name },
+        } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("keys/{name}/revoke"),
+            None,
+            out,
+        ),
+        Command::Archive {
+            command: ArchiveCommand::List { project },
+        } => {
+            let path = project
+                .as_ref()
+                .map_or_else(|| "archive".to_owned(), |p| format!("archive?project={p}"));
+            remote_text(remote, &Method::GET, &path, None, out)
+        }
+        Command::Archive {
+            command: ArchiveCommand::Restore { document_id },
+        } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("archive/{document_id}/restore"),
+            None,
+            out,
+        ),
+        Command::Check => remote_text(remote, &Method::GET, "check", None, out),
+        Command::Reindex => remote_text(remote, &Method::POST, "reindex", None, out),
+        Command::Get {
+            document_id,
+            version,
+            content_only,
+            front_matter_only,
+            file,
+        } => {
+            let part = admin::Part::new(*content_only, *front_matter_only);
+            remote_get(remote, document_id, *version, part, file.as_deref(), out)
+        }
+        Command::Backup { file, .. } => remote_backup(remote, file, out),
+        // Handled by `run_remote`, or refused by `remote` before it.
+        _ => Ok(()),
+    }
+}
+
+fn remote_get(
+    remote: &client::Remote<'_>,
+    id: &str,
+    version: Option<u64>,
+    part: admin::Part,
+    file: Option<&std::path::Path>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let path = version.map_or_else(
+        || format!("documents/{id}"),
+        |v| format!("documents/{id}?version={v}"),
+    );
+    let reply = remote.call(&reqwest::Method::GET, &path, None)?;
+    let document: client::DocumentReply = remote.parse(&reply, "document reply")?;
+    let markdown = document.markdown;
+    admin::write_document(&markdown, part, file, out)
+}
+
+fn remote_backup(
+    remote: &client::Remote<'_>,
+    file: &std::path::Path,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    if std::fs::symlink_metadata(file).is_ok() {
+        return Err(backup::Error::Exists(file.to_path_buf()).into());
+    }
+    let downloaded = remote.download("backup", file)?;
+    let manifest = backup::read_manifest(file).map_err(|e| {
+        let _ = std::fs::remove_file(file);
+        client::Error::Protocol(format!(
+            "{} sent something that is not a JoeDocs backup ({e})",
+            remote.server()
+        ))
+    })?;
+    let created = backup::Created {
+        manifest,
+        bytes: downloaded.bytes,
+        skipped_links: downloaded.skipped_links,
+    };
+    admin::report_backup(file, &created, out)
+}
+
+/// Runs `joedocs backup --restore`: extracts the archive into empty or
+/// absent directories (the configured ones by default), opens the restored
+/// store, which migrates an older database, and checks it.
+///
+/// # Errors
+///
+/// Returns backup, store and output errors, and [`Error::Problems`] when the
+/// restored store does not pass `check`.
+pub fn restore(
+    file: &std::path::Path,
+    state_dir: Option<&std::path::Path>,
+    content_dir: Option<&std::path::Path>,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let configured = Paths::from_config(loaded.config(), &ctx.app, ctx.env)?;
+    let paths = Paths {
+        home: content_dir.map_or_else(|| configured.home.clone(), std::path::Path::to_path_buf),
+        state_dir: state_dir.map_or_else(
+            || configured.state_dir.clone(),
+            std::path::Path::to_path_buf,
+        ),
+    };
+    let extracted = backup::extract(file, &paths.state_dir, &paths.home)?;
+    let history = GitCli::new(paths.git_dir(), &paths.home);
+    // If the restored store does not open (or migrate), `extracted` is
+    // dropped here and the targets are left as they were.
+    let store = Store::open(
+        paths.clone(),
+        Settings::from_config(loaded.config()),
+        Box::new(history),
+        Arc::clone(&ctx.clock),
+    )?;
+    let manifest = extracted.commit();
+    admin::report_restore(&manifest, &paths, &configured, out)?;
+    admin::check(&store, out)
 }
 
 /// Rebuilds the index when it is behind the history (an interrupted write,
@@ -332,6 +681,7 @@ mod tests {
             clock: Arc::new(FixedClock::at(1_793_000_000)),
             random: &CountingRandom(0),
             services: &NoServices,
+            prompt: &client::TerminalPrompt,
         }
     }
 
@@ -344,6 +694,9 @@ mod tests {
         }
         fn systemctl(&self, _args: &[&str]) -> io::Result<systemd::Ran> {
             Err(io::Error::other("systemctl must not run in this test"))
+        }
+        fn host_name(&self) -> io::Result<String> {
+            Ok("testhost".into())
         }
     }
 

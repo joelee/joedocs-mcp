@@ -5,7 +5,7 @@ The command line, the MCP tools, the search syntax, the front matter and the err
 ## Command line
 
 ```text
-joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
+joedocs [--config PATH] [--log-level LEVEL] [--server URL] <COMMAND>
 ```
 
 | Command | What it does |
@@ -21,14 +21,36 @@ joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
 | `key revoke NAME` | Revoke a key immediately and for good. |
 | `archive list [--project NAME]` | List archived documents, most recently archived first. |
 | `archive restore DOCUMENT_ID` | Bring an archived document back as it was before it was archived. |
+| `backup FILE.tgz` | Write a backup of the vault, the database and the history to `FILE.tgz` (see [Backups](#backups)). Safe while `serve` runs: writes wait for the snapshot, which takes the write lock only while copying. Refuses an existing `FILE`. The file is created with mode `0600` because it holds API key hashes. |
+| `backup --restore [--state-dir PATH] [--content-dir PATH] FILE.tgz` | Restore a backup into a state directory and a vault that are empty or do not exist yet (by default the configured `storage.state_dir` and `storage.home`). Refuses an unknown archive format, a database schema newer than this build, and any entry that is not a regular file or directory under `state/` or `content/` (absolute paths, `..`, links, devices), and a damaged or truncated archive (its gzip checksum or length does not match). Then it opens the restored store, which migrates an older database; if extracting, opening or migrating fails, it removes what it extracted, so the targets are empty (or absent) again and the restore can be retried. Then it runs `check` (a restore whose `check` finds problems keeps its data and exits `1`), and prints the `[storage]` settings to use when it restored elsewhere. Run it with the service stopped. |
+| `agents` | Print an AGENTS.md-style guide for AI agents that maintain this server: what is safe to run, what needs the operator's approval, what never to do, how to upgrade and troubleshoot. It is filled in with this installation's version, config file, vault and state paths, listen address and systemd unit, and never contains a secret. For example, `joedocs agents > AGENTS.md` in the directory an agent works from. |
+| `status` | Show where the service runs and what the store holds, without secrets: the version, host name and config file; `server.bind` and whether `GET /health` answers there; the systemd user and system unit state with its `MainPID`; the vault and state directory with their sizes and file counts, and the database and history sizes; the history head and last change; whether the index and `INDEX.md` files are current; API key counts; and live and archived documents per project. Changes nothing, and works with the service stopped. |
+| `admin-token create NAME` | Create an admin token for the remote admin API, with a new TOTP secret. Prints the secret in base32 (type it into Google Authenticator or another TOTP app) and the `otpauth://totp/JoeDocs:NAME?...` URI (pipe it to `qrencode -t ansiutf8` for a QR code), then the token alone on the last line, `jda_<12 hex id>_<64 hex secret>`. Both are shown once. Run it on the server only: no remote call can create, list or revoke admin tokens. |
+| `admin-token list` | List admin tokens: name, creation, last use, and whether each is active, locked after failed logins, or revoked. Never the secrets. |
+| `admin-token revoke NAME` | Revoke an admin token and end every session it opened, immediately and for good. |
+| `get DOCUMENT_ID [--version N] [--content-only \| --front-matter-only] [-f PATH]` | Print a document as `get_document` returns it: the front matter block and the body. `--content-only` prints only the body (what `update_document` takes as `content`); `--front-matter-only` prints only the front matter YAML, without the `---` lines, so it can be piped to a YAML tool. `--version N` prints an earlier revision. `-f`/`--file PATH` writes the same text to `PATH`, replacing it, instead of printing it: through a new, randomly named temporary file in the same directory, so a file or link already there is never followed, and keeping `PATH`'s mode (a new file is `0600`). An archived document fails with exit `65`; `archive restore` brings it back. |
 | `reindex` | Rebuild the document index and search from the history, and rewrite each project's `INDEX.md`. Safe to rerun; projects and keys are kept. |
 | `check` | Report drift between the vault, the history and the index, and `INDEX.md` files that are missing or out of date, and say how to resolve it. Changes no document, index or `INDEX.md` (opening the store may add the `INDEX.md` rule to the history's `info/exclude` once). |
 | `systemd install [--system --run-as USER] [--dry-run]` | Write a systemd unit that runs `serve` with the configuration in effect, then enable and (re)start it. Linux only; see [deployment.md](deployment.md#linux-systemd). |
 | `systemd remove [--system] [--dry-run]` | Stop, disable and delete the unit. |
 | `config show` | Show the effective configuration and where each value came from. |
 | `config paths` | List the config file search order and which file was selected. |
+| `login [--code CODE]` | With a server configured (`client.server` or `--server URL`): log in to its admin API with `JOEDOCS_ADMIN_TOKEN` and a 6-digit code from your authenticator (asked for when `--code` is left out), and keep the session for later commands (see [Client mode](#client-mode)). |
+| `logout` | End the admin session with the server and forget it. |
 
-`key create`, `key rotate` and the admin commands change the store directly, so run them on the server, as the account that runs `serve`.
+Without a server configured, every command works on the local store, so run admin commands on the server, as the account that runs `serve`. With one, they run on that server (see [Client mode](#client-mode)).
+
+### Client mode
+
+When `client.server` is set, or `--server URL` is given, `project`, `key`, `archive`, `check`, `reindex`, `status`, `get` and `backup FILE` run on that server through its [admin API](#admin-api). They print the same output and exit with the same codes as on the server; `status` adds the server URL and the session's expiry, and `backup` downloads the archive to `FILE` (mode `0600`). `init`, `serve`, `systemd`, `admin-token`, `agents` and `backup --restore` run only on the server and exit `65` with a server configured; `config` always describes this machine.
+
+- `joedocs login` opens a session with the admin token from `JOEDOCS_ADMIN_TOKEN` and a TOTP code. The session lasts `admin.session_hours` (8 by default) and is kept in `$XDG_STATE_HOME/joedocs/sessions.toml`, or `~/.local/state/joedocs/sessions.toml` (file `0600`, directory `0700`), one entry per server URL. Every call sends both the token and the session, so the file alone is not enough to act.
+- When a session has expired, or there is none, and standard input and standard error are terminals, a command asks for a new code (`Session expired. Code for <server>: `), logs in, and runs once more. The server checks the session before it runs anything, so a change is never applied twice. A wrong code is asked for again, up to three times in all. Without a terminal (scripts, agents, CI) the command exits `77` and says to run `joedocs login`.
+- A missing `JOEDOCS_ADMIN_TOKEN`, refused codes, or a token locked after five failed logins exit `77` without running the command; a server that cannot be reached exits `69`.
+- `client.server` must be `https://` (rustls with the operating system's root certificates), or `http://` to `localhost`, `127.0.0.1` or `[::1]`.
+- The client never follows a redirect: a `3xx` reply exits `70` and names its `Location`, so set `client.server` to the final URL. It gives up when the server sends nothing for 60 seconds (exit `69`), however long a download that keeps arriving takes, and removes a partial download.
+- A reply that is not what the admin API sends (an HTML page from a proxy, or JSON of the wrong shape) exits `70` before anything is printed or a file is replaced. A backup download that is not `application/gzip`, or has no readable manifest, is removed.
+- Logs name the command only, never its arguments, so a `--code` never appears in them.
 
 ### Exit codes
 
@@ -38,9 +60,10 @@ joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
 | `1` | `check` found problems. |
 | `2` | Usage error (unknown command or flag). |
 | `65` | Invalid request: a bad name, an unknown project or key, or a store that is not initialised. |
-| `69` | `serve` cannot listen, or `systemctl` cannot be run. |
-| `70` | Database, history or vault fault. |
+| `69` | `serve` cannot listen, `systemctl` cannot be run, or the `client.server` cannot be reached. |
+| `70` | Database, history or vault fault, or an admin API reply the client does not understand (including a redirect). |
 | `74` | Output error. |
+| `77` | The admin API refused the credentials: no `JOEDOCS_ADMIN_TOKEN`, a wrong code, a locked token, or no valid session where no code can be asked for (run `joedocs login`). |
 | `78` | Configuration error, naming the file, variable or key. |
 
 ## MCP tools
@@ -91,6 +114,48 @@ A failed tool call is a result with `isError: true` and `structuredContent.error
 | `too_large` | The document is over `server.max_document_bytes`. |
 | `permission_denied` | The key can only read this project. |
 | `internal` | A server fault; details are in the server log, not the result. |
+
+## Admin API
+
+With `[admin] enabled = true`, `joedocs serve` also serves a JSON API under `/admin/v1/`, the one client mode uses. It is never part of the MCP endpoint, and when `admin.enabled` is off every `/admin/v1/` path answers `404`. Requests must pass the `server.allowed_hosts` check, and requests with an `Origin` outside `server.allowed_origins` get `403`.
+
+Every request carries `Authorization: Bearer jda_...` (an admin token from `joedocs admin-token create`). Every route but login also carries `JoeDocs-Session: jds_...`, a session of that same token. Each request, refused or not, writes one row to the audit log with the tool `admin:<operation>` (`admin:unknown` for a path or method that is not a route), and never a token, session or code. Request bodies are limited to 64 KiB.
+
+| Route | Operation | Body or query | Reply |
+| --- | --- | --- | --- |
+| `POST /admin/v1/session` | `session.create` | `{"code": "123456"}` | `{"session", "expires_at", "name"}` |
+| `DELETE /admin/v1/session` | `session.delete` | | `204` |
+| `GET /admin/v1/status` | `status` | | the `joedocs status` report as JSON |
+| `GET /admin/v1/projects` | `projects.list` | | `{"output"}` |
+| `POST /admin/v1/projects` | `projects.add` | `{"name", "key", "title"?}` | `{"output"}` |
+| `GET /admin/v1/keys` | `keys.list` | | `{"output"}` |
+| `POST /admin/v1/keys` | `keys.create` | `{"name", "grants": ["project:read"]}` | `{"output"}`, ending with the token |
+| `POST /admin/v1/keys/{name}/grants` | `keys.grant` | `{"grants": [...]}` | `{"output"}` |
+| `POST /admin/v1/keys/{name}/rotate` | `keys.rotate` | | `{"output"}`, ending with the token |
+| `POST /admin/v1/keys/{name}/revoke` | `keys.revoke` | | `{"output"}` |
+| `GET /admin/v1/archive` | `archive.list` | `?project=NAME` | `{"output"}` |
+| `POST /admin/v1/archive/{id}/restore` | `archive.restore` | | `{"output"}` |
+| `GET /admin/v1/check` | `check` | | `{"output", "problems"}` |
+| `POST /admin/v1/reindex` | `reindex` | | `{"output"}` |
+| `GET /admin/v1/documents/{id}` | `documents.get` | `?version=N` | `{"markdown"}` |
+| `GET /admin/v1/backup` | `backup` | | the backup archive (`application/gzip`), with `JoeDocs-Documents` and `JoeDocs-Skipped-Links` headers |
+
+`output` is the text the same command prints on the server, and `problems` is the number of problems `check` found (it exits `1` when that is not `0`).
+
+Logins are TOTP codes (RFC 6238: SHA-1, 6 digits, 30 seconds). A code is accepted for its own step or one step either side, and each step only once per token. Five wrong codes in a row lock the token for 15 minutes. A session lasts `admin.session_hours`. Refusals are `{"error": {"code", "message"}}`:
+
+| Status | `code` | Meaning |
+| --- | --- | --- |
+| `401` | `unauthorized` | The admin token, or the code, is not valid, or the token is revoked. |
+| `401` | `no_session` | No session, or one that was ended or belongs to another token. |
+| `401` | `session_expired` | The session has expired: log in again. |
+| `429` | `locked` | Too many wrong codes; `Retry-After` gives the seconds until logins are accepted again. |
+| `403` | `forbidden` | The `Host` or `Origin` is not allowed (checked before anything else). |
+| `413` | `payload_too_large` | The request body is over 64 KiB. |
+| `400` | `invalid_argument` | A bad request, such as a bad name. |
+| `404` | `not_found` | No such project, key or document, or no such route. |
+| `409` | `already_exists`, `conflict`, `archived` | The request conflicts with what is stored. |
+| `500` | `internal` | A server fault (details are only in the server log). |
 
 ## Search
 
@@ -173,6 +238,32 @@ priority: 2
 | Custom | anything else | Names of up to 64 letters, digits, `_` or `-`. Values are strings, numbers, booleans or lists of those; `null` and nested objects are rejected (use `remove` to delete a key). |
 
 Server keys come first in a fixed order, then custom keys in the order they were added. Comments in client-supplied YAML are not kept.
+
+### Database
+
+`<storage.state_dir>/joedocs.db` is SQLite. Its schema changes only through numbered migrations, applied when the store opens; `PRAGMA user_version` records how many have run. A build refuses a database with a newer schema than it knows, so going back to an older JoeDocs after an upgrade that added a migration means restoring a backup taken before it.
+
+| Version | Migration | Adds |
+| --- | --- | --- |
+| 1 | `0001_core` | projects, API keys and grants, documents and revisions |
+| 2 | `0002_audit` | the audit log |
+| 3 | `0003_search` | the search index |
+| 4 | `0004_admin` (0.3.0) | admin tokens, with their TOTP secrets, and admin sessions |
+
+Only SHA-256 hashes of API keys, admin tokens and session tokens are stored. TOTP secrets are stored as they are, because checking a code needs them, so the state directory is kept private: `init` creates it with mode `0700`, and the database and its `-wal` and `-shm` files are `0600`. Every start (and `init`) tightens a state directory or database that group or other can read, logging each change; if it cannot (for example, the files belong to another account), it logs the `chmod` to run and carries on. The vault keeps its own permissions.
+
+### Backups
+
+`joedocs backup FILE.tgz` writes a gzip-compressed tar archive, format 1:
+
+| Entry | What it is |
+| --- | --- |
+| `manifest.json` | `format` (1), `joedocs_version`, `schema_version` (the database's `PRAGMA user_version`), `created_at` (UTC), `history_head` (the history's latest commit), `documents` (live documents), and `vault` and `state_dir`, where they were (for information only). |
+| `state/joedocs.db` | A copy of the database made with SQLite `VACUUM INTO`. |
+| `state/history.git/` | The history repository. |
+| `content/` | Every regular file and directory of the vault, including `INDEX.md` files and dot folders such as `.obsidian`. Symlinks are left out and reported. |
+
+The lock file is not included. The snapshot is taken under the write lock, so it never holds half of a change, and is staged in a `0700` directory inside the state directory before it is compressed. `joedocs backup --restore` reads the same format and creates the state directory `0700`.
 
 ### History
 

@@ -37,6 +37,10 @@ pub struct Config {
     pub storage: StorageConfig,
     /// Allowed document types and statuses (`[documents]`).
     pub documents: DocumentsConfig,
+    /// The remote admin API (`[admin]`).
+    pub admin: AdminConfig,
+    /// This machine as a client of a remote server (`[client]`).
+    pub client: ClientConfig,
 }
 
 /// Logging settings.
@@ -224,6 +228,36 @@ impl Default for DocumentsConfig {
             index_file: true,
         }
     }
+}
+
+/// The remote admin API, served by `joedocs serve` under `/admin/v1/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AdminConfig {
+    /// Whether to serve the admin API. Off by default.
+    pub enabled: bool,
+    /// How long a session opened by `joedocs login` lasts, in hours (1 to
+    /// 168).
+    pub session_hours: u32,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            session_hours: 8,
+        }
+    }
+}
+
+/// This machine as a client of a server's admin API.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ClientConfig {
+    /// The server's base URL, e.g. `https://docs.example.ts.net`. When set,
+    /// admin commands run on that server instead of the local store. Empty
+    /// means local.
+    pub server: String,
 }
 
 /// Where a configuration value came from.

@@ -13,6 +13,20 @@ description = "JoeDocs API key"
 regex = '''\bjd_[0-9a-fA-F]{12}_[0-9a-fA-F]{64}\b'''
 keywords = ["jd_"]
 
+# JoeDocs admin tokens (`jda_...`) and admin session tokens (`jds_...`), the
+# same shape (JD-8 D-08). tests/secrets.rs checks these rules.
+[[rules]]
+id = "joedocs-admin-token"
+description = "JoeDocs admin token"
+regex = '''\bjda_[0-9a-fA-F]{12}_[0-9a-fA-F]{64}\b'''
+keywords = ["jda_"]
+
+[[rules]]
+id = "joedocs-admin-session"
+description = "JoeDocs admin session token"
+regex = '''\bjds_[0-9a-fA-F]{12}_[0-9a-fA-F]{64}\b'''
+keywords = ["jds_"]
+
 # Allowlist a known false positive only with a reason, for example:
 #
 # [[allowlists]]

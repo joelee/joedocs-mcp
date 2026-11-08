@@ -25,6 +25,9 @@ pub const INIT: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params"
 
 /// Connects to the MCP endpoint `url` with `token`, as client `test-client`.
 pub async fn connect(url: &str, token: &str) -> TestResult<Client> {
+    // reqwest is built with rustls but no crypto provider (the binary
+    // installs ring the same way, in src/client.rs).
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url.to_owned()).auth_header(token),
     );

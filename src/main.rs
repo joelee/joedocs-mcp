@@ -29,6 +29,7 @@ fn main() -> ExitCode {
         clock: std::sync::Arc::new(SystemClock),
         random: &OsRandom,
         services: &Systemctl,
+        prompt: &joedocs::client::TerminalPrompt,
     };
 
     let loaded = match joedocs::load(&cli, &ctx) {

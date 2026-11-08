@@ -188,15 +188,57 @@ bearer_token_env_var = "JOEDOCS_API_KEY"
 
 **Other MCP clients** need the Streamable HTTP URL (`https://<host>/mcp`) and the header `Authorization: Bearer <token>`. If the client can read the header or token from the environment, use that rather than writing the key into its config.
 
+## 6a. Manage from another machine
+
+The admin commands can also run from another machine, through the server's admin API, with an admin token and a TOTP code from an authenticator app. The API is off until you turn it on.
+
+1. On the server, turn the API on and restart the service:
+
+   ```toml
+   [admin]
+   enabled = true
+   session_hours = 8    # how long a login lasts
+   ```
+
+2. On the server, create an admin token for the machine you manage it from (with Docker: `docker compose exec joedocs joedocs admin-token create laptop`):
+
+   ```bash
+   joedocs admin-token create laptop
+   ```
+
+   It prints a TOTP secret and an `otpauth://` URI: add the secret to Google Authenticator (or another TOTP app), or show the URI as a QR code with `... | qrencode -t ansiutf8`. The admin token is on the last line. Both are shown once.
+3. On the client, keep the token in a password manager, for example `pass insert joedocs/admin`, and point `joedocs` at the server in `~/.config/joedocs/config.toml`:
+
+   ```toml
+   [client]
+   server = "https://docs.example.ts.net"
+   ```
+
+4. Log in, then use the admin commands as on the server:
+
+   ```bash
+   export JOEDOCS_ADMIN_TOKEN="$(pass show joedocs/admin)"
+   joedocs login            # asks for the 6-digit code
+   joedocs status
+   joedocs key create ci --grant joedocs:read
+   joedocs backup ~/joedocs-$(date +%F).tgz
+   joedocs logout
+   ```
+
+When the session expires, the next command asks for a new code. `joedocs admin-token revoke laptop` on the server ends that token and its sessions at once. The server's `/admin/v1/` path must be reachable the same way as `/mcp` (for example through `tailscale serve`), and `server.allowed_hosts` must list the name you use.
+
 ## 7. Operate
 
 | Task | How |
 | --- | --- |
-| Upgrade | `brew upgrade joedocs && brew services restart joedocs`, or `cargo install joedocs --locked && systemctl --user restart joedocs`. `serve` rebuilds the index on start if the database is from an older build. |
+| Upgrade | Back up, install the new version, restart, then check: see [upgrading.md](upgrading.md), with notes for each version. In short, `brew upgrade joedocs && brew services restart joedocs`, or `cargo install joedocs --locked && systemctl --user restart joedocs`. `serve` migrates the database and rebuilds the index on start when needed. |
 | Change the configuration | Edit `config.toml`, then restart the service. Rerun `joedocs systemd install` only if you moved the binary or changed what the unit pins (the config file path, overrides, storage paths). |
 | Give a machine access | `joedocs key create NAME --grant PROJECT:PERMISSION`, or `joedocs key grant NAME PROJECT:PERMISSION` for an existing key. |
 | Replace a leaked token | `joedocs key rotate NAME`, then update the client's header. `joedocs key revoke NAME` cuts a machine off for good. |
 | Bring back an archived document | `joedocs archive list`, then `joedocs archive restore JD-42`. |
+| Back up | `joedocs backup ~/joedocs-$(date +%F).tgz`, safe while the service runs. Keep the file private: it holds API key hashes. |
+| Permissions | The state directory is private (`0700`, the database `0600`): it holds API key hashes and admin TOTP secrets. `serve` tightens an older install's permissions on start and logs it. Run admin commands as the account that owns it. |
+| Restore a backup | Stop the service, then `joedocs backup --restore --state-dir NEW_STATE --content-dir NEW_VAULT FILE.tgz` into empty or new directories. It checks the result and prints the `[storage]` settings to point the configuration at; set them (or move the directories into place), then start the service. |
 | Check consistency | `joedocs check` (exits `1` if it finds problems, and says how to fix each). `joedocs reindex` rebuilds the index from the history. |
 | Back up | Back up `state_dir` (the database holds the projects and keys; `history.git` holds every revision) and the vault. The document index can be rebuilt from `history.git` alone. |
 | Browse in Obsidian | Copy the vault one way into an Obsidian vault on a schedule, for example `rsync -a --delete <home>/ <obsidian-vault>/JoeDocs/`. Edit through JoeDocs, not in the vault: JoeDocs refuses to overwrite files changed behind its back. |

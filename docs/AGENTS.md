@@ -5,6 +5,7 @@ Documentation is part of the product. Update docs in the same change that makes 
 ## Maintained Documents
 
 - `README.md`: what JoeDocs is and why, features, use cases, install, quick start, and links to deeper docs. It is also the crates.io page, so links are absolute.
+- `docs/upgrading.md`: upgrading a server: backing up, each install method, checking, going back, and notes for each version.
 - `docs/deployment.md`: installing and running a server (systemd, `brew services`, Docker), remote access, connecting clients, operations and troubleshooting.
 - `docs/reference.md`: the stable interfaces users rely on: commands, exit codes, MCP tools and parameters, error codes, search syntax, front matter and history trailers.
 - `docs/skills/`: agent skills that use JoeDocs, one folder per skill with a `SKILL.md`, and an index in `docs/skills/README.md`.
@@ -24,6 +25,7 @@ Documentation is part of the product. Update docs in the same change that makes 
 - If behavior, commands, config, or directory structure changes, update the matching document.
 - If a feature adds or changes public behavior, update `README.md` or explain why it does not need a README change, and update `docs/reference.md`.
 - If a change affects how a server is installed, run or reached, update `docs/deployment.md`.
+- If a release adds a migration or changes what an upgrade needs, add a version note to `docs/upgrading.md`.
 - If an MCP tool changes, check the skills in `docs/skills/` that call it.
 - If a feature changes architecture, update `docs/architecture.md`.
 - If a feature changes config, update `docs/configuration.md` and `config.example.toml`, and `.env.example` when secret names change.
