@@ -500,6 +500,12 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["archive", "list"],
         vec!["check"],
         vec!["reindex"],
+        vec!["document", "convert", "JD-1"],
+        vec!["document", "convert", "JD-1"],
+        vec!["document", "move-file", "JD-1", "x", "--to", "JD-2"],
+        vec!["document", "restore-file", "JD-1", "x", "--version", "1"],
+        vec!["document", "restore-file", "JD-1", "x", "--version", "99"],
+        vec!["get", "JD-1"],
     ];
     for step in &steps {
         let local_run = outcome(local.cmd(), step).unwrap();

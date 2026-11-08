@@ -12,6 +12,7 @@ use std::fs;
 
 use indexmap::IndexMap;
 
+use super::admin_files::{TARGET_DOCUMENT, TARGET_FILE, TARGET_REVISION};
 use super::documents::{FILE_FROM_TRAILER, FILE_TRAILER, sha256};
 use super::{Error, Store, index_file, lock};
 use crate::clock::format_timestamp;
@@ -208,14 +209,11 @@ fn replay(
         .parse()
         .map_err(|_| bad(&commit.id, "the revision is not a number"))?;
     let action = trailer(ACTION)?;
-    let doc = replays.entry(id.clone()).or_default();
-    let expected = doc.revisions.len() as u64 + 1;
-    if revision != expected {
-        return Err(bad(
-            &commit.id,
-            format!("{id} revision {revision} found where revision {expected} was expected"),
-        ));
+    check_next(replays, commit, &id, revision)?;
+    if commit.trailer(TARGET_DOCUMENT).is_some() {
+        return replay_move(replays, commit, &id, revision, action);
     }
+    let doc = replays.entry(id.clone()).or_default();
     let archive = action == "archive";
     let at = format_timestamp(commit.at);
     let client = commit.trailer(CLIENT).unwrap_or("unknown").to_owned();
@@ -266,6 +264,130 @@ fn replay(
         summary: commit.subject.clone(),
         created_at: at,
     });
+    Ok(())
+}
+
+/// Refuses `revision` of `id` unless it is the next one.
+fn check_next(
+    replays: &mut IndexMap<String, Replay>,
+    commit: &Logged,
+    id: &str,
+    revision: u64,
+) -> Result<(), Error> {
+    let expected = replays.entry(id.to_owned()).or_default().revisions.len() as u64 + 1;
+    if revision == expected {
+        Ok(())
+    } else {
+        Err(bad(
+            &commit.id,
+            format!("{id} revision {revision} found where revision {expected} was expected"),
+        ))
+    }
+}
+
+/// Replays a file's move from document `id` to the document its
+/// `JoeDocs-Target-*` trailers name: one commit, a revision of each.
+fn replay_move(
+    replays: &mut IndexMap<String, Replay>,
+    commit: &Logged,
+    id: &str,
+    revision: u64,
+    action: &str,
+) -> Result<(), Error> {
+    let fail = |message: String| bad(&commit.id, message);
+    let trailer = |key| {
+        commit
+            .trailer(key)
+            .ok_or_else(|| bad(&commit.id, format!("no {key} trailer")))
+    };
+    let target: DocumentId = trailer(TARGET_DOCUMENT)?
+        .parse()
+        .map_err(|e: crate::document::InvalidId| fail(e.to_string()))?;
+    let target = target.to_string();
+    let target_revision: u64 = trailer(TARGET_REVISION)?
+        .parse()
+        .map_err(|_| fail("the target revision is not a number".into()))?;
+    check_next(replays, commit, &target, target_revision)?;
+    let old = trailer(FILE_TRAILER)?;
+    let new = trailer(TARGET_FILE)?;
+    let at = format_timestamp(commit.at);
+    let client = commit.trailer(CLIENT).unwrap_or("unknown").to_owned();
+    let main_path = |doc_id: &str, replays: &IndexMap<String, Replay>| -> Result<String, Error> {
+        replays
+            .get(doc_id)
+            .and_then(|doc| doc.revisions.last())
+            .map(|r| r.path.clone())
+            .filter(|path| is_main_path(path))
+            .ok_or_else(|| fail(format!("{doc_id} is not a multi-file document")))
+    };
+    let source_main = main_path(id, replays)?;
+    let target_main = main_path(&target, replays)?;
+    let folder = |path: &str| path.rsplit_once('/').map_or("", |(f, _)| f).to_owned();
+    let from_vault = format!("{}/{old}", folder(&source_main));
+    let to_vault = format!("{}/{new}", folder(&target_main));
+    let changed = |change: Change, path: &str| {
+        commit
+            .changes
+            .iter()
+            .any(|(c, p)| *c == change && p == path)
+    };
+    if commit.changes.len() != 2
+        || !changed(Change::Deleted, &from_vault)
+        || !changed(Change::Added, &to_vault)
+    {
+        return Err(fail(format!(
+            "a move must delete {from_vault} and add {to_vault}, and nothing else"
+        )));
+    }
+    let strip = |name: &str| -> Result<String, Error> {
+        name.strip_suffix(".md")
+            .map(str::to_owned)
+            .ok_or_else(|| fail(format!("{name} does not end in .md")))
+    };
+    let (old, new) = (strip(old)?, strip(new)?);
+    let mut file = replays
+        .get_mut(id)
+        .and_then(|doc| doc.files.shift_remove(&old.to_lowercase()))
+        .ok_or_else(|| fail(format!("{id} has no file {old} to move")))?;
+    new.clone_into(&mut file.path);
+    file.revision = target_revision;
+    at.clone_into(&mut file.updated_at);
+    commit.author.clone_into(&mut file.updated_by);
+    client.clone_into(&mut file.client);
+    file.content = (commit.id.clone(), to_vault);
+    for (doc_id, doc_revision, path, change, main) in [
+        (id, revision, &old, FileChange::Removed, &source_main),
+        (
+            target.as_str(),
+            target_revision,
+            &new,
+            FileChange::Added,
+            &target_main,
+        ),
+    ] {
+        let doc = replays.entry(doc_id.to_owned()).or_default();
+        doc.changes.push(RevisionFileRow {
+            document_id: doc_id.to_owned(),
+            revision: doc_revision,
+            path: path.clone(),
+            main: false,
+            change,
+            from_path: None,
+        });
+        doc.revisions.push(RevisionRow {
+            document_id: doc_id.to_owned(),
+            revision: doc_revision,
+            commit_id: commit.id.clone(),
+            path: main.clone(),
+            action: action.to_owned(),
+            author: commit.author.clone(),
+            client: client.clone(),
+            summary: commit.subject.clone(),
+            created_at: at.clone(),
+        });
+    }
+    let key = new.to_lowercase();
+    replays.entry(target).or_default().files.insert(key, file);
     Ok(())
 }
 
@@ -346,6 +468,10 @@ fn replay_files(
         .filter(|old| *old != folder)
         .map(str::to_owned);
     let mut named: HashSet<String> = HashSet::new();
+    // Converting a single-file document moves its file into the folder.
+    if let Some(single) = previous.as_deref().filter(|path| !is_main_path(path)) {
+        named.insert(single.to_owned());
+    }
     for (file, from) in files {
         let rel = file
             .strip_suffix(".md")

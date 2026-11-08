@@ -250,6 +250,9 @@ pub(super) enum Action {
     CreateFile,
     WriteFiles,
     ArchiveFile,
+    Convert,
+    MoveFile,
+    RestoreFile,
 }
 
 impl Action {
@@ -269,10 +272,13 @@ impl Action {
             Self::CreateFile => "create_file",
             Self::WriteFiles => "write_files",
             Self::ArchiveFile => "archive_file",
+            Self::Convert => "convert",
+            Self::MoveFile => "move_file",
+            Self::RestoreFile => "restore_file",
         }
     }
 
-    fn verb(self) -> &'static str {
+    pub(super) fn verb(self) -> &'static str {
         match self {
             Self::Create => "Create",
             Self::Update => "Update",
@@ -287,6 +293,9 @@ impl Action {
             Self::CreateFile => "Add a file to",
             Self::WriteFiles => "Write files of",
             Self::ArchiveFile => "Archive a file of",
+            Self::Convert => "Convert",
+            Self::MoveFile => "Move a file of",
+            Self::RestoreFile => "Restore a file of",
         }
     }
 }

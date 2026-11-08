@@ -464,3 +464,60 @@ async fn rejected_requests_are_audited_too() -> TestResult<()> {
     assert_eq!(leaked, 0);
     server.stop().await
 }
+
+#[tokio::test]
+async fn document_routes_are_audited_by_operation() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let convert = server
+        .send("POST", "/admin/v1/documents/JD-1/convert", &auth, "")
+        .await?;
+    assert_eq!(convert.status, 404, "{:?}", convert.json);
+    let no_file = server
+        .send(
+            "POST",
+            "/admin/v1/documents/JD-1/files/move",
+            &auth,
+            r#"{"to":"JD-2"}"#,
+        )
+        .await?;
+    assert_eq!(no_file.status, 400);
+    assert!(
+        no_file.json["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("`file` is required")
+    );
+    let no_version = server
+        .send(
+            "POST",
+            "/admin/v1/documents/JD-1/files/restore",
+            &auth,
+            r#"{"file":"a","version":"two"}"#,
+        )
+        .await?;
+    assert_eq!(no_version.status, 400);
+    assert!(
+        no_version.json["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("`version`")
+    );
+    let audit = server.audit()?;
+    assert_eq!(
+        audit[audit.len() - 3..],
+        [
+            ("admin:document.convert".to_owned(), "not_found".to_owned()),
+            (
+                "admin:document.move_file".to_owned(),
+                "invalid_argument".to_owned()
+            ),
+            (
+                "admin:document.restore_file".to_owned(),
+                "invalid_argument".to_owned()
+            ),
+        ]
+    );
+    server.stop().await
+}

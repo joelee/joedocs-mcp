@@ -117,12 +117,12 @@ impl From<&store::Error> for ApiError {
                 api.retry_after = Some(*retry_after);
                 return api;
             }
-            E::NotFound(_) | E::ProjectNotFound(_) | E::KeyNotFound(_) => {
+            E::NotFound(_) | E::FileNotFound { .. } | E::ProjectNotFound(_) | E::KeyNotFound(_) => {
                 (StatusCode::NOT_FOUND, "not_found")
             }
             E::Archived(_) => (StatusCode::CONFLICT, "archived"),
             E::AlreadyExists(_) => (StatusCode::CONFLICT, "already_exists"),
-            E::Conflict { .. } => (StatusCode::CONFLICT, "conflict"),
+            E::Conflict { .. } | E::FileConflict { .. } => (StatusCode::CONFLICT, "conflict"),
             other if other.is_user_error() => (StatusCode::BAD_REQUEST, "invalid_argument"),
             other => {
                 tracing::error!(error = %other, "admin API store failure");
@@ -406,6 +406,9 @@ enum Route {
     Check,
     Reindex,
     Document(String),
+    DocumentConvert(String),
+    FileMove(String),
+    FileRestore(String),
     Backup,
     Unknown,
 }
@@ -433,6 +436,9 @@ impl Route {
             ["check"] if get => Self::Check,
             ["reindex"] if post => Self::Reindex,
             ["documents", id] if get => Self::Document((*id).to_owned()),
+            ["documents", id, "convert"] if post => Self::DocumentConvert((*id).to_owned()),
+            ["documents", id, "files", "move"] if post => Self::FileMove((*id).to_owned()),
+            ["documents", id, "files", "restore"] if post => Self::FileRestore((*id).to_owned()),
             ["backup"] if get => Self::Backup,
             _ => Self::Unknown,
         }
@@ -456,6 +462,9 @@ impl Route {
             Self::Check => "admin:check",
             Self::Reindex => "admin:reindex",
             Self::Document(_) => "admin:documents.get",
+            Self::DocumentConvert(_) => "admin:document.convert",
+            Self::FileMove(_) => "admin:document.move_file",
+            Self::FileRestore(_) => "admin:document.restore_file",
             Self::Backup => "admin:backup",
             Self::Unknown => "admin:unknown",
         }
@@ -494,6 +503,9 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         Route::Check => check(state, call).await,
         Route::Reindex => reindex(state, call).await,
         Route::Document(id) => document(state, call, id, uri).await,
+        Route::DocumentConvert(id) => document_command(state, call, id, body, "convert").await,
+        Route::FileMove(id) => document_command(state, call, id, body, "move").await,
+        Route::FileRestore(id) => document_command(state, call, id, body, "restore").await,
         Route::Backup => backup(state, call).await,
         Route::Unknown => {
             let missing = ApiError::new(
@@ -770,6 +782,42 @@ async fn archive_restore(state: Arc<ApiState>, call: Call, id: String) -> Respon
     .await
 }
 
+/// `POST /admin/v1/documents/{id}/convert`, `.../files/move` with
+/// `{"file", "to", "as"?}` and `.../files/restore` with `{"file", "version"}`.
+async fn document_command(
+    state: Arc<ApiState>,
+    call: Call,
+    id: String,
+    body: Bytes,
+    which: &'static str,
+) -> Response {
+    authorized(state, call, move |store, _, _| {
+        let body = body_json(&body)?;
+        let command = match which {
+            "convert" => crate::cli::DocumentCommand::Convert { document_id: id },
+            "move" => crate::cli::DocumentCommand::MoveFile {
+                document_id: id,
+                file: field(&body, "file")?,
+                to: field(&body, "to")?,
+                as_file: body.get("as").and_then(Value::as_str).map(str::to_owned),
+            },
+            _ => crate::cli::DocumentCommand::RestoreFile {
+                document_id: id,
+                file: field(&body, "file")?,
+                version: body.get("version").and_then(Value::as_u64).ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_argument",
+                        "`version` (a revision number) is required",
+                    )
+                })?,
+            },
+        };
+        text(|out| crate::admin::document(store, &command, out))
+    })
+    .await
+}
+
 async fn check(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, _, _| {
         text(|out| crate::admin::check(store, out))
@@ -999,6 +1047,26 @@ mod tests {
                 store::Error::NotFound("JD-1".into()),
                 StatusCode::NOT_FOUND,
                 "not_found",
+            ),
+            (
+                store::Error::FileNotFound {
+                    id: "JD-1".into(),
+                    file: "a".into(),
+                    at: String::new(),
+                },
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                store::Error::FileConflict {
+                    id: "JD-1".into(),
+                    file: "a".into(),
+                    expected: 1,
+                    file_revision: 2,
+                    current: 3,
+                },
+                StatusCode::CONFLICT,
+                "conflict",
             ),
             (
                 store::Error::Archived("JD-1".into()),

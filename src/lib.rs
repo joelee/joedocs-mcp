@@ -38,7 +38,8 @@ use std::sync::Arc;
 
 pub use app_id::AppId;
 pub use cli::{
-    ArchiveCommand, Cli, Command, ConfigCommand, KeyCommand, ProjectCommand, SystemdCommand,
+    ArchiveCommand, Cli, Command, ConfigCommand, DocumentCommand, KeyCommand, ProjectCommand,
+    SystemdCommand,
 };
 pub use config::{Config, ConfigError, Resolved};
 
@@ -225,6 +226,9 @@ pub fn execute(
         Command::Archive { command } => {
             admin::archive(&mut open_store(loaded, ctx)?, command, out)?;
         }
+        Command::Document { command } => {
+            admin::document(&mut open_store(loaded, ctx)?, command, out)?;
+        }
         Command::Check => admin::check(&open_store(loaded, ctx)?, out)?,
         Command::Systemd { command } => systemd_command(command, loaded, ctx, out)?,
         Command::Project { command } => {
@@ -392,6 +396,53 @@ fn run_remote(
 
 /// Prints the `output` of an admin API call, as the local command would,
 /// and turns `check` problems into exit `1`.
+/// `joedocs document` through the admin API.
+fn remote_document(
+    remote: &client::Remote<'_>,
+    command: &DocumentCommand,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    use reqwest::Method;
+    match command {
+        DocumentCommand::Convert { document_id } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("documents/{document_id}/convert"),
+            None,
+            out,
+        ),
+        DocumentCommand::MoveFile {
+            document_id,
+            file,
+            to,
+            as_file,
+        } => {
+            let body = serde_json::json!({"file": file, "to": to, "as": as_file});
+            remote_text(
+                remote,
+                &Method::POST,
+                &format!("documents/{document_id}/files/move"),
+                Some(&body),
+                out,
+            )
+        }
+        DocumentCommand::RestoreFile {
+            document_id,
+            file,
+            version,
+        } => {
+            let body = serde_json::json!({"file": file, "version": version});
+            remote_text(
+                remote,
+                &Method::POST,
+                &format!("documents/{document_id}/files/restore"),
+                Some(&body),
+                out,
+            )
+        }
+    }
+}
+
 fn remote_text(
     remote: &client::Remote<'_>,
     method: &reqwest::Method,
@@ -486,6 +537,7 @@ fn remote_admin(
             None,
             out,
         ),
+        Command::Document { command } => remote_document(remote, command, out),
         Command::Check => remote_text(remote, &Method::GET, "check", None, out),
         Command::Reindex => remote_text(remote, &Method::POST, "reindex", None, out),
         Command::Get {

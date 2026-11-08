@@ -18,6 +18,7 @@
 //! A failure before step 5 undoes the file writes and rolls the
 //! transaction back, so nothing changes.
 
+mod admin_files;
 mod admin_tokens;
 mod archive;
 mod backup;
@@ -40,6 +41,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub use admin_files::MovedFile;
 pub use admin_tokens::{
     AdminRefusal, CreatedAdminToken, LOCK_SECONDS, MAX_FAILED_LOGINS, OpenedSession,
 };
@@ -228,6 +230,8 @@ impl Error {
             self,
             Self::Invalid { .. }
                 | Self::NotFound(_)
+                | Self::FileNotFound { .. }
+                | Self::FileConflict { .. }
                 | Self::Archived(_)
                 | Self::ProjectNotFound(_)
                 | Self::KeyNotFound(_)

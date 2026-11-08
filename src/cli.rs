@@ -60,6 +60,13 @@ pub enum Command {
         #[command(subcommand)]
         command: ArchiveCommand,
     },
+    /// Convert a document to multi-file, and move or restore one of its
+    /// files (administrator operations, not MCP tools).
+    Document {
+        /// What to do.
+        #[command(subcommand)]
+        command: DocumentCommand,
+    },
     /// Report drift between the vault, the history and the index (changes
     /// nothing; exits 1 if it finds problems).
     Check,
@@ -160,6 +167,15 @@ impl Command {
             Self::Archive {
                 command: ArchiveCommand::Restore { .. },
             } => "archive restore",
+            Self::Document {
+                command: DocumentCommand::Convert { .. },
+            } => "document convert",
+            Self::Document {
+                command: DocumentCommand::MoveFile { .. },
+            } => "document move-file",
+            Self::Document {
+                command: DocumentCommand::RestoreFile { .. },
+            } => "document restore-file",
             Self::Check => "check",
             Self::Project {
                 command: ProjectCommand::Add { .. },
@@ -200,6 +216,42 @@ impl Command {
             Self::Get { .. } => "get",
         }
     }
+}
+
+/// `document` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum DocumentCommand {
+    /// Make a single-file document multi-file: its file moves into a
+    /// folder of the same name, keeping its ID, history and content.
+    Convert {
+        /// Document ID, e.g. JD-42.
+        document_id: String,
+    },
+    /// Move a file of a multi-file document to another multi-file
+    /// document, in one commit that raises both revisions.
+    MoveFile {
+        /// Document ID the file belongs to, e.g. JD-42.
+        document_id: String,
+        /// The file's path inside the document's folder, e.g. backlog/item-1.
+        file: String,
+        /// Document ID to move it to.
+        #[arg(long, value_name = "DOCUMENT_ID")]
+        to: String,
+        /// Its path in the target document (default: the same path).
+        #[arg(long = "as", value_name = "FILE")]
+        as_file: Option<String>,
+    },
+    /// Bring back one file of a multi-file document as it was at an
+    /// earlier revision, even if it has since been renamed or archived.
+    RestoreFile {
+        /// Document ID, e.g. JD-42.
+        document_id: String,
+        /// The file's path inside the folder at that revision.
+        file: String,
+        /// The document revision to restore it from.
+        #[arg(long, value_name = "N")]
+        version: u64,
+    },
 }
 
 /// `project` subcommands.

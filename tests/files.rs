@@ -1433,3 +1433,233 @@ fn search_finds_sub_files_with_their_own_front_matter() {
     store.archive(&actor(), "JD-1", "done").unwrap();
     assert_eq!(search(&store, "notes", json!({}), None), []);
 }
+
+// --- Admin-only operations (STEP-10) -----------------------------------------
+
+#[test]
+fn a_single_file_document_converts_to_a_folder_keeping_its_history() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap(&mut store).unwrap();
+    store
+        .append(&actor(), "JD-2", "more\n", None, None)
+        .unwrap();
+    let converted = store.convert(&actor(), "JD-2").unwrap();
+    assert_eq!(
+        (converted.revision, converted.path.as_str()),
+        (3, "joedocs/plans/Plan/Plan.md")
+    );
+    assert!(!dir.path().join("vault/joedocs/plans/Plan.md").exists());
+    let got = store.get("JD-2", None).unwrap();
+    assert!(got.document.multifile);
+    assert!(got.markdown.ends_with("plan\n\nmore\n"), "{}", got.markdown);
+    assert!(
+        store
+            .get("JD-2", Some(1))
+            .unwrap()
+            .markdown
+            .ends_with("---\nplan\n")
+    );
+    let mut file = new_file("notes", "x\n", None);
+    file.document_id = "JD-2".into();
+    assert_eq!(store.create_file(&actor(), &file).unwrap().revision, 4);
+    let last_convert = git(dir.path())
+        .log()
+        .unwrap()
+        .into_iter()
+        .find(|c| c.trailer("JoeDocs-Action") == Some("convert"))
+        .unwrap();
+    assert_eq!(last_convert.subject, "Convert JD-2: single file → folder");
+    let follow = Command::new("git")
+        .arg("--git-dir")
+        .arg(dir.path().join("state/history.git"))
+        .args([
+            "log",
+            "--follow",
+            "--format=%s",
+            "--",
+            "joedocs/plans/Plan/Plan.md",
+        ])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    let subjects = String::from_utf8_lossy(&follow.stdout);
+    assert!(subjects.contains("Create JD-2"), "{subjects}");
+    let again = store.convert(&actor(), "JD-1").unwrap_err();
+    assert!(
+        again.to_string().contains("already a multi-file document"),
+        "{again}"
+    );
+    assert_eq!(store.check().unwrap().problems(), 0);
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
+
+/// JD-3, a multi-file "Backlog" with the file `item-2`.
+fn backlog(store: &mut Store) -> TestResult<()> {
+    store.create(
+        &actor(),
+        NewDocument {
+            project: "joedocs".into(),
+            doc_type: Some("plans".into()),
+            title: "Backlog".into(),
+            content: "# Backlog\n".into(),
+            multifile: true,
+            ..NewDocument::default()
+        },
+    )?;
+    let mut file = new_file("item-2", "two\n", None);
+    file.document_id = "JD-3".into();
+    store.create_file(&actor(), &file)?;
+    Ok(())
+}
+
+#[test]
+fn a_file_moves_to_another_document_in_one_commit() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    backlog(&mut store).unwrap();
+    let commits = git(dir.path()).log().unwrap().len();
+    let moved = store
+        .move_file(&actor(), "JD-1", "backlog/item-1", "JD-3", Some("item-1"))
+        .unwrap();
+    assert_eq!(
+        (
+            moved.source_revision,
+            moved.target_revision,
+            moved.file.as_str()
+        ),
+        (4, 3, "item-1")
+    );
+    assert_eq!(moved.path, "joedocs/plans/Backlog/item-1.md");
+    let log = git(dir.path()).log().unwrap();
+    assert_eq!(log.len(), commits + 1);
+    let last = log.last().unwrap();
+    let trailers: Vec<(String, String)> = last
+        .trailers
+        .iter()
+        .filter(|(k, _)| k != "JoeDocs-Client")
+        .cloned()
+        .collect();
+    let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
+    assert_eq!(
+        trailers,
+        [
+            pair("JoeDocs-Document", "JD-1"),
+            pair("JoeDocs-Revision", "4"),
+            pair("JoeDocs-Action", "move_file"),
+            pair("JoeDocs-File", "backlog/item-1.md"),
+            pair("JoeDocs-Target-Document", "JD-3"),
+            pair("JoeDocs-Target-Revision", "3"),
+            pair("JoeDocs-Target-File", "item-1.md"),
+        ]
+    );
+    let text = read(dir.path(), "joedocs/plans/Backlog/item-1.md");
+    assert!(
+        text.starts_with("---\ndocument: JD-3\nrevision: 3\n"),
+        "{text}"
+    );
+    assert!(text.contains("status: planned"), "{text}");
+    assert!(
+        !dir.path()
+            .join("vault/joedocs/plans/Roadmap/backlog")
+            .exists()
+    );
+    let names = |store: &Store, id: &str| -> Vec<String> {
+        store
+            .list_files(id, None)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.file)
+            .collect()
+    };
+    assert_eq!(names(&store, "JD-1"), ["Roadmap", "notes"]);
+    assert_eq!(names(&store, "JD-3"), ["Backlog", "item-1", "item-2"]);
+
+    for (id, file, to, why) in [
+        ("JD-1", "notes", "JD-2", "single-file"),
+        ("JD-3", "item-2", "JD-3", "same document"),
+        ("JD-1", "Roadmap", "JD-3", "main file"),
+        ("JD-1", "missing", "JD-3", "has no file"),
+    ] {
+        let err = store.move_file(&actor(), id, file, to, None).unwrap_err();
+        assert!(err.to_string().contains(why), "{why}: {err}");
+    }
+    let mut taken = new_file("notes", "x\n", None);
+    taken.document_id = "JD-3".into();
+    store.create_file(&actor(), &taken).unwrap();
+    let err = store
+        .move_file(&actor(), "JD-1", "notes", "JD-3", None)
+        .unwrap_err();
+    assert!(err.to_string().contains("already exists"), "{err}");
+    assert_eq!(store.check().unwrap().problems(), 0);
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
+
+#[test]
+fn one_file_is_restored_as_it_was_even_after_archiving_or_renaming() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .append_file(&actor(), "JD-1", "notes", "later\n", None, None)
+        .unwrap();
+    let restored = store.restore_file(&actor(), "JD-1", "notes", 3).unwrap();
+    assert_eq!(restored.revision, 5);
+    let notes = read(dir.path(), "joedocs/plans/Roadmap/notes.md");
+    assert!(
+        notes.contains("revision: 5") && notes.ends_with("---\nnotes\n"),
+        "{notes}"
+    );
+    let unchanged = store
+        .restore_file(&actor(), "JD-1", "notes", 3)
+        .unwrap_err();
+    assert!(
+        unchanged.to_string().contains("already as it was"),
+        "{unchanged}"
+    );
+
+    store
+        .archive_file(&actor(), "JD-1", "backlog/item-1", None, None)
+        .unwrap();
+    let back = store
+        .restore_file(&actor(), "JD-1", "backlog/item-1", 2)
+        .unwrap();
+    assert_eq!(back.revision, 7);
+    assert!(
+        read(dir.path(), "joedocs/plans/Roadmap/backlog/item-1.md").contains("status: planned")
+    );
+
+    store
+        .rename_file(&actor(), "JD-1", "notes", "n2", None)
+        .unwrap();
+    store
+        .append_file(&actor(), "JD-1", "n2", "more\n", None, None)
+        .unwrap();
+    let renamed_back = store.restore_file(&actor(), "JD-1", "notes", 4).unwrap();
+    assert_eq!(renamed_back.file.as_deref(), Some("notes"));
+    assert!(
+        !dir.path()
+            .join("vault/joedocs/plans/Roadmap/n2.md")
+            .exists()
+    );
+    assert!(read(dir.path(), "joedocs/plans/Roadmap/notes.md").ends_with("notes\n\nlater\n"));
+
+    store
+        .create_file(&actor(), &new_file("e", "first\n", None))
+        .unwrap();
+    store
+        .archive_file(&actor(), "JD-1", "e", None, None)
+        .unwrap();
+    store
+        .create_file(&actor(), &new_file("e", "second\n", None))
+        .unwrap();
+    let taken = store.restore_file(&actor(), "JD-1", "e", 11).unwrap_err();
+    assert!(taken.to_string().contains("already exists"), "{taken}");
+    let never = store
+        .restore_file(&actor(), "JD-1", "never", 3)
+        .unwrap_err();
+    assert!(matches!(never, Error::FileNotFound { .. }), "{never}");
+    assert_eq!(store.check().unwrap().problems(), 0);
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}

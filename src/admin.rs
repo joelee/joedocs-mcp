@@ -10,7 +10,7 @@ use secrecy::ExposeSecret as _;
 
 use crate::Error;
 use crate::auth::{Grant, RandomSource};
-use crate::cli::{AdminTokenCommand, ArchiveCommand, KeyCommand, ProjectCommand};
+use crate::cli::{AdminTokenCommand, ArchiveCommand, DocumentCommand, KeyCommand, ProjectCommand};
 use crate::db::{AdminTokenRow, KeyRow};
 use crate::store::{Actor, CheckReport, InitOutcome, Paths, Reindexed, Store};
 
@@ -335,6 +335,63 @@ pub fn write_document(
     match file {
         Some(path) => write_atomically(path, text.as_bytes())?,
         None => out.write_all(text.as_bytes())?,
+    }
+    Ok(())
+}
+
+/// Runs a `joedocs document` command and writes its report.
+///
+/// # Errors
+///
+/// Returns store errors and [`Error::Output`].
+pub fn document(
+    store: &mut Store,
+    command: &DocumentCommand,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let actor = Actor::new(ADMIN_AUTHOR, ADMIN_CLIENT);
+    match command {
+        DocumentCommand::Convert { document_id } => {
+            let converted = store.convert(&actor, document_id)?;
+            writeln!(
+                out,
+                "Converted {} to a multi-file document at revision {}: {}",
+                converted.id, converted.revision, converted.path
+            )?;
+        }
+        DocumentCommand::MoveFile {
+            document_id,
+            file,
+            to,
+            as_file,
+        } => {
+            let moved = store.move_file(&actor, document_id, file, to, as_file.as_deref())?;
+            writeln!(
+                out,
+                "Moved {file} from {} (now revision {}) to {} (now revision {}) as {}: {}",
+                moved.source,
+                moved.source_revision,
+                moved.target,
+                moved.target_revision,
+                moved.file,
+                moved.path
+            )?;
+        }
+        DocumentCommand::RestoreFile {
+            document_id,
+            file,
+            version,
+        } => {
+            let restored = store.restore_file(&actor, document_id, file, *version)?;
+            writeln!(
+                out,
+                "Restored {} of {} as it was at revision {version}, now revision {}: {}",
+                restored.file.unwrap_or_default(),
+                restored.id,
+                restored.revision,
+                restored.path
+            )?;
+        }
     }
     Ok(())
 }

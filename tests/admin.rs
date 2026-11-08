@@ -820,6 +820,72 @@ fn a_backup_restores_multi_file_documents_intact() {
 }
 
 #[test]
+fn document_commands_convert_move_and_restore_files() {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let mut store = library_store(root.path()).unwrap();
+    let actor = Actor::new("laptop", "test");
+    for (title, multifile) in [("Plan", false), ("Roadmap", true), ("Backlog", true)] {
+        store
+            .create(
+                &actor,
+                NewDocument {
+                    project: "joedocs".into(),
+                    title: title.into(),
+                    content: "x\n".into(),
+                    multifile,
+                    ..NewDocument::default()
+                },
+            )
+            .unwrap();
+    }
+    store
+        .create_file(
+            &actor,
+            &NewFile {
+                document_id: "JD-2".into(),
+                file: "a".into(),
+                content: "a\n".into(),
+                ..NewFile::default()
+            },
+        )
+        .unwrap();
+    drop(store);
+
+    let run = |args: &[&str]| cmd(root.path()).args(args).assert();
+    run(&["document", "convert", "JD-1"]).success().stdout(
+        "Converted JD-1 to a multi-file document at revision 2: joedocs/home/Plan/Plan.md\n",
+    );
+    run(&["document", "convert", "JD-1"])
+        .code(65)
+        .stderr(predicate::str::contains("already a multi-file document"));
+    run(&["document", "move-file", "JD-2", "a", "--to", "JD-3", "--as", "b"])
+        .success()
+        .stdout(
+            "Moved a from JD-2 (now revision 3) to JD-3 (now revision 2) as b: joedocs/home/Backlog/b.md\n",
+        );
+    run(&["document", "restore-file", "JD-2", "a", "--version", "2"])
+        .success()
+        .stdout(
+            "Restored a of JD-2 as it was at revision 2, now revision 4: joedocs/home/Roadmap/a.md\n",
+        );
+    run(&["document", "restore-file", "JD-2", "zz", "--version", "2"])
+        .code(65)
+        .stderr(predicate::str::contains("has no file zz at revision 2"));
+    run(&["document", "move-file", "JD-2", "a", "--to", "JD-2"])
+        .code(65)
+        .stderr(predicate::str::contains("same document"));
+    run(&["check"]).success();
+    run(&["reindex"]).success();
+    run(&["check"]).success();
+}
+
+#[test]
 fn backup_waits_for_a_writer_holding_the_lock() {
     let root = TempDir::new().unwrap();
     cmd(root.path()).arg("init").assert().success();
