@@ -131,6 +131,7 @@ async fn tools_are_listed_with_schemas_and_hints() {
         [
             "append_to_document",
             "archive_document",
+            "archive_document_file",
             "change_document_front_matter",
             "diff_document",
             "edit_document",
@@ -512,6 +513,108 @@ async fn file_changes_round_trip() {
             "append_to_document JD-1 ok",
             "update_document JD-1 conflict",
             "rename_document JD-1 invalid_argument",
+        ]
+    );
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn folder_operations_round_trip() {
+    let server = start().await.unwrap();
+    let client = server.client(&server.writer).await.unwrap();
+    ok(
+        &client,
+        "new_document",
+        json!({"project": "joedocs", "title": "Roadmap", "content": "x\n", "multifile": true}),
+    )
+    .await
+    .unwrap();
+    ok(
+        &client,
+        "write_document_files",
+        json!({"document_id": "JD-1", "files": [
+            {"file": "a", "content": "a\n"}, {"file": "b", "content": "b\n"}
+        ]}),
+    )
+    .await
+    .unwrap();
+    let archived = ok(
+        &client,
+        "archive_document_file",
+        json!({"document_id": "JD-1", "file": "a", "reason": "done", "expected_revision": 2}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(archived["revision"], 3);
+    assert_eq!(archived["file"], "a");
+    assert_eq!(archived["path"], "joedocs/home/Roadmap/a.md");
+    let renamed = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "Plan", "expected_revision": 3}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(renamed["path"], "joedocs/home/Plan/Plan.md");
+    let moved = ok(
+        &client,
+        "move_document",
+        json!({"document_id": "JD-1", "type": "plans", "expected_revision": 4}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(moved["path"], "joedocs/plans/Plan/Plan.md");
+    let restored = ok(
+        &client,
+        "restore_document_version",
+        json!({"document_id": "JD-1", "version": 2, "expected_revision": 5}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(restored["revision"], 6);
+    let files = ok(
+        &client,
+        "list_document_files",
+        json!({"document_id": "JD-1"}),
+    )
+    .await
+    .unwrap();
+    let names: Vec<&str> = files["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Plan", "a", "b"]);
+    let main = error(
+        &client,
+        "archive_document_file",
+        json!({"document_id": "JD-1", "file": "Plan"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (main["code"].as_str(), main["field"].as_str()),
+        (Some("invalid_argument"), Some("file"))
+    );
+    ok(
+        &client,
+        "archive_document",
+        json!({"document_id": "JD-1", "reason": "done"}),
+    )
+    .await
+    .unwrap();
+    client.cancel().await.unwrap();
+    let audit = audit_log(&server.root).unwrap();
+    assert_eq!(
+        audit[2..],
+        [
+            "archive_document_file JD-1 ok",
+            "rename_document JD-1 ok",
+            "move_document JD-1 ok",
+            "restore_document_version JD-1 ok",
+            "archive_document_file JD-1 invalid_argument",
+            "archive_document JD-1 ok",
         ]
     );
     server.stop().await.unwrap();

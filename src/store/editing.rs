@@ -148,6 +148,10 @@ impl Store {
                 format!("{version} is already the latest revision"),
             ));
         }
+        if row.multifile {
+            let summary = tidy_line(summary);
+            return self.restore_folder(actor, id, version, expected_revision, summary);
+        }
         let revision = revision_with_content(&self.conn, &row, version, "version")?;
         let text = self.committed_text(&row, &revision)?;
         let parsed = front_matter::parse(&text).map_err(|_| integrity(&row))?;

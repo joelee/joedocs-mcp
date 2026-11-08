@@ -338,11 +338,19 @@ fn replay_files(
     };
     let folder = main_path.rsplit_once('/').map_or("", |(folder, _)| folder);
     let folder_name = folder.rsplit_once('/').map_or(folder, |(_, name)| name);
+    // The folder before this commit, when the document moved.
+    let old_folder = previous
+        .as_deref()
+        .filter(|path| is_main_path(path))
+        .map(|path| path.rsplit_once('/').map_or("", |(folder, _)| folder))
+        .filter(|old| *old != folder)
+        .map(str::to_owned);
     let mut named: HashSet<String> = HashSet::new();
     for (file, from) in files {
         let rel = file
             .strip_suffix(".md")
             .ok_or_else(|| fail(format!("{FILE_TRAILER} {file} does not end in .md")))?;
+        let main = rel == folder_name;
         let vault = format!("{folder}/{file}");
         let kind = commit
             .changes
@@ -357,7 +365,13 @@ fn replay_files(
         named.insert(vault.clone());
         let from_rel = match from {
             Some(from) => {
-                named.insert(format!("{folder}/{from}"));
+                // The main file moves with its folder; other files move
+                // within it.
+                let from_folder = match (&old_folder, main) {
+                    (Some(old), true) => old.as_str(),
+                    _ => folder,
+                };
+                named.insert(format!("{from_folder}/{from}"));
                 Some(
                     from.strip_suffix(".md")
                         .ok_or_else(|| {
@@ -374,7 +388,6 @@ fn replay_files(
             (Change::Added, None) => FileChange::Added,
             (Change::Modified, _) => FileChange::Modified,
         };
-        let main = rel == folder_name;
         if main {
             doc.main_revision = step.revision;
             if kind != Change::Deleted {
@@ -392,6 +405,9 @@ fn replay_files(
             from_path: from_rel,
         });
     }
+    if let Some(old) = &old_folder {
+        move_with_folder(doc, commit, old, folder, &mut named)?;
+    }
     if let Some((_, path)) = commit
         .changes
         .iter()
@@ -402,6 +418,44 @@ fn replay_files(
         )));
     }
     Ok(main_path)
+}
+
+/// Moves the live sub-files of a document whose folder moved from `old` to
+/// `new` in `commit`: each must be deleted from the old folder and added to
+/// the new one, unchanged. Their content is now at the new path.
+fn move_with_folder(
+    doc: &mut Replay,
+    commit: &Logged,
+    old: &str,
+    new: &str,
+    named: &mut HashSet<String>,
+) -> Result<(), Error> {
+    let has = |change: Change, path: &str| {
+        commit
+            .changes
+            .iter()
+            .any(|(c, p)| *c == change && p == path)
+    };
+    for file in doc.files.values_mut() {
+        let from = format!("{old}/{}.md", file.path);
+        let to = format!("{new}/{}.md", file.path);
+        if named.contains(&to) {
+            continue;
+        }
+        if !has(Change::Deleted, &from) || !has(Change::Added, &to) {
+            return Err(bad(
+                &commit.id,
+                format!(
+                    "the folder moved from {old} to {new}, but {} did not move with it",
+                    file.path
+                ),
+            ));
+        }
+        named.insert(from);
+        named.insert(to.clone());
+        file.content = (commit.id.clone(), to);
+    }
+    Ok(())
 }
 
 /// Applies one sub-file's change to the replay.

@@ -471,6 +471,23 @@ pub struct ChangeFrontMatterParams {
     pub file: Option<String>,
 }
 
+/// Arguments of `archive_document_file`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveDocumentFileParams {
+    /// Document ID of a multi-file document, e.g. JD-42.
+    pub document_id: String,
+    /// The file to archive, e.g. backlog/item-1 (not the main file).
+    pub file: String,
+    /// The document revision you last read: refused if the file changed
+    /// after it.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    /// Why it is archived, for the history.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 /// Arguments of `archive_document`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -785,6 +802,27 @@ pub struct WrittenFilesOut {
 }
 
 impl AuditId for WrittenFilesOut {
+    fn audit_id(&self) -> Option<String> {
+        Some(self.document_id.clone())
+    }
+}
+
+/// Result of `archive_document_file`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ArchivedFileOut {
+    /// Document ID.
+    pub document_id: String,
+    /// The new revision.
+    pub revision: u64,
+    /// The archived file.
+    pub file: String,
+    /// Its path within the vault, now removed.
+    pub path: String,
+    /// When it was archived (UTC).
+    pub archived_at: String,
+}
+
+impl AuditId for ArchivedFileOut {
     fn audit_id(&self) -> Option<String> {
         Some(self.document_id.clone())
     }
@@ -1547,6 +1585,45 @@ impl JoeDocsServer {
                     params.summary.as_deref(),
                 )?;
                 Ok(changed.into())
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Archive one file of a multi-file document: it leaves the vault, the file list and search, as one new revision, and its history stays readable (get_document with file and an earlier version). The main file cannot be archived this way; archive_document archives the whole document.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn archive_document_file(
+        &self,
+        Parameters(params): Parameters<ArchiveDocumentFileParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<ArchivedFileOut>, CallToolResult> {
+        let id = params.document_id.clone();
+        self.write(
+            &ctx,
+            "archive_document_file",
+            Some(id),
+            move |store, caller, actor| {
+                require_document(store, caller, &params.document_id, Permission::Write)?;
+                let archived = store.archive_file(
+                    actor,
+                    &params.document_id,
+                    &params.file,
+                    params.expected_revision,
+                    params.reason.as_deref(),
+                )?;
+                Ok(ArchivedFileOut {
+                    document_id: archived.id,
+                    revision: archived.revision,
+                    file: archived.file,
+                    path: archived.path,
+                    archived_at: archived.archived_at,
+                })
             },
         )
         .await

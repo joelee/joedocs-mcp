@@ -245,6 +245,7 @@ pub(super) enum Action {
     Unarchive,
     CreateFile,
     WriteFiles,
+    ArchiveFile,
 }
 
 impl Action {
@@ -263,6 +264,7 @@ impl Action {
             Self::Unarchive => "unarchive",
             Self::CreateFile => "create_file",
             Self::WriteFiles => "write_files",
+            Self::ArchiveFile => "archive_file",
         }
     }
 
@@ -280,6 +282,7 @@ impl Action {
             Self::Unarchive => "Unarchive",
             Self::CreateFile => "Add a file to",
             Self::WriteFiles => "Write files of",
+            Self::ArchiveFile => "Archive a file of",
         }
     }
 }
@@ -565,8 +568,10 @@ impl Store {
         let _lock = begin_write(paths, conn, history.as_ref())?;
         let tx = conn.transaction()?;
         let mut row = live_row(&tx, &id)?;
-        refuse_multifile_yet(&row, "archived")?;
         read_verified(&paths.home, &row)?;
+        if row.multifile {
+            super::files::verify_files(&tx, &paths.home, &row)?;
+        }
 
         row.revision += 1;
         row.main_revision = row.revision;
@@ -582,17 +587,28 @@ impl Store {
         let file = paths.home.join(&row.path);
         let mut journal = Journal::default();
         journal.remove(&file)?;
+        let mut touched = main_touch(&row, FileChange::Removed);
+        let removed = super::folders::archive_files(
+            &tx,
+            &paths.home,
+            &row,
+            actor,
+            &mut journal,
+            &mut touched,
+        )?;
+        let mut changed: Vec<&str> = vec![&row.path];
+        changed.extend(removed.iter().map(String::as_str));
         let commit = Change {
             row: &row,
             at,
             action: Action::Archive,
             summary: &reason,
             actor,
-            paths: &[&row.path],
-            files: &[],
+            paths: &changed,
+            files: &touched,
         };
         finish(tx, history.as_ref(), journal, &commit)?;
-        remove_empty_parent(&file);
+        super::folders::clean_after_move(&paths.home, &row.path, None);
         index_file::refresh(conn, &paths.home, settings, &row.project);
         Ok(Archived {
             id: row.id,
@@ -727,9 +743,6 @@ impl Store {
         }
         let text = read_verified(&paths.home, &row)?;
         if row.multifile {
-            if action == Action::Restore {
-                refuse_multifile_yet(&row, "restored")?;
-            }
             super::files::verify_files(&tx, &paths.home, &row)?;
         }
         let parsed = front_matter::parse(&text).map_err(|_| integrity(&row))?;
@@ -746,7 +759,6 @@ impl Store {
         let old_title = std::mem::replace(&mut row.title, draft.title);
         let old_type = std::mem::replace(&mut row.doc_type, draft.doc_type);
         if row.title != old_title || row.doc_type != old_type {
-            refuse_multifile_yet(&row, "renamed or moved")?;
             row.path = choose_path(
                 &tx,
                 &paths.home,
@@ -764,14 +776,14 @@ impl Store {
         row.updated_at = now;
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);
-        let (row, fields, journal) = write_revision(
+        let (row, fields, journal, moved) = super::folders::write_main(
             &tx,
             &paths.home,
             settings,
             row,
             &draft.extra,
             &draft.body,
-            Some(&old_path),
+            &old_path,
         )?;
         let summary = summary.unwrap_or_else(|| match action {
             Action::Rename => format!("{old_title} → {}", row.title),
@@ -785,19 +797,21 @@ impl Store {
             file: None,
             front_matter: fields,
         };
-        let touched = main_touch(&row, FileChange::Modified);
+        let touched = super::folders::main_moved(&row, &old_path);
+        let mut changed_paths: Vec<&str> = vec![&old_path, &row.path];
+        changed_paths.extend(moved.iter().map(String::as_str));
         let commit = Change {
             row: &row,
             at,
             action,
             summary: &summary,
             actor,
-            paths: &[&old_path, &row.path],
+            paths: &changed_paths,
             files: &touched,
         };
         finish(tx, history.as_ref(), journal, &commit)?;
         if old_path != row.path {
-            remove_empty_parent(&paths.home.join(&old_path));
+            super::folders::clean_after_move(&paths.home, &old_path, Some(&row.path));
         }
         index_file::refresh_document(conn, &paths.home, settings, &row);
         Ok(changed)
@@ -899,7 +913,11 @@ pub(super) fn main_touch(row: &DocumentRow, change: FileChange) -> Vec<FileTouch
 /// the main file changed after `expected` (or `expected` is ahead of the
 /// document), so changes to its other files do not get in the way. Every
 /// other change needs the current revision.
-fn check_expected(row: &DocumentRow, expected: u64, action: Action) -> Result<(), Error> {
+pub(super) fn check_expected(
+    row: &DocumentRow,
+    expected: u64,
+    action: Action,
+) -> Result<(), Error> {
     let file_change = matches!(
         action,
         Action::Update | Action::Edit | Action::Append | Action::FrontMatter
@@ -920,21 +938,6 @@ fn check_expected(row: &DocumentRow, expected: u64, action: Action) -> Result<()
             expected,
             current: row.revision,
         });
-    }
-    Ok(())
-}
-
-/// Refuses an operation on a multi-file document that does not handle
-/// folders yet.
-fn refuse_multifile_yet(row: &DocumentRow, what: &str) -> Result<(), Error> {
-    if row.multifile {
-        return Err(Error::invalid(
-            "document_id",
-            format!(
-                "{} is a multi-file document, which cannot be {what} yet",
-                row.id
-            ),
-        ));
     }
     Ok(())
 }

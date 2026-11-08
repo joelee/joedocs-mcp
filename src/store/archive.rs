@@ -101,6 +101,11 @@ impl Store {
         row.archived_by = None;
         row.archive_reason = None;
         let path = row.path.clone();
+        let files = if row.multifile {
+            super::folders::files_then(&tx, history.as_ref(), &row, &before)?
+        } else {
+            std::collections::BTreeMap::new()
+        };
         let (row, fields, journal) = write_revision(
             &tx,
             &paths.home,
@@ -110,6 +115,25 @@ impl Store {
             parsed.body,
             Some(&path),
         )?;
+        let mut pending = super::folders::Pending {
+            journal,
+            touched: super::documents::main_touch(&row, crate::db::FileChange::Added),
+            paths: vec![row.path.clone()],
+        };
+        let scope = super::folders::Scope {
+            conn: &tx,
+            home: &paths.home,
+            settings,
+            row: &row,
+            actor,
+        };
+        super::folders::add_files(&scope, files.into_values().collect(), &mut pending)?;
+        let super::folders::Pending {
+            journal,
+            touched,
+            paths: changed,
+        } = pending;
+        let changed_paths: Vec<&str> = changed.iter().map(String::as_str).collect();
         let changed = Changed {
             id: row.id.clone(),
             revision: row.revision,
@@ -123,11 +147,11 @@ impl Store {
             action: Action::Unarchive,
             summary: "",
             actor,
-            paths: &[&row.path],
-            files: &[],
+            paths: &changed_paths,
+            files: &touched,
         };
         finish(tx, history.as_ref(), journal, &commit)?;
-        index_file::refresh(conn, &paths.home, settings, &row.project);
+        index_file::refresh_document(conn, &paths.home, settings, &row);
         Ok(changed)
     }
 }

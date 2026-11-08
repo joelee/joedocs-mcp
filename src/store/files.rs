@@ -111,12 +111,12 @@ pub(super) fn verify_files(conn: &Connection, home: &Path, row: &DocumentRow) ->
 /// replayed from the recorded file changes: the main file's stem and the
 /// revision it last changed at, and each sub-file's path and revision by
 /// its case-folded path.
-struct AtRevision {
-    main: Option<(String, u64)>,
-    files: BTreeMap<String, (String, u64)>,
+pub(super) struct AtRevision {
+    pub(super) main: Option<(String, u64)>,
+    pub(super) files: BTreeMap<String, (String, u64)>,
 }
 
-fn files_at(changes: &[RevisionFileRow], revision: u64) -> AtRevision {
+pub(super) fn files_at(changes: &[RevisionFileRow], revision: u64) -> AtRevision {
     let mut at = AtRevision {
         main: None,
         files: BTreeMap::new(),

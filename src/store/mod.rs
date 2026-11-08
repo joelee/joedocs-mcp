@@ -26,6 +26,7 @@ mod documents;
 mod editing;
 mod file_changes;
 mod files;
+mod folders;
 mod index_file;
 mod journal;
 mod registry;
@@ -52,6 +53,7 @@ pub use documents::{
 pub use editing::{MAX_EDITS, Replacement};
 pub use file_changes::{FileWrite, WriteFiles, WrittenFile, WrittenFiles};
 pub use files::{FileInfo, NewFile};
+pub use folders::ArchivedFile;
 pub use registry::CreatedKey;
 pub use reindex::Reindexed;
 pub use revisions::{Diff, HistoryPage, MAX_DIFF_CONTEXT, MAX_HISTORY_LIMIT};

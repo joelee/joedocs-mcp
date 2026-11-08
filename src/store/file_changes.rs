@@ -73,13 +73,13 @@ pub struct WrittenFiles {
 
 /// The editable parts of a sub-file during a change.
 #[derive(Debug, Clone, PartialEq)]
-struct FileDraft {
-    extra: Fields,
-    body: String,
+pub(super) struct FileDraft {
+    pub(super) extra: Fields,
+    pub(super) body: String,
 }
 
 impl FileDraft {
-    fn of(text: &str) -> Option<Self> {
+    pub(super) fn of(text: &str) -> Option<Self> {
         let parsed = front_matter::parse(text).ok()?;
         Some(Self {
             extra: front_matter::file_extras(&parsed.fields),
@@ -95,7 +95,7 @@ impl FileDraft {
 
 /// Refuses a file change against `expected` when the file changed after it
 /// or it is ahead of the document.
-fn check_file_revision(
+pub(super) fn check_file_revision(
     row: &DocumentRow,
     file: &FileRow,
     expected: Option<u64>,
@@ -115,7 +115,7 @@ fn check_file_revision(
 }
 
 /// Requires a multi-file document, naming `field` when it is not.
-fn require_multifile(row: &DocumentRow, field: &'static str) -> Result<(), Error> {
+pub(super) fn require_multifile(row: &DocumentRow, field: &'static str) -> Result<(), Error> {
     if row.multifile {
         Ok(())
     } else {
@@ -129,12 +129,16 @@ fn require_multifile(row: &DocumentRow, field: &'static str) -> Result<(), Error
     }
 }
 
-fn parse_path(row: &DocumentRow, file: &str, field: &'static str) -> Result<FilePath, Error> {
+pub(super) fn parse_path(
+    row: &DocumentRow,
+    file: &str,
+    field: &'static str,
+) -> Result<FilePath, Error> {
     FilePath::parse(file, main_stem(row)).map_err(|message| Error::invalid(field, message))
 }
 
 /// Checks the main file and every live sub-file of `row` against the index.
-fn verify_all(home: &Path, row: &DocumentRow, live: &[FileRow]) -> Result<(), Error> {
+pub(super) fn verify_all(home: &Path, row: &DocumentRow, live: &[FileRow]) -> Result<(), Error> {
     read_verified(home, row)?;
     for file in live {
         read_verified_file(home, row, file)?;
@@ -143,7 +147,7 @@ fn verify_all(home: &Path, row: &DocumentRow, live: &[FileRow]) -> Result<(), Er
 }
 
 /// Renders a sub-file at `row`'s revision and checks its size.
-fn render(
+pub(super) fn render(
     row: &DocumentRow,
     now: &str,
     draft: &FileDraft,
@@ -168,7 +172,7 @@ fn render(
 
 /// Records `file` as written at `row`'s revision with `text`, and replaces
 /// its search entries. Inserts it when its `id` is 0.
-fn save(
+pub(super) fn save(
     conn: &Connection,
     row: &DocumentRow,
     actor: &Actor,
@@ -192,7 +196,12 @@ fn save(
 
 /// Raises `row` to a new revision by `actor` at `now`, without touching its
 /// main file.
-fn bump(conn: &Connection, row: &mut DocumentRow, actor: &Actor, now: &str) -> Result<(), Error> {
+pub(super) fn bump(
+    conn: &Connection,
+    row: &mut DocumentRow,
+    actor: &Actor,
+    now: &str,
+) -> Result<(), Error> {
     row.revision += 1;
     now.clone_into(&mut row.updated_at);
     actor.name().clone_into(&mut row.updated_by);
@@ -203,7 +212,7 @@ fn bump(conn: &Connection, row: &mut DocumentRow, actor: &Actor, now: &str) -> R
 
 /// Removes the empty directories left above `file` (vault-relative), up to
 /// the document folder.
-fn remove_empty_dirs(home: &Path, row: &DocumentRow, file: &str) {
+pub(super) fn remove_empty_dirs(home: &Path, row: &DocumentRow, file: &str) {
     let top = home.join(folder(row));
     let mut dir = home.join(file).parent().map(Path::to_path_buf);
     while let Some(path) = dir {
@@ -776,7 +785,7 @@ fn plan_writes(
 }
 
 /// A row for a new sub-file of `row` at `path`, filled in by [`save`].
-fn new_row(row: &DocumentRow, path: &FilePath) -> FileRow {
+pub(super) fn new_row(row: &DocumentRow, path: &FilePath) -> FileRow {
     FileRow {
         id: 0,
         document_id: row.id.clone(),

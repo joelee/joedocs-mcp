@@ -46,11 +46,21 @@ impl Journal {
         Ok(())
     }
 
-    /// Renames `from` to `to`.
+    /// Renames `from` (a file or a directory) to `to`, creating `to`'s
+    /// parent directories.
     pub(super) fn rename(&mut self, from: &Path, to: &Path) -> Result<(), Error> {
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(Error::io("create", parent))?;
+        }
         fs::rename(from, to).map_err(Error::io("rename", from))?;
         self.undo.push(Undo::Rename(to.to_owned(), from.to_owned()));
         Ok(())
+    }
+
+    /// This journal followed by `later`'s changes, undone newest first.
+    pub(super) fn then(mut self, mut later: Self) -> Self {
+        self.undo.append(&mut later.undo);
+        self
     }
 
     /// Keeps every change.
