@@ -420,3 +420,105 @@ fn check_reports_a_stale_index_file_and_reindex_rewrites_it() {
         .success()
         .stdout("No problems found.\n");
 }
+
+#[test]
+fn get_prints_a_document_or_one_part_of_it() {
+    use joedocs::store::{Actor, NewDocument};
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let mut store = library_store(root.path()).unwrap();
+    let actor = Actor::new("laptop", "test");
+    store
+        .create(
+            &actor,
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Plan".into(),
+                content: "First body.\n".into(),
+                ..NewDocument::default()
+            },
+        )
+        .unwrap();
+    store
+        .append(&actor, "JD-1", "Second part.\n", Some(1), None)
+        .unwrap();
+    let latest = store.get("JD-1", None).unwrap().markdown;
+    let first = store.get("JD-1", Some(1)).unwrap().markdown;
+    drop(store);
+    let split = |text: &str| {
+        let rest = text.strip_prefix("---\n").unwrap();
+        let end = rest.find("\n---\n").unwrap();
+        (rest[..=end].to_owned(), rest[end + 5..].to_owned())
+    };
+    let (yaml, body) = split(&latest);
+    let (first_yaml, first_body) = split(&first);
+    assert!(body.contains("Second part."), "{body}");
+
+    let get = |args: &[&str]| {
+        let mut command = cmd(root.path());
+        command.arg("get").args(args);
+        command
+    };
+    get(&["JD-1"]).assert().success().stdout(latest.clone());
+    get(&["JD-1", "--content-only"])
+        .assert()
+        .success()
+        .stdout(body.clone());
+    let output = get(&["JD-1", "--front-matter-only"]).assert().success();
+    let printed = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert_eq!(printed, yaml);
+    assert!(!printed.contains("---"), "{printed}");
+    assert!(printed.contains("id: JD-1\n"), "{printed}");
+    assert!(printed.contains("revision: 2\n"), "{printed}");
+
+    get(&["JD-1", "--version", "1"])
+        .assert()
+        .success()
+        .stdout(first.clone());
+    get(&["JD-1", "--version", "1", "--content-only"])
+        .assert()
+        .success()
+        .stdout(first_body);
+    get(&["JD-1", "--version", "1", "--front-matter-only"])
+        .assert()
+        .success()
+        .stdout(first_yaml);
+    get(&["JD-1", "--content-only", "--front-matter-only"])
+        .assert()
+        .code(2);
+
+    for (args, expected) in [
+        (vec![], latest.clone()),
+        (vec!["--content-only"], body.clone()),
+        (vec!["--front-matter-only"], yaml.clone()),
+    ] {
+        let file = root.path().join("out.md");
+        std::fs::write(&file, "old contents").unwrap();
+        let mut full = vec!["JD-1", "-f", file.to_str().unwrap()];
+        full.extend(args);
+        get(&full).assert().success().stdout("");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), expected);
+    }
+    let file = root.path().join("long.md");
+    get(&["JD-1", "--file", file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout("");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), latest);
+
+    get(&["JD-9"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("JD-9"));
+    let mut store = library_store(root.path()).unwrap();
+    store.archive(&actor, "JD-1", "done").unwrap();
+    drop(store);
+    get(&["JD-1"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("joedocs archive restore JD-1"));
+}

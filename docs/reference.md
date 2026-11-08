@@ -21,6 +21,7 @@ joedocs [--config PATH] [--log-level LEVEL] <COMMAND>
 | `key revoke NAME` | Revoke a key immediately and for good. |
 | `archive list [--project NAME]` | List archived documents, most recently archived first. |
 | `archive restore DOCUMENT_ID` | Bring an archived document back as it was before it was archived. |
+| `get DOCUMENT_ID [--version N] [--content-only \| --front-matter-only] [-f PATH]` | Print a document as `get_document` returns it: the front matter block and the body. `--content-only` prints only the body (what `update_document` takes as `content`); `--front-matter-only` prints only the front matter YAML, without the `---` lines, so it can be piped to a YAML tool. `--version N` prints an earlier revision. `-f`/`--file PATH` writes the same text to `PATH`, replacing it, instead of printing it. An archived document fails with exit `65`; `archive restore` brings it back. |
 | `reindex` | Rebuild the document index and search from the history, and rewrite each project's `INDEX.md`. Safe to rerun; projects and keys are kept. |
 | `check` | Report drift between the vault, the history and the index, and `INDEX.md` files that are missing or out of date, and say how to resolve it. Changes no document, index or `INDEX.md` (opening the store may add the `INDEX.md` rule to the history's `info/exclude` once). |
 | `systemd install [--system --run-as USER] [--dry-run]` | Write a systemd unit that runs `serve` with the configuration in effect, then enable and (re)start it. Linux only; see [deployment.md](deployment.md#linux-systemd). |

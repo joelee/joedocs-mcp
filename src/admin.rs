@@ -1,9 +1,10 @@
 //! Administrator commands run on the server host: `init`, `project`, `key`,
-//! `reindex`, `archive` and `check`.
+//! `reindex`, `archive`, `check` and `get`.
 //!
 //! Each command calls the [`Store`] and writes a plain-text report.
 
 use std::io::Write;
+use std::path::Path;
 
 use secrecy::ExposeSecret as _;
 
@@ -138,6 +139,83 @@ pub fn archive(
         }
     }
     Ok(())
+}
+
+/// Which part of a document `joedocs get` prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// Front matter and body, exactly as stored.
+    Whole,
+    /// The body only.
+    Body,
+    /// The front matter YAML only, without the `---` lines.
+    FrontMatter,
+}
+
+/// The whole Markdown of a document, or of one of its revisions.
+///
+/// # Errors
+///
+/// Returns [`Error::Archived`] for an archived document, and store errors.
+pub fn fetch(store: &Store, id: &str, version: Option<u64>) -> Result<String, Error> {
+    match store.get(id, version) {
+        Ok(fetched) => Ok(fetched.markdown),
+        Err(crate::store::Error::Archived(id)) => Err(Error::Archived(id)),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Writes `part` of `markdown` to `file` (replacing it atomically) or, when
+/// there is no file, to `out`.
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails, and a store integrity error
+/// when the stored text has no front matter block.
+pub fn write_document(
+    markdown: &str,
+    part: Part,
+    file: Option<&Path>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let text = match part {
+        Part::Whole => markdown,
+        Part::Body | Part::FrontMatter => {
+            let (yaml, body) = crate::document::front_matter::split(markdown)
+                .map_err(|e| crate::store::Error::invalid("document", e.to_string()))?;
+            if part == Part::Body { body } else { yaml }
+        }
+    };
+    match file {
+        Some(path) => write_atomically(path, text.as_bytes())?,
+        None => out.write_all(text.as_bytes())?,
+    }
+    Ok(())
+}
+
+/// Writes `bytes` to a temporary file next to `path`, then renames it into
+/// place, so readers never see a partial file.
+///
+/// # Errors
+///
+/// Returns the I/O error.
+pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("joedocs"),
+        std::ffi::OsStr::to_os_string,
+    );
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(&name);
+    temp_name.push(format!(".{}.tmp", std::process::id()));
+    let temp = dir.join(temp_name);
+    std::fs::write(&temp, bytes)?;
+    std::fs::rename(&temp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })
 }
 
 /// Runs `joedocs check` and writes its report.

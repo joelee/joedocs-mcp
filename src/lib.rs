@@ -75,6 +75,9 @@ pub enum Error {
     /// A systemd unit could not be installed or removed.
     #[error(transparent)]
     Systemd(#[from] systemd::Error),
+    /// The document is archived; the admin command can bring it back.
+    #[error("document {0} is archived; run `joedocs archive restore {0}` to bring it back")]
+    Archived(String),
     /// `check` found problems (already reported on standard output).
     #[error("check found {0} problems")]
     Problems(usize),
@@ -96,6 +99,7 @@ impl Error {
             Self::Config(_) => EXIT_CONFIG,
             Self::Output(_) | Self::Systemd(systemd::Error::Output(_)) => EXIT_IO,
             Self::Store(error) if error.is_user_error() => EXIT_DATA,
+            Self::Archived(_) => EXIT_DATA,
             Self::Systemd(error) if error.is_user_error() => EXIT_DATA,
             Self::Store(_) => EXIT_SOFTWARE,
             Self::Serve { .. } | Self::Systemd(_) => EXIT_UNAVAILABLE,
@@ -205,6 +209,23 @@ pub fn execute(
         }
         Command::Key { command } => {
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
+        }
+        Command::Get {
+            document_id,
+            version,
+            content_only,
+            front_matter_only,
+            file,
+        } => {
+            let part = if *content_only {
+                admin::Part::Body
+            } else if *front_matter_only {
+                admin::Part::FrontMatter
+            } else {
+                admin::Part::Whole
+            };
+            let markdown = admin::fetch(&open_store(loaded, ctx)?, document_id, *version)?;
+            admin::write_document(&markdown, part, file.as_deref(), out)?;
         }
     }
     Ok(())

@@ -70,6 +70,23 @@ pub enum Command {
         #[command(subcommand)]
         command: KeyCommand,
     },
+    /// Print a document: its front matter and body, or one of them.
+    Get {
+        /// Document ID, e.g. JD-42.
+        document_id: String,
+        /// Print this revision instead of the latest.
+        #[arg(long, value_name = "N")]
+        version: Option<u64>,
+        /// Print only the body.
+        #[arg(long, conflicts_with = "front_matter_only")]
+        content_only: bool,
+        /// Print only the front matter, as YAML without the `---` lines.
+        #[arg(long)]
+        front_matter_only: bool,
+        /// Write to this file (replacing it) instead of standard output.
+        #[arg(short = 'f', long, value_name = "PATH")]
+        file: Option<PathBuf>,
+    },
 }
 
 /// `project` subcommands.
@@ -252,6 +269,40 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn get_takes_a_version_a_part_and_a_file() {
+        let cli =
+            Cli::try_parse_from(["app", "get", "JD-4", "--version", "2", "-f", "x.md"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Command::Get {
+                document_id: "JD-4".into(),
+                version: Some(2),
+                content_only: false,
+                front_matter_only: false,
+                file: Some(PathBuf::from("x.md")),
+            }
+        );
+        let cli = Cli::try_parse_from(["app", "get", "JD-4", "--front-matter-only"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Get {
+                front_matter_only: true,
+                content_only: false,
+                ..
+            }
+        ));
+        let err = Cli::try_parse_from([
+            "app",
+            "get",
+            "JD-4",
+            "--content-only",
+            "--front-matter-only",
+        ])
+        .unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

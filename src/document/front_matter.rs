@@ -125,6 +125,28 @@ pub struct Parsed<'a> {
     pub body: &'a str,
 }
 
+/// Splits `text` into the YAML between the `---` lines (without them) and
+/// the body after the closing line, without parsing the YAML.
+///
+/// # Errors
+///
+/// Returns an error when the text does not start with a `---` block or the
+/// block is not closed.
+pub fn split(text: &str) -> Result<(&str, &str), FrontMatterError> {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return fail("the document does not start with a front matter block");
+    };
+    if let Some(body) = rest.strip_prefix("---\n") {
+        Ok(("", body))
+    } else if let Some(end) = rest.find("\n---\n") {
+        Ok((&rest[..=end], &rest[end + 5..]))
+    } else if let Some(yaml) = rest.strip_suffix("\n---") {
+        Ok((yaml, ""))
+    } else {
+        fail("the front matter block is not closed with ---")
+    }
+}
+
 /// Splits `text` into front matter and body.
 ///
 /// # Errors
@@ -132,18 +154,7 @@ pub struct Parsed<'a> {
 /// Returns an error when the text does not start with a `---` block or the
 /// YAML is not a mapping.
 pub fn parse(text: &str) -> Result<Parsed<'_>, FrontMatterError> {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return fail("the document does not start with a front matter block");
-    };
-    let (yaml, body) = if let Some(body) = rest.strip_prefix("---\n") {
-        ("", body)
-    } else if let Some(end) = rest.find("\n---\n") {
-        (&rest[..=end], &rest[end + 5..])
-    } else if let Some(yaml) = rest.strip_suffix("\n---") {
-        (yaml, "")
-    } else {
-        return fail("the front matter block is not closed with ---");
-    };
+    let (yaml, body) = split(text)?;
     let fields = if yaml.trim().is_empty() {
         Fields::new()
     } else {
