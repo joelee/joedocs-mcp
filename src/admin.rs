@@ -339,29 +339,53 @@ pub fn write_document(
     Ok(())
 }
 
-/// Writes `bytes` to a temporary file next to `path`, then renames it into
-/// place, so readers never see a partial file.
+/// Writes `bytes` to `path` through a temporary file in the same directory,
+/// renamed into place, so readers never see a partial file. The temporary
+/// file has a random name and is created exclusively (an existing file or
+/// symlink there is never opened or followed). `path` keeps its mode when it
+/// exists; a new file is `0600`.
 ///
 /// # Errors
 ///
-/// Returns the I/O error.
+/// Returns the I/O error, after removing the temporary file.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut random = [0_u8; 8];
+    getrandom::fill(&mut random).map_err(|e| std::io::Error::other(e.to_string()))?;
     let dir = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
     let name = path.file_name().map_or_else(
-        || std::ffi::OsString::from("joedocs"),
-        std::ffi::OsStr::to_os_string,
+        || "joedocs".to_owned(),
+        |n| n.to_string_lossy().into_owned(),
     );
-    let mut temp_name = std::ffi::OsString::from(".");
-    temp_name.push(&name);
-    temp_name.push(format!(".{}.tmp", std::process::id()));
-    let temp = dir.join(temp_name);
-    std::fs::write(&temp, bytes)?;
-    std::fs::rename(&temp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&temp);
-    })
+    let temp = dir.join(format!(".{name}.{}.tmp", crate::auth::hex(&random)));
+    write_via(path, bytes, &temp)
+}
+
+/// [`write_atomically`] through the temporary file `temp`.
+fn write_via(path: &Path, bytes: &[u8], temp: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    let mode = std::fs::metadata(path).map_or(0o600, |m| m.permissions().mode() & 0o777);
+    // `create_new` is O_CREAT|O_EXCL: it fails on any existing entry,
+    // including a symlink, without following it. Nothing to clean up then.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(temp)?;
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.set_permissions(std::fs::Permissions::from_mode(mode)))
+        .and_then(|()| file.sync_all())
+        .and_then(|()| {
+            drop(file);
+            std::fs::rename(temp, path)
+        });
+    if written.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    written
 }
 
 /// Runs `joedocs check` and writes its report.
@@ -604,6 +628,81 @@ fn write_table(out: &mut dyn Write, header: &[&str], rows: &[Vec<String>]) -> Re
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fn mode(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path).map_or(0, |m| m.permissions().mode() & 0o777)
+    }
+
+    #[test]
+    fn exports_never_follow_or_truncate_a_planted_temporary_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dest = dir.path().join("doc.md");
+        let temp = dir.path().join(".doc.md.planted.tmp");
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "precious").unwrap();
+        std::os::unix::fs::symlink(&victim, &temp).unwrap();
+        assert!(write_via(&dest, b"new", &temp).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+        assert!(
+            std::fs::symlink_metadata(&temp)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        std::fs::remove_file(&temp).unwrap();
+        std::fs::write(&temp, "someone else's").unwrap();
+        assert!(write_via(&dest, b"new", &temp).is_err());
+        assert_eq!(std::fs::read_to_string(&temp).unwrap(), "someone else's");
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn exports_keep_an_existing_mode_and_create_private_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let fresh = dir.path().join("fresh.md");
+        write_atomically(&fresh, b"one").unwrap();
+        assert_eq!(mode(&fresh), 0o600);
+        let shared = dir.path().join("shared.md");
+        std::fs::write(&shared, "old").unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_atomically(&shared, b"two").unwrap();
+        assert_eq!(
+            (
+                mode(&shared),
+                std::fs::read_to_string(&shared).unwrap().as_str()
+            ),
+            (0o644, "two")
+        );
+        let private = dir.path().join("private.md");
+        std::fs::write(&private, "old").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomically(&private, b"three").unwrap();
+        assert_eq!(mode(&private), 0o600);
+        let leftovers = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn a_failed_export_leaves_no_temporary_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // A non-empty directory cannot be replaced by a file.
+        let dest = dir.path().join("taken");
+        std::fs::create_dir(&dest).unwrap();
+        std::fs::write(dest.join("inside"), "x").unwrap();
+        assert!(write_atomically(&dest, b"new").is_err());
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(names, ["taken"]);
+    }
+
     use super::*;
 
     #[test]
