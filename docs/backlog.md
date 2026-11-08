@@ -6,8 +6,7 @@ Phases and design are in [plan.md](plan.md#15-phases), and review decisions are 
 
 ## In progress
 
-- **0.3.0: remote administration.** The admin commands from another machine through an admin API that is off by default, with admin tokens, TOTP logins (Google Authenticator), sessions that expire after `admin.session_hours`, and a re-login prompt. Plan JD-8.
-- **0.3.0: operations commands.** `joedocs get`, `status`, `agents`, and `backup` (with `--restore`), and [upgrading.md](upgrading.md). Plan JD-8.
+Nothing.
 
 ## Planned
 
@@ -27,6 +26,7 @@ Phases and design are in [plan.md](plan.md#15-phases), and review decisions are 
 
 ## Done
 
+- **0.3.0** (2026-11-08): remote administration through an admin API that is off by default, with admin tokens, TOTP logins, expiring sessions and a re-login prompt; `joedocs get`, `status`, `agents` and `backup` (with `--restore`); [upgrading.md](upgrading.md). Plan JD-8.
 - **0.2.0** (2026-11-07): `INDEX.md` per project, and tag-triggered releases to crates.io and the Homebrew tap. Plan JD-5, reviews JD-6 and JD-7.
 - **0.1.2** (2026-11-07): `edit_document`, `update_document` and `change_document_front_matter` refuse no-op changes; a gitleaks rule for JoeDocs API keys; a committed pre-commit hook (`.githooks/pre-commit`) with `actionlint` in the hook and CI; client setup with keys from the environment; signed release tags. Plan JD-3, review JD-4.
 - **0.1.1, a documentation release** (2026-11-07): a new README, the [deployment guide](deployment.md), the [reference](reference.md) and the first [agent skills](skills/README.md).
