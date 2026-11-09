@@ -225,6 +225,17 @@ pub(super) fn files_then(
     Ok(files)
 }
 
+/// Refuses with `already_exists` when something is at `vault` (a path the
+/// index has no live file at), so it is never overwritten.
+pub(super) fn refuse_unknown(home: &Path, vault: &str) -> Result<(), Error> {
+    if fs::symlink_metadata(home.join(vault)).is_ok() {
+        return Err(Error::AlreadyExists(format!(
+            "a file the index does not know at {vault}"
+        )));
+    }
+    Ok(())
+}
+
 /// What a folder change works on: the transaction, the vault, the
 /// settings, the document (at its new revision) and who changes it.
 pub(super) struct Scope<'a> {
@@ -270,6 +281,7 @@ pub(super) fn add_files(
         scope.actor.name().clone_into(&mut file.created_by);
         save(scope.conn, row, scope.actor, &mut file, &text)?;
         let vault = vault_path(row, &file.path);
+        refuse_unknown(scope.home, &vault)?;
         pending
             .journal
             .write(&scope.home.join(&vault), text.as_bytes())?;
@@ -451,6 +463,13 @@ impl Store {
                 "file {path} in {}: it is named like the main file; rename the document first",
                 row.id
             )));
+        }
+        // A file that comes back where no indexed file is must not land on a
+        // file the index does not know.
+        for (key, (path, _)) in &wanted {
+            if !live.iter().any(|f| f.path.to_lowercase() == *key) {
+                refuse_unknown(&paths.home, &vault_path(&row, path))?;
+            }
         }
 
         let main_path = row.path.clone();

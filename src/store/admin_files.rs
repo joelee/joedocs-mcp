@@ -415,6 +415,11 @@ fn plan_restore(
             ));
         }
         let from = (file.path != path_then).then(|| file.path.clone());
+        // Renamed back to another name (not just another case): nothing may
+        // be at that path yet.
+        if file.path.to_lowercase() != path_then.to_lowercase() {
+            super::folders::refuse_unknown(home, &vault_path(row, &path_then))?;
+        }
         let change = if from.is_some() {
             FileChange::Renamed
         } else {

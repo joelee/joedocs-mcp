@@ -1584,3 +1584,42 @@ fn vault_tree(dir: &Path) -> Vec<String> {
     out.sort();
     out
 }
+
+#[test]
+fn a_failed_folder_restore_leaves_the_tree_as_it_was() {
+    let mut fx = fixture();
+    let mut doc = new_doc("Roadmap");
+    doc.multifile = true;
+    fx.store.create(&actor(), doc).unwrap();
+    for file in ["a", "deep/b"] {
+        let request = NewFile {
+            document_id: "JD-1".into(),
+            file: file.into(),
+            content: "x\n".into(),
+            ..NewFile::default()
+        };
+        fx.store.create_file(&actor(), &request).unwrap();
+    }
+    fx.store
+        .archive_file(&actor(), "JD-1", "deep/b", None, None)
+        .unwrap();
+    fx.store
+        .archive_file(&actor(), "JD-1", "a", None, None)
+        .unwrap();
+    let tree = vault_tree(&fx.paths.home);
+    fx.fail.store(true, Ordering::SeqCst);
+    assert!(
+        fx.store
+            .restore_version(&actor(), "JD-1", 3, None, None)
+            .is_err()
+    );
+    assert_eq!(vault_tree(&fx.paths.home), tree);
+    fx.fail.store(false, Ordering::SeqCst);
+    assert_eq!(
+        fx.store
+            .restore_version(&actor(), "JD-1", 3, None, None)
+            .unwrap()
+            .revision,
+        6
+    );
+}

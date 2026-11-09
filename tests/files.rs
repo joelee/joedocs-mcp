@@ -1760,3 +1760,74 @@ fn restores_refuse_a_file_named_like_the_current_main_file() {
     assert_eq!(vault_tree(dir.path()), tree);
     assert!(read(dir.path(), "joedocs/plans/notes/notes.md").ends_with("---\n# Roadmap\n"));
 }
+
+// --- JD-14: restores never overwrite unknown files (MAJ-02) -----------------
+
+/// Asserts `run` is refused with `already_exists` and leaves the planted
+/// file, the index and the vault tree as they were.
+fn assert_refused_keeping(
+    root: &Path,
+    planted: &str,
+    run: impl FnOnce() -> Result<joedocs::store::Changed, Error>,
+) -> TestResult<()> {
+    let before = snapshot(root)?;
+    let tree = vault_tree(root);
+    let err = run().err().ok_or("the restore succeeded")?;
+    assert!(matches!(err, Error::AlreadyExists(_)), "{err}");
+    assert!(err.to_string().contains("does not know"), "{err}");
+    assert_eq!(read(root, planted), "mine\n");
+    assert_eq!(snapshot(root)?, before);
+    assert_eq!(vault_tree(root), tree);
+    Ok(())
+}
+
+#[test]
+fn a_folder_restore_refuses_an_unknown_file_where_a_file_returns() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .archive_file(&actor(), "JD-1", "notes", None, None)
+        .unwrap();
+    let planted = "joedocs/plans/Roadmap/notes.md";
+    fs::write(dir.path().join("vault").join(planted), "mine\n").unwrap();
+    assert_refused_keeping(dir.path(), planted, || {
+        store.restore_version(&actor(), "JD-1", 3, None, None)
+    })
+    .unwrap();
+}
+
+#[test]
+fn restores_refuse_an_unknown_file_where_a_renamed_file_returns() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .rename_file(&actor(), "JD-1", "notes", "n2", None)
+        .unwrap();
+    let planted = "joedocs/plans/Roadmap/notes.md";
+    fs::write(dir.path().join("vault").join(planted), "mine\n").unwrap();
+    assert_refused_keeping(dir.path(), planted, || {
+        store.restore_version(&actor(), "JD-1", 3, None, None)
+    })
+    .unwrap();
+    assert_refused_keeping(dir.path(), planted, || {
+        store.restore_file(&actor(), "JD-1", "notes", 3)
+    })
+    .unwrap();
+}
+
+#[test]
+fn archive_restore_never_writes_over_an_unknown_file() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store.archive(&actor(), "JD-1", "done").unwrap();
+    let planted = dir.path().join("vault/joedocs/plans/Roadmap/notes.md");
+    fs::create_dir_all(planted.parent().unwrap()).unwrap();
+    fs::write(&planted, "mine\n").unwrap();
+    let back = store.unarchive(&actor(), "JD-1").unwrap();
+    assert_eq!(back.path, "joedocs/plans/Roadmap (JD-1)/Roadmap (JD-1).md");
+    assert_eq!(fs::read_to_string(&planted).unwrap(), "mine\n");
+    assert!(read(dir.path(), "joedocs/plans/Roadmap (JD-1)/notes.md").ends_with("---\nnotes\n"));
+}
