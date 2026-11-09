@@ -83,6 +83,7 @@ pub(super) fn write_main(
         moved.push(format!("{new_folder}/{}.md", file.path));
     }
     if old_folder.eq_ignore_ascii_case(&new_folder) {
+        super::vault::refuse_occupied(home, &old_folder, &new_folder)?;
         let mut journal = Journal::default();
         journal.rename(&home.join(&old_folder), &home.join(&new_folder))?;
         let name = old_path.rsplit_once('/').map_or(old_path, |(_, name)| name);

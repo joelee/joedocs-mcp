@@ -2060,3 +2060,51 @@ fn case_only_restores_need_the_same_file() {
     );
     assert_rebuilds_identically(dir.path(), &mut store).unwrap();
 }
+
+#[test]
+fn case_only_renames_need_the_same_file() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .rename_file(&actor(), "JD-1", "notes", "Notes", None)
+        .unwrap();
+    let folds = folds_case(dir.path());
+    let vault = dir.path().join("vault");
+    if folds {
+        let renamed = store
+            .rename_file(&actor(), "JD-1", "Notes", "notes", None)
+            .unwrap();
+        assert_eq!(renamed.file.as_deref(), Some("notes"));
+    } else {
+        fs::write(vault.join("joedocs/plans/Roadmap/notes.md"), "mine\n").unwrap();
+        fs::write(vault.join("joedocs/plans/plan.md"), "mine\n").unwrap();
+        fs::create_dir(vault.join("joedocs/plans/roadmap")).unwrap();
+        fs::write(vault.join("joedocs/plans/roadmap/x.md"), "mine\n").unwrap();
+        // A file: refused, nothing changes.
+        assert_refused_keeping(dir.path(), "joedocs/plans/Roadmap/notes.md", || {
+            store.rename_file(&actor(), "JD-1", "Notes", "notes", None)
+        })
+        .unwrap();
+    }
+    // Documents: a different file takes the (ID) name; the same file renames in place.
+    let single = store.rename(&actor(), "JD-2", "plan", None).unwrap();
+    let folder = store.rename(&actor(), "JD-1", "roadmap", None).unwrap();
+    if folds {
+        assert_eq!(single.path, "joedocs/plans/plan.md");
+        assert_eq!(folder.path, "joedocs/plans/roadmap/roadmap.md");
+    } else {
+        assert_eq!(single.path, "joedocs/plans/plan (JD-2).md");
+        assert_eq!(
+            folder.path,
+            "joedocs/plans/roadmap (JD-1)/roadmap (JD-1).md"
+        );
+        assert_eq!(read(dir.path(), "joedocs/plans/plan.md"), "mine\n");
+        assert_eq!(read(dir.path(), "joedocs/plans/roadmap/x.md"), "mine\n");
+        assert_eq!(read(dir.path(), "joedocs/plans/Roadmap/notes.md"), "mine\n");
+        assert!(
+            read(dir.path(), "joedocs/plans/roadmap (JD-1)/Notes.md").ends_with("---\nnotes\n")
+        );
+    }
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}

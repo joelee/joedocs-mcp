@@ -885,6 +885,7 @@ pub(super) fn write_revision(
         Some(old) if old != row.path => {
             let old_file = home.join(old);
             if old.eq_ignore_ascii_case(&row.path) {
+                super::vault::refuse_occupied(home, old, &row.path)?;
                 journal.rename(&old_file, &new_file)?;
                 journal.write(&new_file, text.as_bytes())?;
             } else {
@@ -1187,12 +1188,23 @@ pub(super) fn choose_path(
         } else {
             format!("{project}/{doc_type}/{stem}.md")
         };
-        let ours = current.is_some_and(|c| c.eq_ignore_ascii_case(&candidate));
-        let on_disk = if multifile {
-            super::vault::occupied(&home.join(format!("{project}/{doc_type}/{stem}")))?
+        // What must be free: the folder for a multi-file document, else the file.
+        let parent = |path: &str| path.rsplit_once('/').map_or("", |(dir, _)| dir).to_owned();
+        let (taken, mine) = if multifile {
+            (parent(&candidate), current.map(parent))
         } else {
-            super::vault::occupied(&home.join(&candidate))?
+            (candidate.clone(), current.map(str::to_owned))
         };
+        let target = home.join(&taken);
+        // Ours only when it is the document's own entry, not just a name
+        // that differs in case (another file, on a case-sensitive file system).
+        let ours = match mine {
+            Some(mine) if mine.eq_ignore_ascii_case(&taken) => {
+                super::vault::same_entry(&home.join(mine), &target)?
+            }
+            _ => false,
+        };
+        let on_disk = super::vault::occupied(&target)?;
         if !db::path_taken(conn, &candidate, Some(id))? && (ours || !on_disk) {
             return Ok(candidate);
         }

@@ -657,7 +657,9 @@ fn rename_to(
     }
     let case_only = path.key() == file.path.to_lowercase();
     let vault = vault_path(row, &path.as_str());
-    if !case_only {
+    if case_only {
+        super::vault::refuse_occupied(home, &vault_path(row, &file.path), &vault)?;
+    } else {
         super::vault::refuse_unknown(home, &vault)?;
     }
     Ok(std::mem::replace(&mut file.path, path.as_str()))
@@ -678,6 +680,7 @@ fn write_moved(
     }
     let old_file = home.join(old);
     if old.eq_ignore_ascii_case(new) {
+        super::vault::refuse_occupied(home, old, new)?;
         journal.rename(&old_file, &new_file)?;
         journal.write(&new_file, text.as_bytes())
     } else {
@@ -792,5 +795,37 @@ pub(super) fn new_row(row: &DocumentRow, path: &FilePath) -> FileRow {
         content_sha256: Vec::new(),
         archived_at: None,
         archived_by: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_case_only_move_never_replaces_a_different_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        fs::write(home.join("Notes.md"), "indexed").unwrap();
+        let folds = home.join("NOTES.md").exists();
+        if !folds {
+            fs::write(home.join("notes.md"), "mine").unwrap();
+        }
+        let mut journal = Journal::default();
+        let result = write_moved(&mut journal, home, "Notes.md", "notes.md", "new");
+        if folds {
+            result.unwrap();
+            journal.complete();
+            assert_eq!(fs::read_to_string(home.join("notes.md")).unwrap(), "new");
+        } else {
+            let err = result.unwrap_err();
+            assert!(matches!(err, Error::AlreadyExists(_)), "{err}");
+            drop(journal);
+            assert_eq!(fs::read_to_string(home.join("notes.md")).unwrap(), "mine");
+            assert_eq!(
+                fs::read_to_string(home.join("Notes.md")).unwrap(),
+                "indexed"
+            );
+        }
     }
 }
