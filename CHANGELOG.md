@@ -28,6 +28,10 @@ Multi-file documents: a document can be a folder of Markdown files under one ID 
 
 - A case-only rename (of a document, or of a file of a multi-file document) on a case-sensitive file system no longer replaces another file whose name differs only in case.
 
+### Security
+
+- `rmcp` 3.9.0 (RUSTSEC-2026-0462). JoeDocs uses only rmcp's server, which the advisory does not affect; the update clears it for builds from source.
+
 ### Upgrading
 
 - Database migration 5 adds multi-file documents: **JoeDocs 0.3.x cannot open the database afterwards**. Take a backup first with `joedocs backup FILE.tgz` (see [upgrading.md](docs/upgrading.md)).
