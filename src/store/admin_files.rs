@@ -207,11 +207,7 @@ impl Store {
             )));
         }
         let new_vault = vault_path(&target, &new_path.as_str());
-        if paths.home.join(&new_vault).exists() {
-            return Err(Error::AlreadyExists(format!(
-                "a file the index does not know at {new_vault}"
-            )));
-        }
+        super::vault::refuse_unknown(&paths.home, &new_vault)?;
         if target_live.len() as u64 >= settings.max_files {
             return Err(Error::invalid(
                 "documents.max_files",
@@ -424,7 +420,7 @@ fn plan_restore(
         // Renamed back to another name (not just another case): nothing may
         // be at that path yet.
         if file.path.to_lowercase() != path_then.to_lowercase() {
-            super::folders::refuse_unknown(home, &vault_path(row, &path_then))?;
+            super::vault::refuse_unknown(home, &vault_path(row, &path_then))?;
         }
         let change = if from.is_some() {
             FileChange::Renamed
@@ -439,12 +435,7 @@ fn plan_restore(
                 format!("{} already has the most files allowed", row.id),
             ));
         }
-        let vault = vault_path(row, &path_then);
-        if home.join(&vault).exists() {
-            return Err(Error::AlreadyExists(format!(
-                "a file the index does not know at {vault}"
-            )));
-        }
+        super::vault::refuse_unknown(home, &vault_path(row, &path_then))?;
         let checked = parse_path(row, &path_then, "file")?;
         (new_row(row, &checked), None, FileChange::Added)
     };

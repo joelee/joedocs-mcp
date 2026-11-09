@@ -657,10 +657,8 @@ fn rename_to(
     }
     let case_only = path.key() == file.path.to_lowercase();
     let vault = vault_path(row, &path.as_str());
-    if !case_only && home.join(&vault).exists() {
-        return Err(Error::AlreadyExists(format!(
-            "a file the index does not know at {vault}"
-        )));
+    if !case_only {
+        super::vault::refuse_unknown(home, &vault)?;
     }
     Ok(std::mem::replace(&mut file.path, path.as_str()))
 }
@@ -743,12 +741,7 @@ fn plan_writes(
             })?;
             (existing.clone(), draft)
         } else {
-            let vault = vault_path(row, &path.as_str());
-            if home.join(&vault).exists() {
-                return Err(Error::AlreadyExists(format!(
-                    "a file the index does not know at {vault}"
-                )));
-            }
+            super::vault::refuse_unknown(home, &vault_path(row, &path.as_str()))?;
             new_files += 1;
             let draft = FileDraft {
                 extra: Fields::new(),

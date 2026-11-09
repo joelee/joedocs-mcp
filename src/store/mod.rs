@@ -35,6 +35,7 @@ mod reindex;
 mod revisions;
 mod search;
 mod summary;
+mod vault;
 
 use std::fs::{self, File, OpenOptions};
 use std::io;

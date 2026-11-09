@@ -1924,3 +1924,84 @@ fn a_converted_document_shows_its_main_file_before_the_conversion() {
     assert!(diff.diff.contains("+more"), "{}", diff.diff);
     assert_rebuilds_identically(dir.path(), &mut store).unwrap();
 }
+
+// --- JD-16: destinations are checked without following symlinks -------------
+
+/// Plants a symlink to nowhere at `path` (vault-relative).
+fn dangling(root: &Path, path: &str) -> std::path::PathBuf {
+    let link = root.join("vault").join(path);
+    if let Some(parent) = link.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = std::os::unix::fs::symlink("nowhere", &link);
+    link
+}
+
+fn assert_link_refused<T: std::fmt::Debug>(
+    link: &Path,
+    result: Result<T, Error>,
+) -> TestResult<()> {
+    let err = result.err().ok_or("the change succeeded")?;
+    assert!(matches!(err, Error::AlreadyExists(_)), "{err}");
+    assert_eq!(fs::read_link(link)?, Path::new("nowhere"));
+    Ok(())
+}
+
+#[test]
+fn a_dangling_symlink_at_a_file_destination_is_never_replaced() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    backlog(&mut store).unwrap();
+    let root = dir.path();
+
+    let link = dangling(root, "joedocs/plans/Roadmap/fresh.md");
+    assert_link_refused(
+        &link,
+        store.create_file(&actor(), &new_file("fresh", "x\n", None)),
+    )
+    .unwrap();
+    let write = joedocs::store::WriteFiles {
+        document_id: "JD-1".into(),
+        files: vec![write("fresh", "x\n", json!({}))],
+        expected_revision: None,
+        summary: None,
+    };
+    assert_link_refused(&link, store.write_files(&actor(), &write)).unwrap();
+    assert_link_refused(
+        &link,
+        store.rename_file(&actor(), "JD-1", "notes", "fresh", None),
+    )
+    .unwrap();
+    let target = dangling(root, "joedocs/plans/Backlog/notes.md");
+    assert_link_refused(
+        &target,
+        store.move_file(&actor(), "JD-1", "notes", "JD-3", None),
+    )
+    .unwrap();
+
+    store
+        .archive_file(&actor(), "JD-1", "notes", None, None)
+        .unwrap();
+    let restored = dangling(root, "joedocs/plans/Roadmap/notes.md");
+    assert_link_refused(&restored, store.restore_file(&actor(), "JD-1", "notes", 3)).unwrap();
+}
+
+#[test]
+fn a_dangling_symlink_makes_a_document_path_taken() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap(&mut store).unwrap();
+    let link = dangling(dir.path(), "joedocs/plans/Other.md");
+    let renamed = store.rename(&actor(), "JD-2", "Other", None).unwrap();
+    assert_eq!(renamed.path, "joedocs/plans/Other (JD-2).md");
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("nowhere"));
+    let folder = dangling(dir.path(), "joedocs/plans/Fresh");
+    backlog_named(&mut store, "Fresh").unwrap();
+    assert!(
+        dir.path()
+            .join("vault/joedocs/plans/Fresh (JD-3)/Fresh (JD-3).md")
+            .is_file()
+    );
+    assert_eq!(fs::read_link(&folder).unwrap(), Path::new("nowhere"));
+}

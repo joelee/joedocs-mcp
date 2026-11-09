@@ -244,11 +244,7 @@ fn check_new_file(
         ));
     }
     let vault = vault_path(row, &path.as_str());
-    if home.join(&vault).exists() {
-        return Err(Error::AlreadyExists(format!(
-            "a file the index does not know at {vault}"
-        )));
-    }
+    super::vault::refuse_unknown(home, &vault)?;
     super::documents::read_verified(home, row)?;
     for file in &live {
         read_verified_file(home, row, file)?;

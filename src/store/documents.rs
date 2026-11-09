@@ -1189,9 +1189,9 @@ pub(super) fn choose_path(
         };
         let ours = current.is_some_and(|c| c.eq_ignore_ascii_case(&candidate));
         let on_disk = if multifile {
-            home.join(format!("{project}/{doc_type}/{stem}")).exists()
+            super::vault::occupied(&home.join(format!("{project}/{doc_type}/{stem}")))?
         } else {
-            home.join(&candidate).exists()
+            super::vault::occupied(&home.join(&candidate))?
         };
         if !db::path_taken(conn, &candidate, Some(id))? && (ours || !on_disk) {
             return Ok(candidate);
