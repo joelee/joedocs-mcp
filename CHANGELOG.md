@@ -24,6 +24,10 @@ Multi-file documents: a document can be a folder of Markdown files under one ID 
 - `rename_document` takes `title`, or `file` and `new_file`; `title` is no longer required on its own. Calls that worked before work the same.
 - `conflict` errors for a file of a multi-file document also give `file` and `file_revision`.
 
+### Fixed
+
+- A case-only rename (of a document, or of a file of a multi-file document) on a case-sensitive file system no longer replaces another file whose name differs only in case.
+
 ### Upgrading
 
 - Database migration 5 adds multi-file documents: **JoeDocs 0.3.x cannot open the database afterwards**. Take a backup first with `joedocs backup FILE.tgz` (see [upgrading.md](docs/upgrading.md)).

@@ -204,6 +204,8 @@ Every key works the same way, server keys and custom keys alike. Text compares i
 
 Each document is `<storage.home>/<project>/<type>/<Title>.md`. Characters that Obsidian rejects in file names are left out of the file name, and a clash in one folder gets ` (JD-42)` appended.
 
+JoeDocs never writes over something in the vault that the index does not know: a file, a directory or a symlink (dangling or not; symlinks are never followed). A document whose new name is taken that way gets ` (JD-42)` appended; a file write, rename, move or restore onto it is refused with `already_exists` and changes nothing. A rename that changes only the case of a name (`Notes` to `notes`) renames in place only when both spellings are the same file, as on a case-insensitive file system (macOS); on a case-sensitive one (Linux), another file at the new spelling counts as taken.
+
 ### Multi-file documents
 
 A document created with `multifile: true` is a folder, `<project>/<type>/<Title>/`, holding its main file `<Title>/<Title>.md` (an Obsidian folder note, so `[[Title]]` still links to it) and any other files, such as `<Title>/backlog/item-1.md`, under the same ID. A folder named `INDEX` in any case gets ` (JD-42)` appended, since `INDEX.md` is the folder's file list.
