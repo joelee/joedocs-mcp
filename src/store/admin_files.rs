@@ -107,6 +107,12 @@ impl Store {
             parsed.body,
             Some(&old_path),
         )?;
+        // Its file history covers the revisions before it became multi-file.
+        let mut earlier = db::list_revisions(&tx, &row.id, 0, row.revision)?;
+        earlier.reverse();
+        for change in super::files::backfill_main(&earlier) {
+            db::insert_revision_file(&tx, &change)?;
+        }
         let touched = main_touch(&row, FileChange::Added);
         let commit = Change {
             row: &row,

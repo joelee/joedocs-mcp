@@ -1034,6 +1034,32 @@ fn get_archives_a_folder() {
 }
 
 #[test]
+fn get_archives_a_converted_document_at_an_earlier_revision() {
+    let root = TempDir::new().unwrap();
+    folder_store(root.path()).unwrap();
+    let run = |args: &[&str]| cmd(root.path()).args(args).assert();
+    run(&["document", "convert", "JD-1"]).success();
+    let archive = root.path().join("plan.tgz");
+    run(&[
+        "get",
+        "JD-1",
+        "--archive",
+        archive.to_str().unwrap(),
+        "--version",
+        "1",
+    ])
+    .success();
+    let names: Vec<String> = tar::Archive::new(flate2::read::GzDecoder::new(
+        std::fs::File::open(&archive).unwrap(),
+    ))
+    .entries()
+    .unwrap()
+    .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+    .collect();
+    assert_eq!(names, ["Plan.md"]);
+}
+
+#[test]
 fn backup_waits_for_a_writer_holding_the_lock() {
     let root = TempDir::new().unwrap();
     cmd(root.path()).arg("init").assert().success();

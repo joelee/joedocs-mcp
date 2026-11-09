@@ -441,23 +441,9 @@ fn replay_files(
     let commit = step.commit;
     let fail = |message: String| bad(&commit.id, message);
     doc.multifile = true;
-    // The folder: where a main file this commit adds is, else where the
-    // main file was.
-    let added_main = commit
-        .changes
-        .iter()
-        .filter(|(change, path)| *change != Change::Deleted && is_main_path(path))
-        .map(|(_, path)| path.as_str())
-        .find(|path| {
-            let name = path.rsplit_once('/').map_or(*path, |(_, name)| name);
-            files.iter().any(|(file, _)| file == name)
-        });
     let previous = doc.revisions.last().map(|r| r.path.clone());
-    let main_path = match (added_main, &previous) {
-        (Some(path), _) => path.to_owned(),
-        (None, Some(path)) if is_main_path(path) => path.clone(),
-        _ => return Err(fail(format!("no main file for {} in the commit", step.id))),
-    };
+    let main_path = main_path_after(commit, files, previous.as_deref())
+        .ok_or_else(|| fail(format!("no main file for {} in the commit", step.id)))?;
     let folder = main_path.rsplit_once('/').map_or("", |(folder, _)| folder);
     let folder_name = folder.rsplit_once('/').map_or(folder, |(_, name)| name);
     // The folder before this commit, when the document moved.
@@ -471,6 +457,8 @@ fn replay_files(
     // Converting a single-file document moves its file into the folder.
     if let Some(single) = previous.as_deref().filter(|path| !is_main_path(path)) {
         named.insert(single.to_owned());
+        doc.changes
+            .extend(super::files::backfill_main(&doc.revisions));
     }
     for (file, from) in files {
         let rel = file
@@ -544,6 +532,28 @@ fn replay_files(
         )));
     }
     Ok(main_path)
+}
+
+/// The main file's path after `commit`: where a main file it adds (and
+/// names in a trailer) is, else where the main file was before
+/// (`previous`), if that was a folder's main file.
+fn main_path_after(
+    commit: &Logged,
+    files: &[(String, Option<String>)],
+    previous: Option<&str>,
+) -> Option<String> {
+    let added = commit
+        .changes
+        .iter()
+        .filter(|(change, path)| *change != Change::Deleted && is_main_path(path))
+        .map(|(_, path)| path.as_str())
+        .find(|path| {
+            let name = path.rsplit_once('/').map_or(*path, |(_, name)| name);
+            files.iter().any(|(file, _)| file == name)
+        });
+    added
+        .or(previous.filter(|path| is_main_path(path)))
+        .map(str::to_owned)
 }
 
 /// Moves the live sub-files of a document whose folder moved from `old` to

@@ -145,6 +145,38 @@ pub(super) fn files_at(changes: &[RevisionFileRow], revision: u64) -> AtRevision
     at
 }
 
+/// The main-file changes of a document's revisions from before it became
+/// multi-file (`revisions`, oldest first), so that its file history covers
+/// them: `added` for `create` and `unarchive`, `removed` for `archive`,
+/// `renamed` when the file name changed, `modified` otherwise. Both
+/// `document convert` and a rebuild of the index record them, from the same
+/// revisions, so the two agree.
+pub(super) fn backfill_main(revisions: &[db::RevisionRow]) -> Vec<RevisionFileRow> {
+    let mut rows = Vec::with_capacity(revisions.len());
+    let mut previous: Option<String> = None;
+    for revision in revisions {
+        let stem = super::documents::stem_of(&revision.path).to_owned();
+        let (change, from) = match revision.action.as_str() {
+            "create" | "unarchive" => (FileChange::Added, None),
+            "archive" => (FileChange::Removed, None),
+            _ => match &previous {
+                Some(before) if *before != stem => (FileChange::Renamed, Some(before.clone())),
+                _ => (FileChange::Modified, None),
+            },
+        };
+        previous = (change != FileChange::Removed).then(|| stem.clone());
+        rows.push(RevisionFileRow {
+            document_id: revision.document_id.clone(),
+            revision: revision.revision,
+            path: stem,
+            main: true,
+            change,
+            from_path: from,
+        });
+    }
+    rows
+}
+
 /// The paths of `row`'s live sub-files at revision `wanted`, sorted.
 pub(super) fn live_paths_at(
     conn: &Connection,

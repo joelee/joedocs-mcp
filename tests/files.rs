@@ -1881,3 +1881,46 @@ fn folder_restore_and_unarchive_respect_the_file_limit() {
     store.unarchive(&actor(), "JD-1").unwrap();
     assert_eq!(store.list_files("JD-1", None).unwrap().len(), 3);
 }
+
+// --- JD-14: converted documents keep their main file in earlier revisions ----
+
+#[test]
+fn a_converted_document_shows_its_main_file_before_the_conversion() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap(&mut store).unwrap();
+    // JD-2 "Plan": 1 create, 2 append, 3 rename to "Plan B", 4 convert, 5 a file.
+    store
+        .append(&actor(), "JD-2", "more\n", None, None)
+        .unwrap();
+    store.rename(&actor(), "JD-2", "Plan B", None).unwrap();
+    store.convert(&actor(), "JD-2").unwrap();
+    let mut file = new_file("notes", "x\n", None);
+    file.document_id = "JD-2".into();
+    store.create_file(&actor(), &file).unwrap();
+
+    let at = |version: u64| -> Vec<(String, bool, u64)> {
+        store
+            .list_files("JD-2", Some(version))
+            .unwrap()
+            .into_iter()
+            .map(|f| (f.file, f.main, f.revision))
+            .collect()
+    };
+    assert_eq!(at(1), [("Plan".to_owned(), true, 1)]);
+    assert_eq!(at(2), [("Plan".to_owned(), true, 2)]);
+    assert_eq!(at(3), [("Plan B".to_owned(), true, 3)]);
+    assert_eq!(at(4), [("Plan B".to_owned(), true, 4)]);
+    let main: Vec<u64> = store
+        .history_file("JD-2", "Plan B", 1, 50)
+        .unwrap()
+        .revisions
+        .iter()
+        .map(|r| r.revision)
+        .collect();
+    assert_eq!(main, [4, 3, 2, 1]);
+    let diff = store.diff("JD-2", 1, None, 0).unwrap();
+    assert_eq!(diff.files, ["Plan B", "notes"]);
+    assert!(diff.diff.contains("+more"), "{}", diff.diff);
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
