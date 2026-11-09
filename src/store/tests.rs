@@ -1500,7 +1500,7 @@ fn a_failed_history_commit_leaves_no_partial_folder() {
         ..NewFile::default()
     };
     fx.store.create_file(&actor(), &request("a")).unwrap();
-    let files_before = vault_files(&fx.paths.home);
+    let files_before = vault_tree(&fx.paths.home);
     let a_before = read(&fx, "joedocs/plans/Roadmap/a.md");
     fx.fail.store(true, Ordering::SeqCst);
 
@@ -1533,11 +1533,7 @@ fn a_failed_history_commit_leaves_no_partial_folder() {
         summary: None,
     };
     assert!(fx.store.write_files(&actor(), &writes).is_err());
-    let mut files_after = vault_files(&fx.paths.home);
-    files_after.retain(|f| !f.ends_with("INDEX.md"));
-    let mut expected = files_before.clone();
-    expected.retain(|f| !f.ends_with("INDEX.md"));
-    assert_eq!(files_after, expected);
+    assert_eq!(vault_tree(&fx.paths.home), files_before);
     assert_eq!(read(&fx, "joedocs/plans/Roadmap/a.md"), a_before);
 
     fx.fail.store(false, Ordering::SeqCst);
@@ -1552,4 +1548,39 @@ fn a_failed_history_commit_leaves_no_partial_folder() {
     assert_eq!(listed, ["Roadmap", "a"]);
     assert_eq!(fx.store.write_files(&actor(), &writes).unwrap().revision, 3);
     assert_eq!(fx.store.check().unwrap().problems(), 0);
+}
+
+#[test]
+fn a_failed_multi_file_create_leaves_no_folder_and_a_retry_takes_its_name() {
+    let mut fx = fixture();
+    let tree_before = vault_tree(&fx.paths.home);
+    let mut doc = new_doc("Roadmap");
+    doc.multifile = true;
+    fx.fail.store(true, Ordering::SeqCst);
+    assert!(fx.store.create(&actor(), doc.clone()).is_err());
+    assert_eq!(vault_tree(&fx.paths.home), tree_before);
+    fx.fail.store(false, Ordering::SeqCst);
+    let created = fx.store.create(&actor(), doc).unwrap();
+    assert_eq!(created.path, "joedocs/plans/Roadmap/Roadmap.md");
+}
+
+/// Every file and directory under `dir`, vault-relative and sorted, with
+/// directories ending in `/`; generated INDEX.md files are left out.
+fn vault_tree(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            if entry.file_type().unwrap().is_dir() {
+                out.push(format!("{name}/"));
+                walk(&entry.path(), &format!("{name}/"), out);
+            } else if !name.ends_with("INDEX.md") {
+                out.push(name);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, "", &mut out);
+    out.sort();
+    out
 }
