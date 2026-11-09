@@ -655,6 +655,12 @@ fn rename_to(
     {
         return Err(Error::AlreadyExists(format!("file {path} in {}", row.id)));
     }
+    super::files::refuse_folder_case(
+        "new_file",
+        row,
+        &path.as_str(),
+        super::files::live_paths(live),
+    )?;
     let case_only = path.key() == file.path.to_lowercase();
     let vault = vault_path(row, &path.as_str());
     if case_only {
@@ -715,6 +721,7 @@ fn plan_writes(
         });
     }
     let mut seen = std::collections::HashSet::new();
+    let mut new_paths: Vec<String> = Vec::new();
     let mut planned = Vec::new();
     let mut new_files = 0_u64;
     for (index, entry) in request.files.iter().enumerate() {
@@ -744,7 +751,14 @@ fn plan_writes(
             })?;
             (existing.clone(), draft)
         } else {
+            let used = super::files::live_paths(live).chain(new_paths.iter().map(String::as_str));
+            if let Some((ours, theirs)) = crate::document::folder_case_clash(&path.as_str(), used) {
+                return Err(entry_error(super::files::folder_case_message(
+                    &ours, &theirs, &row.id,
+                )));
+            }
             super::vault::refuse_unknown(home, &vault_path(row, &path.as_str()))?;
+            new_paths.push(path.as_str());
             new_files += 1;
             let draft = FileDraft {
                 extra: Fields::new(),

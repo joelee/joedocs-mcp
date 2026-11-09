@@ -141,6 +141,49 @@ pub(super) fn clean_after_move(home: &Path, old_path: &str, new_path: Option<&st
     remove_empty_parent(&dir);
 }
 
+/// Checks the files a folder restore brings back (`wanted`) against the
+/// live files and the vault, before anything is written.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] for a folder spelled differently only in
+/// case, and [`Error::AlreadyExists`] for a file the index does not know
+/// where a file returns.
+fn check_returning(
+    home: &Path,
+    row: &DocumentRow,
+    live: &[FileRow],
+    wanted: &FilesThen,
+) -> Result<(), Error> {
+    // Every folder that comes back must be spelled as the live files
+    // and the other returning files spell it.
+    for (path, _) in wanted.values() {
+        let returning = wanted.values().map(|(other, _)| other.as_str());
+        super::files::refuse_folder_case(
+            "version",
+            row,
+            path,
+            super::files::live_paths(live).chain(returning),
+        )?;
+    }
+    // A file that comes back must not land on a file the index does not
+    // know: where no indexed file is, nothing may be there; where its
+    // name changes only in case, it must be the same file (a
+    // case-sensitive filesystem can hold both spellings).
+    for (key, (path, _)) in wanted {
+        match live.iter().find(|f| f.path.to_lowercase() == *key) {
+            None => super::vault::refuse_unknown(home, &vault_path(row, path))?,
+            Some(file) if file.path != *path => super::vault::refuse_occupied(
+                home,
+                &vault_path(row, &file.path),
+                &vault_path(row, path),
+            )?,
+            Some(_) => {}
+        }
+    }
+    Ok(())
+}
+
 /// Removes `dir` and every directory below it that is (or becomes) empty.
 fn remove_empty_tree(dir: &Path) {
     if let Ok(entries) = fs::read_dir(dir) {
@@ -474,21 +517,7 @@ impl Store {
             )));
         }
         check_file_limit(&row, wanted.len(), settings.max_files)?;
-        // A file that comes back must not land on a file the index does not
-        // know: where no indexed file is, nothing may be there; where its
-        // name changes only in case, it must be the same file (a
-        // case-sensitive filesystem can hold both spellings).
-        for (key, (path, _)) in &wanted {
-            match live.iter().find(|f| f.path.to_lowercase() == *key) {
-                None => super::vault::refuse_unknown(&paths.home, &vault_path(&row, path))?,
-                Some(file) if file.path != *path => super::vault::refuse_occupied(
-                    &paths.home,
-                    &vault_path(&row, &file.path),
-                    &vault_path(&row, path),
-                )?,
-                Some(_) => {}
-            }
-        }
+        check_returning(&paths.home, &row, &live, &wanted)?;
 
         let main_path = row.path.clone();
         row.status = status;

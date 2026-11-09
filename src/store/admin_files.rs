@@ -206,6 +206,12 @@ impl Store {
                 target.id
             )));
         }
+        super::files::refuse_folder_case(
+            "file",
+            &target,
+            &new_path.as_str(),
+            super::files::live_paths(&target_live),
+        )?;
         let new_vault = vault_path(&target, &new_path.as_str());
         super::vault::refuse_unknown(&paths.home, &new_vault)?;
         if target_live.len() as u64 >= settings.max_files {
@@ -391,6 +397,7 @@ fn plan_restore(
     }
     let live = db::live_files(conn, &row.id)?;
     verify_all(home, row, &live)?;
+    super::files::refuse_folder_case("file", row, &path_then, super::files::live_paths(&live))?;
     let draft = draft_then(history, row, &then, &path_then)?;
     let current = current_name(&changes, version, &path_then)
         .and_then(|name| {

@@ -233,6 +233,7 @@ fn check_new_file(
     if live.iter().any(|f| f.path.to_lowercase() == path.key()) {
         return Err(Error::AlreadyExists(format!("file {path} in {}", row.id)));
     }
+    refuse_folder_case("file", row, &path.as_str(), live_paths(&live))?;
     if live.len() as u64 >= max_files {
         return Err(Error::invalid(
             "documents.max_files",
@@ -525,6 +526,38 @@ impl Store {
         }
         Ok(files)
     }
+}
+
+/// Refuses `path` for a file of `row` when one of its folders differs only
+/// in case from a folder of `used` (the document's live files), which a
+/// case-insensitive file system would hold as one folder.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] for `field`, naming both spellings.
+pub(super) fn refuse_folder_case<'a>(
+    field: &'static str,
+    row: &DocumentRow,
+    path: &str,
+    used: impl IntoIterator<Item = &'a str>,
+) -> Result<(), Error> {
+    match crate::document::folder_case_clash(path, used) {
+        Some((ours, theirs)) => Err(Error::invalid(
+            field,
+            folder_case_message(&ours, &theirs, &row.id),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The message of a [`refuse_folder_case`] refusal.
+pub(super) fn folder_case_message(ours: &str, theirs: &str, id: &str) -> String {
+    format!("folder {ours} differs only in case from {theirs}, which {id} already uses")
+}
+
+/// The paths of `files`, for [`refuse_folder_case`].
+pub(super) fn live_paths(files: &[FileRow]) -> impl Iterator<Item = &str> {
+    files.iter().map(|f| f.path.as_str())
 }
 
 #[cfg(test)]

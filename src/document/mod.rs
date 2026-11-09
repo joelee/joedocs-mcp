@@ -8,7 +8,7 @@ pub mod front_matter;
 mod id;
 mod title;
 
-pub use file::{FilePath, INDEX_STEM, MAX_FILE_DEPTH};
+pub use file::{FilePath, INDEX_STEM, MAX_FILE_DEPTH, folder_case_clash};
 pub use front_matter::{FileHeader, FrontMatterError, Header};
 pub use id::{DocumentId, InvalidId, MAX_KEY_LEN, is_project_key};
 pub use title::{MAX_STEM_BYTES, MAX_TITLE_CHARS, check_title, file_stem};

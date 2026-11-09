@@ -110,6 +110,41 @@ impl FilePath {
     }
 }
 
+/// The first folder of `path` (a sub-file path without `.md`) whose name
+/// differs only in case from the same folder of one of `used`, as `(path's
+/// spelling, the used spelling)`, outermost first.
+///
+/// A case-insensitive file system has one folder for both spellings, so a
+/// file there would not be where the index says. Top-level files have no
+/// folder and never clash.
+///
+/// # Examples
+///
+/// ```
+/// use joedocs::document::folder_case_clash;
+///
+/// let clash = folder_case_clash("Backlog/b", ["backlog/a"]);
+/// assert_eq!(clash, Some(("Backlog".to_owned(), "backlog".to_owned())));
+/// assert_eq!(folder_case_clash("backlog/b", ["backlog/a"]), None);
+/// ```
+pub fn folder_case_clash<'a>(
+    path: &str,
+    used: impl IntoIterator<Item = &'a str>,
+) -> Option<(String, String)> {
+    fn folders(path: &str) -> Vec<&str> {
+        path.rsplit_once('/')
+            .map_or_else(Vec::new, |(dirs, _)| dirs.split('/').collect())
+    }
+    let ours = folders(path);
+    used.into_iter().find_map(|other| {
+        let theirs = folders(other);
+        (1..=ours.len().min(theirs.len())).find_map(|depth| {
+            let (a, b) = (ours[..depth].join("/"), theirs[..depth].join("/"));
+            (a != b && a.to_lowercase() == b.to_lowercase()).then_some((a, b))
+        })
+    })
+}
+
 impl std::fmt::Display for FilePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.as_str())
@@ -204,6 +239,26 @@ mod tests {
             assert!(err.contains(why), "{raw:?}: {err}");
         }
         assert!(FilePath::parse(&"a".repeat(MAX_STEM_BYTES), "Roadmap").is_ok());
+    }
+
+    #[test]
+    fn folders_differing_only_in_case_clash() {
+        let clash = |a: &str, b: &str| Some((a.to_owned(), b.to_owned()));
+        assert_eq!(
+            folder_case_clash("Backlog/b", ["backlog/a"]),
+            clash("Backlog", "backlog")
+        );
+        assert_eq!(folder_case_clash("a/B/x", ["a/b/c"]), clash("a/B", "a/b"));
+        assert_eq!(folder_case_clash("A/b/x", ["a/b/c"]), clash("A", "a"));
+        for fine in ["backlog/b", "Backlog2/b", "backlog/A", "top"] {
+            assert_eq!(
+                folder_case_clash(fine, ["backlog/a", "other"]),
+                None,
+                "{fine}"
+            );
+        }
+        // A top-level file is not a folder.
+        assert_eq!(folder_case_clash("Notes/x", ["notes"]), None);
     }
 
     #[test]

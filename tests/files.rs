@@ -2108,3 +2108,103 @@ fn case_only_renames_need_the_same_file() {
     }
     assert_rebuilds_identically(dir.path(), &mut store).unwrap();
 }
+
+/// A roadmap whose live `backlog/item-1` came after an archived
+/// `Backlog/old` (live at revision 2), and a `Backlog` document (JD-3)
+/// holding `Backlog/x`.
+fn folder_case_fixture(store: &mut Store) -> TestResult<()> {
+    roadmap(store)?;
+    store.create_file(&actor(), &new_file("Backlog/old", "old\n", None))?;
+    store.archive_file(&actor(), "JD-1", "Backlog/old", None, None)?;
+    store.create_file(&actor(), &new_file("backlog/item-1", "one\n", None))?;
+    backlog(store)?;
+    let mut x = new_file("Backlog/x", "x\n", None);
+    x.document_id = "JD-3".into();
+    store.create_file(&actor(), &x)?;
+    Ok(())
+}
+
+/// Asserts `result` is an `invalid_argument` refusal naming both folder
+/// spellings, and that the index and the vault are as they were.
+fn assert_folder_case_refused<T: std::fmt::Debug>(
+    root: &Path,
+    before: &(Vec<String>, Vec<String>),
+    spellings: [&str; 2],
+    result: Result<T, Error>,
+) -> TestResult<()> {
+    let err = result.err().ok_or("the change succeeded")?;
+    assert!(matches!(err, Error::Invalid { .. }), "{err}");
+    let [ours, theirs] = spellings;
+    let expected = format!("folder {ours} differs only in case from {theirs}, which JD-1");
+    assert!(err.to_string().contains(&expected), "{err}");
+    assert_eq!(&(snapshot(root)?, vault_tree(root)), before);
+    Ok(())
+}
+
+#[test]
+fn folders_of_one_document_never_differ_only_in_case() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let mut store = open(root).unwrap();
+    folder_case_fixture(&mut store).unwrap();
+    let before = (snapshot(root).unwrap(), vault_tree(root));
+    let both = ["Backlog", "backlog"];
+    let writes = |files| joedocs::store::WriteFiles {
+        document_id: "JD-1".into(),
+        files,
+        expected_revision: None,
+        summary: None,
+    };
+
+    let refused = |result| assert_folder_case_refused(root, &before, both, result);
+    refused(
+        store
+            .create_file(&actor(), &new_file("Backlog/b", "b\n", None))
+            .map(|_| ()),
+    )
+    .unwrap();
+    let new_one = writes(vec![write("Backlog/b", "b\n", json!({}))]);
+    refused(store.write_files(&actor(), &new_one).map(|_| ())).unwrap();
+    let renamed = store.rename_file(&actor(), "JD-1", "backlog/item-1", "Backlog/item-1", None);
+    refused(renamed.map(|_| ())).unwrap();
+    let moved = store.move_file(&actor(), "JD-3", "Backlog/x", "JD-1", None);
+    refused(moved.map(|_| ())).unwrap();
+    refused(
+        store
+            .restore_file(&actor(), "JD-1", "Backlog/old", 2)
+            .map(|_| ()),
+    )
+    .unwrap();
+    refused(
+        store
+            .restore_version(&actor(), "JD-1", 2, None, None)
+            .map(|_| ()),
+    )
+    .unwrap();
+    // Two new files of one request.
+    let pair = writes(vec![
+        write("x/a", "a\n", json!({})),
+        write("X/b", "b\n", json!({})),
+    ]);
+    assert_folder_case_refused(
+        root,
+        &before,
+        ["X", "x"],
+        store.write_files(&actor(), &pair),
+    )
+    .unwrap();
+
+    // Folders that match, or differ by more than case, are fine; so is a
+    // case-only change of the file's own name (JD-16's rules).
+    store
+        .create_file(&actor(), &new_file("backlog/b", "b\n", None))
+        .unwrap();
+    store
+        .create_file(&actor(), &new_file("Backlog2/b", "b\n", None))
+        .unwrap();
+    let renamed = store
+        .rename_file(&actor(), "JD-1", "backlog/item-1", "backlog/Item-1", None)
+        .unwrap();
+    assert_eq!(renamed.file.as_deref(), Some("backlog/Item-1"));
+    assert_rebuilds_identically(root, &mut store).unwrap();
+}
