@@ -233,15 +233,17 @@ impl GitCli {
     }
 
     fn stage_and_commit(&self, commit: &Commit) -> Result<(), HistoryError> {
-        // A path is staged if a file has exactly that name, and unstaged
-        // otherwise. Asking the file system instead would see a file that a
-        // case-only rename replaced ("Plan.md" after renaming it to
-        // "plan.md") on macOS, where names are case-insensitive.
+        // A path is staged if a file has exactly that name, folders
+        // included, and unstaged otherwise. Asking the file system instead
+        // would see a file that a case-only rename replaced ("Plan.md"
+        // after renaming it to "plan.md", or "Roadmap/notes.md" after the
+        // folder became "roadmap") on macOS, where names are
+        // case-insensitive.
         let (present, gone): (Vec<&str>, Vec<&str>) = commit
             .paths
             .iter()
             .map(String::as_str)
-            .partition(|path| exists_exactly(&self.work_tree.join(path)));
+            .partition(|path| exists_exactly(&self.work_tree, path));
         if !gone.is_empty() {
             let mut rm = vec!["rm", "--cached", "--quiet", "--ignore-unmatch", "--"];
             rm.extend(&gone);
@@ -281,15 +283,26 @@ impl GitCli {
 
 /// Whether a directory entry has exactly the name of `path`, compared
 /// case-sensitively whatever the file system does.
-fn exists_exactly(path: &Path) -> bool {
-    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
-        return false;
-    };
-    std::fs::read_dir(dir).is_ok_and(|entries| {
-        entries
-            .filter_map(Result::ok)
-            .any(|entry| entry.file_name() == name)
-    })
+/// Whether `path` (relative to `root`, `/`-separated) exists with exactly
+/// this spelling at every level: each name must be in its parent folder's
+/// listing. `root` itself is not compared. A folder that is a symlink is
+/// listed through, as before, so `git add` refuses the path loudly rather
+/// than the file silently leaving the history.
+fn exists_exactly(root: &Path, path: &str) -> bool {
+    let mut dir = root.to_path_buf();
+    for name in path.split('/') {
+        let listed = !name.is_empty()
+            && std::fs::read_dir(&dir).is_ok_and(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .any(|entry| entry.file_name() == name)
+            });
+        if !listed {
+            return false;
+        }
+        dir.push(name);
+    }
+    true
 }
 
 fn null_device() -> &'static Path {
@@ -580,11 +593,32 @@ mod tests {
     fn only_exact_names_count_as_present() {
         let repo = repo();
         fs::write(repo.home.join("plan.md"), "x").unwrap();
-        assert!(exists_exactly(&repo.home.join("plan.md")));
+        assert!(exists_exactly(&repo.home, "plan.md"));
         // True on a case-insensitive file system, for which this matters.
-        assert!(!exists_exactly(&repo.home.join("Plan.md")));
-        assert!(!exists_exactly(&repo.home.join("missing/plan.md")));
-        assert!(!exists_exactly(Path::new("/")));
+        assert!(!exists_exactly(&repo.home, "Plan.md"));
+        assert!(!exists_exactly(&repo.home, "missing/plan.md"));
+        assert!(!exists_exactly(&repo.home, ""));
+        // Every folder counts too: after `dir` became `Dir`, a
+        // case-insensitive file system still finds `dir/plan.md`.
+        fs::create_dir(repo.home.join("Dir")).unwrap();
+        fs::write(repo.home.join("Dir/plan.md"), "x").unwrap();
+        assert!(exists_exactly(&repo.home, "Dir/plan.md"));
+        assert!(!exists_exactly(&repo.home, "dir/plan.md"));
+        // A folder that is a symlink is listed through (`git add` then
+        // refuses the path, so the commit fails instead of dropping it).
+        std::os::unix::fs::symlink("Dir", repo.home.join("link")).unwrap();
+        assert!(exists_exactly(&repo.home, "link/plan.md"));
+        // The work tree's own spelling is not compared.
+        if repo.home.join("DIR").exists() {
+            let name = repo
+                .home
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_uppercase();
+            let other = repo.home.with_file_name(name);
+            assert!(exists_exactly(&other, "Dir/plan.md"));
+        }
     }
 
     #[test]
