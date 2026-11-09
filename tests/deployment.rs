@@ -128,7 +128,7 @@ async fn the_key_can_write_its_project() {
     let t = target().unwrap();
     let client = t.client().await.unwrap();
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 15);
+    assert_eq!(tools.len(), 19);
     let projects = ok(&client, "list_projects", json!({})).await.unwrap();
     let project = projects["projects"]
         .as_array()
