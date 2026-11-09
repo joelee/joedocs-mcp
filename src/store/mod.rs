@@ -18,12 +18,16 @@
 //! A failure before step 5 undoes the file writes and rolls the
 //! transaction back, so nothing changes.
 
+mod admin_files;
 mod admin_tokens;
 mod archive;
 mod backup;
 mod check;
 mod documents;
 mod editing;
+mod file_changes;
+mod files;
+mod folders;
 mod index_file;
 mod journal;
 mod registry;
@@ -31,12 +35,14 @@ mod reindex;
 mod revisions;
 mod search;
 mod summary;
+mod vault;
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub use admin_files::MovedFile;
 pub use admin_tokens::{
     AdminRefusal, CreatedAdminToken, LOCK_SECONDS, MAX_FAILED_LOGINS, OpenedSession,
 };
@@ -48,6 +54,9 @@ pub use documents::{
     RevisionInfo, Update,
 };
 pub use editing::{MAX_EDITS, Replacement};
+pub use file_changes::{FileWrite, WriteFiles, WrittenFile, WrittenFiles};
+pub use files::{FileInfo, NewFile};
+pub use folders::ArchivedFile;
 pub use registry::CreatedKey;
 pub use reindex::Reindexed;
 pub use revisions::{Diff, HistoryPage, MAX_DIFF_CONTEXT, MAX_HISTORY_LIMIT};
@@ -76,6 +85,16 @@ pub enum Error {
     /// No document has this ID.
     #[error("document {0} does not exist")]
     NotFound(String),
+    /// The document has no live file at this path (at that revision).
+    #[error("document {id} has no file {file}{at}")]
+    FileNotFound {
+        /// Document ID.
+        id: String,
+        /// The file, as asked for.
+        file: String,
+        /// `" at revision N"` when an earlier revision was asked for.
+        at: String,
+    },
     /// The document is archived.
     #[error("document {0} is archived")]
     Archived(String),
@@ -98,6 +117,23 @@ pub enum Error {
         /// Revision the client expected.
         expected: u64,
         /// Current revision.
+        current: u64,
+    },
+    /// A file of a multi-file document changed after the revision the
+    /// client read, or the client's revision is ahead of the document.
+    #[error(
+        "document {id}: file {file} changed at revision {file_revision}, and the document is at revision {current}, so revision {expected} is stale; read it again and reapply the change"
+    )]
+    FileConflict {
+        /// Document ID.
+        id: String,
+        /// The file.
+        file: String,
+        /// Revision the client expected.
+        expected: u64,
+        /// The document revision at which the file last changed.
+        file_revision: u64,
+        /// Current document revision.
         current: u64,
     },
     /// The file on disk is not the one the store last wrote.
@@ -195,6 +231,8 @@ impl Error {
             self,
             Self::Invalid { .. }
                 | Self::NotFound(_)
+                | Self::FileNotFound { .. }
+                | Self::FileConflict { .. }
                 | Self::Archived(_)
                 | Self::ProjectNotFound(_)
                 | Self::KeyNotFound(_)
@@ -280,6 +318,8 @@ pub struct Settings {
     pub max_document_bytes: u64,
     /// Whether each project folder gets a generated `INDEX.md`.
     pub index_file: bool,
+    /// Most live sub-files a multi-file document may hold.
+    pub max_files: u64,
 }
 
 impl Settings {
@@ -293,6 +333,7 @@ impl Settings {
             default_status: config.documents.default_status.clone(),
             max_document_bytes: config.server.max_document_bytes,
             index_file: config.documents.index_file,
+            max_files: u64::from(config.documents.max_files),
         }
     }
 }

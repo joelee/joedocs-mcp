@@ -36,6 +36,7 @@ These change the store or what clients can do. Explain what you intend and why, 
 
 - `joedocs reindex` (rebuilds the index from the history; safe, but takes the write lock).
 - `joedocs archive restore DOCUMENT_ID`.
+- `joedocs document convert`, `document move-file` and `document restore-file` (multi-file documents).
 - `joedocs project add`, `joedocs key create`, `key grant`, `key rotate` and `key revoke`. A rotated or revoked key stops working at once, on every machine that uses it.
 - `joedocs backup --restore`, which needs empty target directories and a stopped service.
 - `joedocs admin-token create`, `list` and `revoke`, and turning the remote admin API on or off.

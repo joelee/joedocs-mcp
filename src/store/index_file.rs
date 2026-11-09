@@ -1,5 +1,6 @@
 //! `INDEX.md`: a generated table of a project's live documents, written in
-//! the project folder so a person can find and open a document by its ID.
+//! the project folder so a person can find and open a document by its ID,
+//! and one in each multi-file document's folder listing its files.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -11,12 +12,13 @@ use crate::db::{self, Connection, DocumentRow, ProjectRow};
 /// The file name, in each project folder.
 pub(crate) const FILE_NAME: &str = "INDEX.md";
 
-/// The rule in the history's `info/exclude` that keeps every project's
-/// `INDEX.md` out of `git status` (it is never staged either way).
-const EXCLUDE_RULE: &str = "/*/INDEX.md";
+/// The rules in the history's `info/exclude` that keep every project's
+/// `INDEX.md`, and every multi-file document folder's, out of `git status`
+/// (they are never staged either way).
+const EXCLUDE_RULES: [&str; 2] = ["/*/INDEX.md", "/*/*/*/INDEX.md"];
 
-/// Adds [`EXCLUDE_RULE`] to `<git_dir>/info/exclude` unless it is there,
-/// keeping the file's other lines.
+/// Adds the [`EXCLUDE_RULES`] to `<git_dir>/info/exclude` unless they are
+/// there, keeping the file's other lines.
 ///
 /// # Errors
 ///
@@ -29,15 +31,21 @@ pub(super) fn exclude_from_history(git_dir: &Path) -> Result<(), Error> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(Error::io("read", &path)(error)),
     };
-    if current.lines().any(|line| line.trim() == EXCLUDE_RULE) {
+    let missing: Vec<&str> = EXCLUDE_RULES
+        .into_iter()
+        .filter(|rule| !current.lines().any(|line| line.trim() == *rule))
+        .collect();
+    if missing.is_empty() {
         return Ok(());
     }
     let mut text = current;
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
-    text.push_str(EXCLUDE_RULE);
-    text.push('\n');
+    for rule in missing {
+        text.push_str(rule);
+        text.push('\n');
+    }
     fs::create_dir_all(&dir).map_err(Error::io("create", &dir))?;
     fs::write(&path, text).map_err(Error::io("write", &path))
 }
@@ -55,6 +63,14 @@ pub(super) fn refresh_all(conn: &Connection, home: &Path, settings: &Settings) {
             }
         }
         Err(error) => tracing::warn!(%error, "could not list projects to write {FILE_NAME}"),
+    }
+    match db::live_documents(conn) {
+        Ok(rows) => {
+            for row in rows.iter().filter(|row| row.multifile) {
+                refresh_folder(conn, home, settings, row);
+            }
+        }
+        Err(error) => tracing::warn!(%error, "could not list documents to write {FILE_NAME}"),
     }
 }
 
@@ -80,7 +96,80 @@ pub(super) fn stale(
             stale.push(path);
         }
     }
+    for row in db::live_documents(conn)?.iter().filter(|row| row.multifile) {
+        let text = folder_expected(conn, row)?;
+        let path = folder_index_path(row);
+        if fs::read_to_string(home.join(&path)).ok().as_deref() != Some(text.as_str()) {
+            stale.push(path);
+        }
+    }
     Ok(stale)
+}
+
+/// The vault path of a multi-file document's folder `INDEX.md`.
+pub(super) fn folder_index_path(row: &DocumentRow) -> String {
+    format!("{}/{FILE_NAME}", super::files::folder(row))
+}
+
+/// Rewrites the project `INDEX.md` of `row`, and its folder `INDEX.md` if it
+/// is a multi-file document (see [`refresh`]).
+pub(super) fn refresh_document(
+    conn: &Connection,
+    home: &Path,
+    settings: &Settings,
+    row: &DocumentRow,
+) {
+    refresh(conn, home, settings, &row.project);
+    if row.multifile {
+        refresh_folder(conn, home, settings, row);
+    }
+}
+
+/// Rewrites a multi-file document's folder `INDEX.md` when
+/// `settings.index_file` is on; failures are logged, as in [`refresh`].
+fn refresh_folder(conn: &Connection, home: &Path, settings: &Settings, row: &DocumentRow) {
+    if !settings.index_file {
+        return;
+    }
+    let path = folder_index_path(row);
+    let written = folder_expected(conn, row)
+        .and_then(|text| write_text(&home.join(super::files::folder(row)), &text));
+    if let Err(error) = written {
+        tracing::warn!(document = %row.id, %error, "could not write {path}");
+    }
+}
+
+/// The text a multi-file document's folder `INDEX.md` should hold: its ID
+/// and title, its revision, and a table of its live files with an Obsidian
+/// link to each, the revision at which it last changed and when.
+///
+/// # Errors
+///
+/// Returns database errors.
+pub(super) fn folder_expected(conn: &Connection, row: &DocumentRow) -> Result<String, Error> {
+    let folder = super::files::main_stem(row);
+    let date = |time: &str| time.get(..10).unwrap_or(time).to_owned();
+    let main_time = db::get_revision(conn, &row.id, row.main_revision)?
+        .map(|r| r.created_at)
+        .unwrap_or_default();
+    let mut out = format!(
+        "# {} {}\n\n{NOTICE}\n\nRevision: {}\n\n| File | Revision | Updated |\n| --- | --- | --- |\n",
+        escape(&row.id),
+        escape(&row.title),
+        row.revision
+    );
+    let mut line = |path: &str, revision: u64, updated: &str| {
+        let _ = writeln!(
+            out,
+            "| [[{folder}/{path}\\|{path}]] | {revision} | {} |",
+            date(updated)
+        );
+    };
+    line(folder, row.main_revision, &main_time);
+    for file in db::live_files(conn, &row.id)? {
+        line(&file.path, file.revision, &file.updated_at);
+    }
+    Ok(out)
 }
 
 impl Store {
@@ -117,10 +206,14 @@ pub(super) fn refresh(conn: &Connection, home: &Path, settings: &Settings, proje
 pub(super) fn expected(conn: &Connection, project: &str) -> Result<String, Error> {
     let row = db::find_project(conn, project)?
         .ok_or_else(|| Error::ProjectNotFound(project.to_owned()))?;
-    let entries: Vec<Entry> = db::live_documents_in(conn, row.id)?
-        .iter()
-        .map(|doc| Entry::from_row(&row, doc))
-        .collect();
+    let mut entries = Vec::new();
+    for doc in db::live_documents_in(conn, row.id)? {
+        let mut entry = Entry::from_row(&row, &doc);
+        if doc.multifile {
+            entry.files = Some(db::count_live_files(conn, &doc.id)?);
+        }
+        entries.push(entry);
+    }
     Ok(render(&row, &entries))
 }
 
@@ -128,12 +221,17 @@ pub(super) fn expected(conn: &Connection, project: &str) -> Result<String, Error
 /// through a temporary file renamed into place.
 fn write(conn: &Connection, home: &Path, project: &str) -> Result<(), Error> {
     let text = expected(conn, project)?;
-    let dir = home.join(project);
+    write_text(&home.join(project), &text)
+}
+
+/// Writes `text` to `dir/INDEX.md` unless it already holds it, through a
+/// temporary file renamed into place.
+fn write_text(dir: &Path, text: &str) -> Result<(), Error> {
     let path = dir.join(FILE_NAME);
     if fs::read_to_string(&path).is_ok_and(|current| current == text) {
         return Ok(());
     }
-    fs::create_dir_all(&dir).map_err(Error::io("create", &dir))?;
+    fs::create_dir_all(dir).map_err(Error::io("create", dir))?;
     // A dot name, so `check` and Obsidian skip it if a crash leaves it.
     let temp = dir.join(format!(".{FILE_NAME}.tmp"));
     fs::write(&temp, text).map_err(Error::io("write", &temp))?;
@@ -161,6 +259,8 @@ pub(super) struct Entry {
     pub(super) path: String,
     /// Date of the latest revision, `YYYY-MM-DD`.
     pub(super) updated: String,
+    /// For a multi-file document, how many sub-files it has.
+    pub(super) files: Option<u64>,
 }
 
 impl Entry {
@@ -180,6 +280,7 @@ impl Entry {
                 .get(..10)
                 .unwrap_or(&row.updated_at)
                 .to_owned(),
+            files: None,
         }
     }
 }
@@ -205,9 +306,14 @@ pub(super) fn render(project: &ProjectRow, entries: &[Entry]) -> String {
     sorted.sort_by_key(|entry| entry.seq);
     out.push_str("| ID | Title | Type | Status | Updated |\n| --- | --- | --- | --- | --- |\n");
     for entry in sorted {
+        let files = match entry.files {
+            Some(1) => " (+1 file)".to_owned(),
+            Some(n) => format!(" (+{n} files)"),
+            None => String::new(),
+        };
         let _ = writeln!(
             out,
-            "| {} | [{}]({}) | {} | {} | {} |",
+            "| {} | [{}]({}){files} | {} | {} | {} |",
             escape(&entry.id),
             escape(&entry.title),
             percent_encode(&entry.path),
@@ -270,6 +376,7 @@ mod tests {
             status: "draft".into(),
             path: path.into(),
             updated: "2026-11-07".into(),
+            files: None,
         }
     }
 
@@ -370,6 +477,8 @@ mod tests {
             archived_at: None,
             archived_by: None,
             archive_reason: None,
+            multifile: false,
+            main_revision: 3,
         };
         let entry = Entry::from_row(&project("JoeDocs"), &row);
         assert_eq!(
@@ -382,6 +491,7 @@ mod tests {
                 status: "review".into(),
                 path: "reviews/Review.md".into(),
                 updated: "2026-11-07".into(),
+                files: None,
             }
         );
     }

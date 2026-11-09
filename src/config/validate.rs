@@ -71,6 +71,12 @@ impl Config {
                 "must be from 1 to 168 (a week)",
             ));
         }
+        if self.documents.max_files == 0 {
+            return Err(Violation::new(
+                "documents.max_files",
+                "must be greater than 0",
+            ));
+        }
         if self.server.max_document_bytes == 0 {
             return Err(Violation::new(
                 "server.max_document_bytes",
@@ -162,7 +168,9 @@ fn member(
 }
 
 /// `https://host[:port][/]`, or `http://` to a loopback host.
-fn is_server_url(url: &str) -> bool {
+/// Whether `url` is a usable `client.server`: `https://host[:port]`, or
+/// `http://` to `localhost`, `127.0.0.1` or `[::1]`, with no path.
+pub(crate) fn is_server_url(url: &str) -> bool {
     let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
         (true, rest)
     } else if let Some(rest) = url.strip_prefix("http://") {
@@ -280,6 +288,15 @@ mod tests {
         }
         let mut config = Config::default();
         config.admin.session_hours = 168;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn max_files_must_be_positive() {
+        let v = violation(|c| c.documents.max_files = 0);
+        assert_eq!(v.key, "documents.max_files");
+        let mut config = Config::default();
+        config.documents.max_files = 1;
         assert!(config.validate().is_ok());
     }
 

@@ -84,6 +84,9 @@ impl From<store::Error> for ToolError {
         match error {
             E::Invalid { field, .. } => Self::new("invalid_argument", message).with("field", field),
             E::NotFound(id) => Self::new("not_found", message).with("document_id", id),
+            E::FileNotFound { id, file, .. } => Self::new("not_found", message)
+                .with("document_id", id)
+                .with("file", file),
             E::ProjectNotFound(project) => Self::new("not_found", message).with("project", project),
             E::KeyNotFound(_) => Self::new("not_found", message),
             E::Archived(id) => Self::new(
@@ -94,6 +97,17 @@ impl From<store::Error> for ToolError {
             E::AlreadyExists(_) => Self::new("already_exists", message),
             E::Conflict { id, current, .. } => Self::new("conflict", message)
                 .with("document_id", id)
+                .with("current_revision", current),
+            E::FileConflict {
+                id,
+                file,
+                file_revision,
+                current,
+                ..
+            } => Self::new("conflict", message)
+                .with("document_id", id)
+                .with("file", file)
+                .with("file_revision", file_revision)
                 .with("current_revision", current),
             E::Integrity { id, .. } => Self::new(
                 "integrity",
@@ -139,6 +153,14 @@ mod tests {
         let cases = [
             (store::Error::invalid("title", "x"), "invalid_argument"),
             (store::Error::NotFound("JD-1".into()), "not_found"),
+            (
+                store::Error::FileNotFound {
+                    id: "JD-1".into(),
+                    file: "notes".into(),
+                    at: String::new(),
+                },
+                "not_found",
+            ),
             (store::Error::ProjectNotFound("p".into()), "not_found"),
             (store::Error::KeyNotFound("k".into()), "not_found"),
             (store::Error::Archived("JD-1".into()), "archived"),

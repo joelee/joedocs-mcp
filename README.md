@@ -10,7 +10,7 @@
 
 **One home for every project's plans, ideas, issues, reviews and specs, shared by all your coding agents, on every machine.**
 
-JoeDocs is a small, self-hosted [MCP](https://modelcontextprotocol.io) server. Claude Code (or any MCP client) on your laptop, desktop and servers reads and writes the same documents through it. Every document is a plain Markdown file with YAML front matter, so you can open the whole collection as an [Obsidian](https://obsidian.md) vault. Every change is a git commit, so nothing is ever lost.
+JoeDocs is a self-hosted [MCP](https://modelcontextprotocol.io) server. Claude Code (or any MCP client) on your laptop, desktop and servers reads and writes the same documents through it. Every document is a plain Markdown file with YAML front matter, so you can open the whole collection as an [Obsidian](https://obsidian.md) vault. Every change is a git commit, so nothing is ever lost.
 
 ```text
 You:    Plan the rate-limit work from the idea we captured yesterday.
@@ -58,6 +58,7 @@ One server holds the documents. Each agent connects with its own API key, scoped
 - **Safe concurrent editing.** Updates carry the revision they were based on, so an agent on one machine never silently overwrites an agent on another. Small changes use exact search-and-replace edits instead of resending the whole document.
 - **Search.** Full-text search with phrases, exclusions, prefixes and `OR`, ranked with titles first, plus filters on any front matter key (`{"tags": {"contains": "security"}, "status": "approved"}`), in one project or across all of them.
 - **Scoped API keys.** Each key gets `read` or `write` access to specific projects. Tokens are shown once and stored hashed, and can be rotated or revoked at once.
+- **Multi-file documents.** A document can be a folder of files under one ID, such as a roadmap and its backlog items, each with its own front matter, searched and filtered on its own, and changed by different agents without conflicts between files.
 - **Obsidian-friendly.** Titles are file names, so `[[wiki links]]` work; renamed documents keep their old titles as `aliases`; Mermaid and PlantUML blocks are stored as written.
 - **Easy to run.** One binary with SQLite built in. It runs as a systemd service on Linux, under `brew services` on macOS, or in Docker. Reach it from anywhere over Tailscale or behind your own TLS proxy.
 

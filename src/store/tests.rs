@@ -1486,3 +1486,140 @@ impl std::io::Write for Sink {
         Ok(())
     }
 }
+
+#[test]
+fn a_failed_history_commit_leaves_no_partial_folder() {
+    let mut fx = fixture();
+    let mut doc = new_doc("Roadmap");
+    doc.multifile = true;
+    fx.store.create(&actor(), doc).unwrap();
+    let request = |file: &str| NewFile {
+        document_id: "JD-1".into(),
+        file: file.into(),
+        content: "x\n".into(),
+        ..NewFile::default()
+    };
+    fx.store.create_file(&actor(), &request("a")).unwrap();
+    let files_before = vault_tree(&fx.paths.home);
+    let a_before = read(&fx, "joedocs/plans/Roadmap/a.md");
+    fx.fail.store(true, Ordering::SeqCst);
+
+    assert!(fx.store.create_file(&actor(), &request("new/b")).is_err());
+    assert!(
+        fx.store
+            .append_file(&actor(), "JD-1", "a", "more\n", None, None)
+            .is_err()
+    );
+    assert!(
+        fx.store
+            .rename_file(&actor(), "JD-1", "a", "moved/a", None)
+            .is_err()
+    );
+    let writes = WriteFiles {
+        document_id: "JD-1".into(),
+        files: vec![
+            FileWrite {
+                file: "a".into(),
+                content: "y\n".into(),
+                front_matter: Fields::new(),
+            },
+            FileWrite {
+                file: "c/d".into(),
+                content: "z\n".into(),
+                front_matter: fields(json!({"k": 1})),
+            },
+        ],
+        expected_revision: None,
+        summary: None,
+    };
+    assert!(fx.store.write_files(&actor(), &writes).is_err());
+    assert_eq!(vault_tree(&fx.paths.home), files_before);
+    assert_eq!(read(&fx, "joedocs/plans/Roadmap/a.md"), a_before);
+
+    fx.fail.store(false, Ordering::SeqCst);
+    assert_eq!(fx.store.get("JD-1", None).unwrap().document.revision, 2);
+    let listed: Vec<String> = fx
+        .store
+        .list_files("JD-1", None)
+        .unwrap()
+        .into_iter()
+        .map(|f| f.file)
+        .collect();
+    assert_eq!(listed, ["Roadmap", "a"]);
+    assert_eq!(fx.store.write_files(&actor(), &writes).unwrap().revision, 3);
+    assert_eq!(fx.store.check().unwrap().problems(), 0);
+}
+
+#[test]
+fn a_failed_multi_file_create_leaves_no_folder_and_a_retry_takes_its_name() {
+    let mut fx = fixture();
+    let tree_before = vault_tree(&fx.paths.home);
+    let mut doc = new_doc("Roadmap");
+    doc.multifile = true;
+    fx.fail.store(true, Ordering::SeqCst);
+    assert!(fx.store.create(&actor(), doc.clone()).is_err());
+    assert_eq!(vault_tree(&fx.paths.home), tree_before);
+    fx.fail.store(false, Ordering::SeqCst);
+    let created = fx.store.create(&actor(), doc).unwrap();
+    assert_eq!(created.path, "joedocs/plans/Roadmap/Roadmap.md");
+}
+
+/// Every file and directory under `dir`, vault-relative and sorted, with
+/// directories ending in `/`; generated INDEX.md files are left out.
+fn vault_tree(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            if entry.file_type().unwrap().is_dir() {
+                out.push(format!("{name}/"));
+                walk(&entry.path(), &format!("{name}/"), out);
+            } else if !name.ends_with("INDEX.md") {
+                out.push(name);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, "", &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn a_failed_folder_restore_leaves_the_tree_as_it_was() {
+    let mut fx = fixture();
+    let mut doc = new_doc("Roadmap");
+    doc.multifile = true;
+    fx.store.create(&actor(), doc).unwrap();
+    for file in ["a", "deep/b"] {
+        let request = NewFile {
+            document_id: "JD-1".into(),
+            file: file.into(),
+            content: "x\n".into(),
+            ..NewFile::default()
+        };
+        fx.store.create_file(&actor(), &request).unwrap();
+    }
+    fx.store
+        .archive_file(&actor(), "JD-1", "deep/b", None, None)
+        .unwrap();
+    fx.store
+        .archive_file(&actor(), "JD-1", "a", None, None)
+        .unwrap();
+    let tree = vault_tree(&fx.paths.home);
+    fx.fail.store(true, Ordering::SeqCst);
+    assert!(
+        fx.store
+            .restore_version(&actor(), "JD-1", 3, None, None)
+            .is_err()
+    );
+    assert_eq!(vault_tree(&fx.paths.home), tree);
+    fx.fail.store(false, Ordering::SeqCst);
+    assert_eq!(
+        fx.store
+            .restore_version(&actor(), "JD-1", 3, None, None)
+            .unwrap()
+            .revision,
+        6
+    );
+}

@@ -742,6 +742,324 @@ fn backup_writes_a_private_consistent_archive() {
 }
 
 #[test]
+fn a_backup_restores_multi_file_documents_intact() {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let mut store = library_store(root.path()).unwrap();
+    let actor = Actor::new("laptop", "test");
+    store
+        .create(
+            &actor,
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Roadmap".into(),
+                content: "x\n".into(),
+                multifile: true,
+                ..NewDocument::default()
+            },
+        )
+        .unwrap();
+    for file in ["backlog/item-1", "notes"] {
+        store
+            .create_file(
+                &actor,
+                &NewFile {
+                    document_id: "JD-1".into(),
+                    file: file.into(),
+                    content: format!("{file}\n"),
+                    ..NewFile::default()
+                },
+            )
+            .unwrap();
+    }
+    let files = store.list_files("JD-1", None).unwrap();
+    drop(store);
+    let backup = root.path().join("b.tgz");
+    cmd(root.path())
+        .args(["backup", backup.to_str().unwrap()])
+        .assert()
+        .success();
+    let (names, manifest) = archive_entries(&backup).unwrap();
+    assert!(
+        names
+            .iter()
+            .any(|n| n == "content/joedocs/home/Roadmap/backlog/item-1.md"),
+        "{names:?}"
+    );
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(manifest["format"], 1);
+
+    let home = root.path().join("restored/vault");
+    let state = root.path().join("restored/state");
+    cmd_at(root.path(), &home, &state)
+        .args(["backup", "--restore", backup.to_str().unwrap()])
+        .assert()
+        .success();
+    cmd_at(root.path(), &home, &state)
+        .arg("check")
+        .assert()
+        .success();
+    let paths = joedocs::store::Paths {
+        home: home.clone(),
+        state_dir: state.clone(),
+    };
+    let git = joedocs::history::GitCli::new(paths.git_dir(), &paths.home);
+    let restored = joedocs::store::Store::open(
+        paths,
+        joedocs::store::Settings::from_config(&joedocs::Config::default()),
+        Box::new(git),
+        std::sync::Arc::new(joedocs::clock::SystemClock),
+    )
+    .unwrap();
+    assert_eq!(restored.list_files("JD-1", None).unwrap(), files);
+}
+
+#[test]
+fn document_commands_convert_move_and_restore_files() {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    cmd(root.path())
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let mut store = library_store(root.path()).unwrap();
+    let actor = Actor::new("laptop", "test");
+    for (title, multifile) in [("Plan", false), ("Roadmap", true), ("Backlog", true)] {
+        store
+            .create(
+                &actor,
+                NewDocument {
+                    project: "joedocs".into(),
+                    title: title.into(),
+                    content: "x\n".into(),
+                    multifile,
+                    ..NewDocument::default()
+                },
+            )
+            .unwrap();
+    }
+    store
+        .create_file(
+            &actor,
+            &NewFile {
+                document_id: "JD-2".into(),
+                file: "a".into(),
+                content: "a\n".into(),
+                ..NewFile::default()
+            },
+        )
+        .unwrap();
+    drop(store);
+
+    let run = |args: &[&str]| cmd(root.path()).args(args).assert();
+    run(&["document", "convert", "JD-1"]).success().stdout(
+        "Converted JD-1 to a multi-file document at revision 2: joedocs/home/Plan/Plan.md\n",
+    );
+    run(&["document", "convert", "JD-1"])
+        .code(65)
+        .stderr(predicate::str::contains("already a multi-file document"));
+    run(&["document", "move-file", "JD-2", "a", "--to", "JD-3", "--as", "b"])
+        .success()
+        .stdout(
+            "Moved a from JD-2 (now revision 3) to JD-3 (now revision 2) as b: joedocs/home/Backlog/b.md\n",
+        );
+    run(&["document", "restore-file", "JD-2", "a", "--version", "2"])
+        .success()
+        .stdout(
+            "Restored a of JD-2 as it was at revision 2, now revision 4: joedocs/home/Roadmap/a.md\n",
+        );
+    run(&["document", "restore-file", "JD-2", "zz", "--version", "2"])
+        .code(65)
+        .stderr(predicate::str::contains("has no file zz at revision 2"));
+    run(&["document", "move-file", "JD-2", "a", "--to", "JD-2"])
+        .code(65)
+        .stderr(predicate::str::contains("same document"));
+    run(&["check"]).success();
+    run(&["reindex"]).success();
+    run(&["check"]).success();
+}
+
+/// A store with JD-1, a single-file "Plan", and JD-2, a multi-file
+/// "Roadmap" with the files `backlog/item one` (revision 2) and `notes` (3).
+fn folder_store(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    cmd(root).arg("init").assert().success();
+    cmd(root)
+        .args(["project", "add", "joedocs", "--key", "JD"])
+        .assert()
+        .success();
+    let mut store = library_store(root)?;
+    let actor = Actor::new("laptop", "test");
+    for (title, multifile) in [("Plan", false), ("Roadmap", true)] {
+        store.create(
+            &actor,
+            NewDocument {
+                project: "joedocs".into(),
+                title: title.into(),
+                content: "main\n".into(),
+                multifile,
+                ..NewDocument::default()
+            },
+        )?;
+    }
+    for file in ["backlog/item one", "notes"] {
+        store.create_file(
+            &actor,
+            &NewFile {
+                document_id: "JD-2".into(),
+                file: file.into(),
+                content: format!("{file}\n"),
+                ..NewFile::default()
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn get_prints_a_folder_and_its_parts() {
+    let root = TempDir::new().unwrap();
+    folder_store(root.path()).unwrap();
+    let run = |args: &[&str]| cmd(root.path()).args(args).assert();
+
+    let listed = run(&["get", "JD-2"]).success();
+    let text = String::from_utf8(listed.get_output().stdout.clone()).unwrap();
+    let (main, list) = text.split_once("\n--- Other files of JD-2 ---\n").unwrap();
+    assert!(
+        main.starts_with("---\nid: JD-2\n") && main.ends_with("---\nmain\n"),
+        "{main}"
+    );
+    let lines: Vec<&str> = list.lines().collect();
+    assert!(
+        lines[0].starts_with("FILE") && lines[0].contains("REVISION"),
+        "{list}"
+    );
+    assert!(lines[1].starts_with("backlog/item one  2 "), "{list}");
+    assert!(lines[2].starts_with("notes"), "{list}");
+    run(&["get", "JD-2", "--content-only"])
+        .success()
+        .stdout("main\n");
+    run(&["get", "JD-2", "--version", "2"])
+        .success()
+        .stdout(predicate::str::contains("backlog/item one"))
+        .stdout(predicate::str::contains("notes").not());
+    run(&[
+        "get",
+        "JD-2",
+        "--part",
+        "backlog/item one",
+        "--content-only",
+    ])
+    .success()
+    .stdout("backlog/item one\n");
+    run(&["get", "JD-2", "--part", "notes.md", "--front-matter-only"])
+        .success()
+        .stdout(predicate::str::starts_with("document: JD-2\nrevision: 3\n"));
+    run(&["get", "JD-2", "--part", "notes", "--version", "2"])
+        .code(65)
+        .stderr(predicate::str::contains("has no file notes at revision 2"));
+    let out = root.path().join("notes.md");
+    run(&[
+        "get",
+        "JD-2",
+        "--part",
+        "notes",
+        "-f",
+        out.to_str().unwrap(),
+    ])
+    .success()
+    .stdout("");
+    assert!(
+        std::fs::read_to_string(&out)
+            .unwrap()
+            .ends_with("---\nnotes\n")
+    );
+
+    run(&["get", "JD-2", "--archive", "x.tgz", "--part", "notes"]).code(2);
+    run(&["get", "JD-1", "--part", "notes"])
+        .code(65)
+        .stderr(predicate::str::contains("single-file document"));
+    run(&["get", "JD-1", "--archive", "x.tgz"])
+        .code(65)
+        .stderr(predicate::str::contains("single-file document"));
+    // A single-file document prints as before, with no list.
+    run(&["get", "JD-1"])
+        .success()
+        .stdout(predicate::str::ends_with("---\nmain\n"));
+}
+
+#[test]
+fn get_archives_a_folder() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = TempDir::new().unwrap();
+    folder_store(root.path()).unwrap();
+    let run = |args: &[&str]| cmd(root.path()).args(args).assert();
+    let archive = root.path().join("roadmap.tgz");
+    run(&["get", "JD-2", "--archive", archive.to_str().unwrap()])
+        .success()
+        .stdout("");
+    let mode = std::fs::metadata(&archive).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let mut names: Vec<String> = tar::Archive::new(flate2::read::GzDecoder::new(
+        std::fs::File::open(&archive).unwrap(),
+    ))
+    .entries()
+    .unwrap()
+    .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+    .collect();
+    names.sort();
+    assert_eq!(names, ["Roadmap.md", "backlog/item one.md", "notes.md"]);
+    run(&[
+        "get",
+        "JD-2",
+        "--archive",
+        archive.to_str().unwrap(),
+        "--version",
+        "1",
+    ])
+    .success();
+    let at_one = tar::Archive::new(flate2::read::GzDecoder::new(
+        std::fs::File::open(&archive).unwrap(),
+    ))
+    .entries()
+    .unwrap()
+    .count();
+    assert_eq!(at_one, 1);
+}
+
+#[test]
+fn get_archives_a_converted_document_at_an_earlier_revision() {
+    let root = TempDir::new().unwrap();
+    folder_store(root.path()).unwrap();
+    let run = |args: &[&str]| cmd(root.path()).args(args).assert();
+    run(&["document", "convert", "JD-1"]).success();
+    let archive = root.path().join("plan.tgz");
+    run(&[
+        "get",
+        "JD-1",
+        "--archive",
+        archive.to_str().unwrap(),
+        "--version",
+        "1",
+    ])
+    .success();
+    let names: Vec<String> = tar::Archive::new(flate2::read::GzDecoder::new(
+        std::fs::File::open(&archive).unwrap(),
+    ))
+    .entries()
+    .unwrap()
+    .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+    .collect();
+    assert_eq!(names, ["Plan.md"]);
+}
+
+#[test]
 fn backup_waits_for_a_writer_holding_the_lock() {
     let root = TempDir::new().unwrap();
     cmd(root.path()).arg("init").assert().success();
@@ -759,6 +1077,65 @@ fn backup_waits_for_a_writer_holding_the_lock() {
     lock.unlock().unwrap();
     running.join().unwrap();
     assert!(file.exists());
+}
+
+#[test]
+fn file_writes_and_folder_operations_wait_for_a_writer_holding_the_lock() {
+    use joedocs::store::Actor;
+    let root = TempDir::new().unwrap();
+    folder_store(root.path()).unwrap();
+    let mut store = library_store(root.path()).unwrap();
+    store
+        .append_file(
+            &Actor::new("laptop", "test"),
+            "JD-2",
+            "notes",
+            "later\n",
+            None,
+            None,
+        )
+        .unwrap();
+    drop(store);
+    let notes = root.path().join("vault/joedocs/home/Roadmap/notes.md");
+    let single = root.path().join("vault/joedocs/home/Plan.md");
+    let notes_before = std::fs::read_to_string(&notes).unwrap();
+    assert!(notes_before.ends_with("later\n"));
+
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .open(root.path().join("state/joedocs.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let mut restore = cmd(root.path());
+    restore.args([
+        "document",
+        "restore-file",
+        "JD-2",
+        "notes",
+        "--version",
+        "3",
+    ]);
+    let mut convert = cmd(root.path());
+    convert.args(["document", "convert", "JD-1"]);
+    let restoring = std::thread::spawn(move || restore.assert().success());
+    let converting = std::thread::spawn(move || convert.assert().success());
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert_eq!(
+        std::fs::read_to_string(&notes).unwrap(),
+        notes_before,
+        "a file write ran while the lock was held"
+    );
+    assert!(
+        single.exists(),
+        "a folder operation ran while the lock was held"
+    );
+    lock.unlock().unwrap();
+    restoring.join().unwrap();
+    converting.join().unwrap();
+    assert!(!std::fs::read_to_string(&notes).unwrap().contains("later"));
+    assert!(!single.exists());
+    assert!(root.path().join("vault/joedocs/home/Plan/Plan.md").exists());
+    cmd(root.path()).arg("check").assert().success();
 }
 
 /// A store under `root` with one project, one document and one key; returns
@@ -1058,6 +1435,10 @@ fn admin_tokens_are_created_with_a_totp_secret_listed_and_revoked() {
     let token = text.lines().last().unwrap();
     assert!(
         token.starts_with("jda_") && token.len() == 4 + 12 + 1 + 64,
+        "{text}"
+    );
+    assert!(
+        text.contains("on the client, export JOEDOCS_ADMIN_TOKEN with it"),
         "{text}"
     );
     let uri = text

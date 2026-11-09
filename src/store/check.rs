@@ -44,10 +44,18 @@ impl Store {
     pub fn check(&self) -> Result<CheckReport, Error> {
         let index_behind = self.needs_reindex()?;
         let drifted = drifted(&self.conn, &self.paths.home)?;
-        let known: HashSet<String> = db::live_documents(&self.conn)?
-            .into_iter()
-            .map(|row| row.path)
-            .collect();
+        let mut known = HashSet::new();
+        for row in db::live_documents(&self.conn)? {
+            if row.multifile {
+                // Never unknown, like a project's INDEX.md, even when
+                // index files are off and an old one is left in place.
+                known.insert(index_file::folder_index_path(&row));
+                for file in db::live_files(&self.conn, &row.id)? {
+                    known.insert(super::files::vault_path(&row, &file.path));
+                }
+            }
+            known.insert(row.path);
+        }
         let projects: HashSet<String> = db::list_projects(&self.conn)?
             .into_iter()
             .map(|project| project.name)

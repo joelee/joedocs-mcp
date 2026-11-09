@@ -26,6 +26,8 @@ pub struct SearchRequest {
     pub start: u64,
     /// Most results to return, 1 to [`MAX_SEARCH_LIMIT`].
     pub limit: u64,
+    /// Only this document's files (its main file included), if set.
+    pub document_id: Option<String>,
 }
 
 /// One search result.
@@ -38,6 +40,9 @@ pub struct SearchHit {
     /// The best-matching part of the body, with matches between `«` and
     /// `»`; `None` without a text query.
     pub snippet: Option<String>,
+    /// The file that matched, for a file of a multi-file document (its path
+    /// inside the folder); `None` for a main file.
+    pub file: Option<String>,
 }
 
 /// One page of search results.
@@ -87,6 +92,15 @@ impl Store {
                     .ok_or_else(|| Error::ProjectNotFound(name.clone()))
             })
             .collect::<Result<Vec<_>, Error>>()?;
+        let document_id = request
+            .document_id
+            .as_deref()
+            .map(|id| {
+                id.parse::<crate::document::DocumentId>()
+                    .map(|id| id.to_string())
+                    .map_err(|e| Error::invalid("document_id", e.to_string()))
+            })
+            .transpose()?;
         let offset = request.start - 1;
         let (rows, total) = db::search_documents(
             &self.conn,
@@ -95,6 +109,7 @@ impl Store {
                 doc_type,
                 text: text.as_deref(),
                 conditions: &conditions,
+                document_id: document_id.as_deref(),
                 offset,
                 limit: request.limit,
             },
@@ -107,6 +122,7 @@ impl Store {
                     document: DocumentInfo::from(&row.document),
                     score: row.score,
                     snippet: row.snippet,
+                    file: row.file,
                 })
                 .collect(),
             total,

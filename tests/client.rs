@@ -207,7 +207,7 @@ fn login_failures_exit_77_and_an_unreachable_server_69() {
         .args(["login", "--code", &server.code()])
         .assert()
         .code(77)
-        .stderr(predicate::str::contains("JOEDOCS_ADMIN_TOKEN"));
+        .stderr(predicate::str::contains("export JOEDOCS_ADMIN_TOKEN"));
     server
         .cmd()
         .args(["login", "--code", "000000"])
@@ -462,6 +462,46 @@ fn outcome(mut cmd: Command, args: &[&str]) -> std::io::Result<(Option<i32>, Str
     ))
 }
 
+/// `get --archive` writes the same archive locally and remotely.
+fn same_archive(local: &Local, server: &Server) -> std::io::Result<()> {
+    let entries = |path: &Path| -> std::io::Result<Vec<String>> {
+        let mut archive =
+            tar::Archive::new(flate2::read::GzDecoder::new(std::fs::File::open(path)?));
+        archive
+            .entries()?
+            .map(|e| Ok(e?.path()?.to_string_lossy().into_owned()))
+            .collect()
+    };
+    let local_archive = local.dir.path().join("out.tgz");
+    let remote_archive = server.root.path().join("out.tgz");
+    local
+        .cmd()
+        .args([
+            "get",
+            "JD-1",
+            "--archive",
+            local_archive.to_str().unwrap_or_default(),
+        ])
+        .assert()
+        .success()
+        .stdout("");
+    server
+        .cmd()
+        .args([
+            "get",
+            "JD-1",
+            "--archive",
+            remote_archive.to_str().unwrap_or_default(),
+        ])
+        .assert()
+        .success()
+        .stdout("");
+    assert_eq!(mode(&remote_archive), 0o600);
+    assert_eq!(entries(&remote_archive)?, entries(&local_archive)?);
+    assert_eq!(entries(&remote_archive)?, ["Plan.md"]);
+    Ok(())
+}
+
 #[test]
 fn remote_commands_print_what_local_commands_print() {
     let server = Server::start().unwrap();
@@ -500,6 +540,17 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["archive", "list"],
         vec!["check"],
         vec!["reindex"],
+        vec!["document", "convert", "JD-1"],
+        vec!["document", "convert", "JD-1"],
+        vec!["document", "move-file", "JD-1", "x", "--to", "JD-2"],
+        vec!["document", "restore-file", "JD-1", "x", "--version", "1"],
+        vec!["document", "restore-file", "JD-1", "x", "--version", "99"],
+        vec!["get", "JD-1"],
+        vec!["get", "JD-1", "--content-only"],
+        vec!["get", "JD-1", "--part", "Plan"],
+        vec!["get", "JD-1", "--part", "x y"],
+        vec!["get", "JD-2", "--part", "x"],
+        vec!["get", "JD-2", "--archive", "x.tgz"],
     ];
     for step in &steps {
         let local_run = outcome(local.cmd(), step).unwrap();
@@ -511,6 +562,8 @@ fn remote_commands_print_what_local_commands_print() {
         Some(1),
         "the stray file is a problem"
     );
+
+    same_archive(&local, &server).unwrap();
 
     // -f writes the same file.
     let local_file = local.dir.path().join("out.md");
@@ -936,4 +989,226 @@ impl std::io::Write for LogSink {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+// --- Login asks for the server (JD-12 STEP-02) -----------------------------
+
+impl Server {
+    /// Runs `args` through the library without `--server`, with `prompt`,
+    /// the real filesystem for the config lookup, and `env` added to the
+    /// client environment.
+    fn run_bare(
+        &self,
+        prompt: &Scripted,
+        env: &[(&str, String)],
+        args: &[&str],
+    ) -> Result<String, joedocs::Error> {
+        use clap::Parser as _;
+        let mut vars = joedocs::env::MapEnv::new()
+            .with("HOME", self.root.path().to_str().unwrap_or_default())
+            .with(
+                "XDG_STATE_HOME",
+                self.state_home().to_str().unwrap_or_default(),
+            )
+            .with("JOEDOCS_ADMIN_TOKEN", self.token.clone());
+        for (name, value) in env {
+            vars = vars.with(*name, value.clone());
+        }
+        let ctx = joedocs::Context {
+            app: joedocs::AppId::current(),
+            env: &vars,
+            fs: &joedocs::fs::RealFs,
+            clock: Arc::new(joedocs::clock::SystemClock),
+            random: &joedocs::auth::OsRandom,
+            services: &joedocs::systemd::Systemctl,
+            prompt,
+        };
+        let mut full = vec!["joedocs"];
+        full.extend_from_slice(args);
+        let cli = joedocs::Cli::try_parse_from(full)
+            .map_err(|e| joedocs::Error::Output(std::io::Error::other(e.to_string())))?;
+        let loaded = joedocs::load(&cli, &ctx)?;
+        let mut out = Vec::new();
+        joedocs::execute(&cli, &loaded, &ctx, &mut out)?;
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    }
+
+    fn home_config(&self) -> PathBuf {
+        self.root.path().join(".config/joedocs/config.toml")
+    }
+}
+
+#[test]
+fn login_asks_for_the_server_and_saves_it_in_the_config_file_in_use() {
+    let server = Server::start().unwrap();
+    let file = server.root.path().join("custom.toml");
+    let before =
+        "# My JoeDocs settings.\n\n[documents]\n# Keep the index.\nindex_file = true # on\n";
+    std::fs::write(&file, before).unwrap();
+    let terminal = Scripted::new(true, &[format!("{}/", server.url)]);
+    let text = server
+        .run_bare(
+            &terminal,
+            &[],
+            &[
+                "--config",
+                file.to_str().unwrap(),
+                "login",
+                "--code",
+                &server.code(),
+            ],
+        )
+        .unwrap();
+    assert_eq!(terminal.asked.get(), 1);
+    assert!(
+        text.contains(&format!("Saved client.server in {}", file.display())),
+        "{text}"
+    );
+    assert!(text.contains("Logged in to"), "{text}");
+    let after = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        after.starts_with(before),
+        "comments and keys kept:\n{after}"
+    );
+    assert_eq!(
+        &after[before.len()..],
+        format!("\n[client]\nserver = \"{}\"\n", server.url)
+    );
+    assert!(
+        !server.home_config().exists(),
+        "only the file in use is written"
+    );
+
+    // Later commands use the saved server without --server.
+    let quiet = Scripted::new(true, &[]);
+    let status = server
+        .run_bare(&quiet, &[], &["--config", file.to_str().unwrap(), "status"])
+        .unwrap();
+    assert!(
+        status.contains(&format!("server: {}", server.url)),
+        "{status}"
+    );
+}
+
+#[test]
+fn login_updates_an_existing_client_table() {
+    let server = Server::start().unwrap();
+    let file = server.root.path().join("custom.toml");
+    std::fs::write(&file, "[client]\n# The server.\nserver = \"\"\n").unwrap();
+    let terminal = Scripted::new(true, std::slice::from_ref(&server.url));
+    server
+        .run_bare(
+            &terminal,
+            &[],
+            &[
+                "--config",
+                file.to_str().unwrap(),
+                "login",
+                "--code",
+                &server.code(),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        format!("[client]\n# The server.\nserver = \"{}\"\n", server.url)
+    );
+}
+
+#[test]
+fn login_creates_the_xdg_or_home_config_file_privately() {
+    let server = Server::start().unwrap();
+    let xdg = server.root.path().join("xdg");
+    let terminal = Scripted::new(true, std::slice::from_ref(&server.url));
+    server
+        .run_bare(
+            &terminal,
+            &[("XDG_CONFIG_HOME", xdg.to_string_lossy().into_owned())],
+            &["login", "--code", &server.code()],
+        )
+        .unwrap();
+    let saved = xdg.join("joedocs/config.toml");
+    assert_eq!(
+        std::fs::read_to_string(&saved).unwrap(),
+        format!("[client]\nserver = \"{}\"\n", server.url)
+    );
+    assert_eq!(mode(&saved), 0o600);
+    assert!(!server.home_config().exists());
+
+    let other = Server::start().unwrap();
+    let terminal = Scripted::new(true, std::slice::from_ref(&other.url));
+    other
+        .run_bare(&terminal, &[], &["login", "--code", &other.code()])
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(other.home_config()).unwrap(),
+        format!("[client]\nserver = \"{}\"\n", other.url)
+    );
+    assert_eq!(mode(&other.home_config()), 0o600);
+}
+
+#[test]
+fn login_gives_up_after_three_unusable_servers_without_saving() {
+    let server = Server::start().unwrap();
+    let (redirect, _) = fake(vec![Answer::Send(
+        b"HTTP/1.1 302 Found\r\nLocation: https://elsewhere.example/\r\nContent-Length: 0\r\n\r\n",
+    )])
+    .unwrap();
+    let terminal = Scripted::new(
+        true,
+        &[
+            "not a url".into(),
+            "http://docs.example.com".into(),
+            redirect,
+        ],
+    );
+    let err = server
+        .run_bare(&terminal, &[], &["login", "--code", &server.code()])
+        .unwrap_err();
+    assert_eq!((err.exit_code(), terminal.asked.get()), (65, 3));
+    assert!(err.to_string().contains("redirect"), "{err}");
+    assert!(!server.home_config().exists());
+}
+
+#[test]
+fn login_asks_again_after_a_server_that_is_not_joedocs() {
+    let server = Server::start().unwrap();
+    let (other, _) = fake(vec![Answer::Send(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+    )])
+    .unwrap();
+    let terminal = Scripted::new(
+        true,
+        &["ftp://docs.example.com".into(), other, server.url.clone()],
+    );
+    server
+        .run_bare(&terminal, &[], &["login", "--code", &server.code()])
+        .unwrap();
+    assert_eq!(terminal.asked.get(), 3);
+    assert!(
+        std::fs::read_to_string(server.home_config())
+            .unwrap()
+            .contains(&server.url)
+    );
+}
+
+#[test]
+fn login_without_a_terminal_or_with_server_saves_nothing() {
+    let server = Server::start().unwrap();
+    let pipe = Scripted::new(false, std::slice::from_ref(&server.url));
+    let err = server
+        .run_bare(&pipe, &[], &["login", "--code", &server.code()])
+        .unwrap_err();
+    assert_eq!((err.exit_code(), pipe.asked.get()), (65, 0));
+    assert!(err.to_string().contains("set client.server"), "{err}");
+
+    let terminal = Scripted::new(true, &[]);
+    server
+        .run(&terminal, &["login", "--code", &server.code()])
+        .unwrap();
+    assert_eq!(terminal.asked.get(), 0);
+    let logout = Scripted::new(true, std::slice::from_ref(&server.url));
+    let err = server.run_bare(&logout, &[], &["logout"]).unwrap_err();
+    assert_eq!((err.exit_code(), logout.asked.get()), (65, 0));
+    assert!(!server.home_config().exists());
 }

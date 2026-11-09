@@ -99,6 +99,14 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.3.x to 0.4.0
+
+- **Database migration 5** adds multi-file documents. 0.3.x cannot open the database afterwards, so take a backup in step 1 first: `JOEDOCS backup ~/joedocs-before-0.4.0.tgz` works while the service runs.
+- **The first start rebuilds the index** from the history once, because its layout changed; the log shows it, and `JOEDOCS check` then reports no problems. Existing documents and their files do not change.
+- **New for agents:** multi-file documents (`new_document` with `multifile: true`) and the tools `new_document_file`, `list_document_files`, `write_document_files` and `archive_document_file`, nineteen tools in all; reconnect clients to see them. Existing tools take an optional `file`.
+- **New for administrators:** `joedocs document convert`, `move-file` and `restore-file`, `get --part` and `get --archive`, and `joedocs login` asking for the server when none is set. New config key `documents.max_files` (default 500).
+- **Going back** to 0.3.x means restoring the backup taken before the upgrade with the 0.3.x binary; documents written since are lost.
+
 ### 0.2.x to 0.3.0
 
 - **Database migration 4** adds admin tokens and admin sessions. 0.2.x cannot open the database afterwards, so take the `tar` backup in step 1 before upgrading.

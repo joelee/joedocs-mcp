@@ -7,7 +7,7 @@ pub const MAX_TITLE_CHARS: usize = 200;
 pub const MAX_STEM_BYTES: usize = 100;
 
 /// Characters Obsidian rejects in file names, or that break `[[links]]`.
-const FORBIDDEN: &[char] = &[
+pub(super) const FORBIDDEN: &[char] = &[
     '*', '"', '\\', '/', '<', '>', ':', '|', '?', '#', '^', '[', ']',
 ];
 

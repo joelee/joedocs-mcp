@@ -1,6 +1,6 @@
 # JoeDocs: initial plan
 
-Status: **phases 0 to 4 done, phase 5 partly done**; 0.1.0 is released on crates.io and Homebrew. The configuration, the document store, git history, the SQLite index, the admin commands (`init`, `project`, `key`, `reindex`, `archive`, `check`, `systemd`), the MCP server (`joedocs serve`, fifteen tools), search, and the history and editing tools are implemented. Of phase 5, the systemd unit, the Homebrew service and the [deployment guide](deployment.md) are done; backups are not. The [backlog](backlog.md) tracks what is left. Choices made while building phases 1 to 4 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
+Status: **phases 0 to 4 done, phase 5 partly done**; 0.1.0 is released on crates.io and Homebrew. The configuration, the document store, git history, the SQLite index, the admin commands (`init`, `project`, `key`, `reindex`, `archive`, `check`, `systemd`), the MCP server (`joedocs serve`, nineteen tools), search, and the history and editing tools are implemented. Of phase 5, the systemd unit, the Homebrew service and the [deployment guide](deployment.md) are done; backups are not. The [backlog](backlog.md) tracks what is left. Choices made while building phases 1 to 4 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
 
 ## 1. Goal
 

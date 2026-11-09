@@ -38,7 +38,8 @@ use std::sync::Arc;
 
 pub use app_id::AppId;
 pub use cli::{
-    ArchiveCommand, Cli, Command, ConfigCommand, KeyCommand, ProjectCommand, SystemdCommand,
+    ArchiveCommand, Cli, Command, ConfigCommand, DocumentCommand, KeyCommand, ProjectCommand,
+    SystemdCommand,
 };
 pub use config::{Config, ConfigError, Resolved};
 
@@ -225,6 +226,9 @@ pub fn execute(
         Command::Archive { command } => {
             admin::archive(&mut open_store(loaded, ctx)?, command, out)?;
         }
+        Command::Document { command } => {
+            admin::document(&mut open_store(loaded, ctx)?, command, out)?;
+        }
         Command::Check => admin::check(&open_store(loaded, ctx)?, out)?,
         Command::Systemd { command } => systemd_command(command, loaded, ctx, out)?,
         Command::Project { command } => {
@@ -271,10 +275,17 @@ pub fn execute(
             content_only,
             front_matter_only,
             file,
+            part: file_part,
+            archive,
         } => {
-            let part = admin::Part::new(*content_only, *front_matter_only);
-            let markdown = admin::fetch(&open_store(loaded, ctx)?, document_id, *version)?;
-            admin::write_document(&markdown, part, file.as_deref(), out)?;
+            let request = GetRequest {
+                id: document_id,
+                version: *version,
+                part: admin::Part::new(*content_only, *front_matter_only),
+                file_part: file_part.as_deref(),
+                archive: archive.as_deref(),
+            };
+            local_get(&open_store(loaded, ctx)?, &request, file.as_deref(), out)?;
         }
     }
     Ok(())
@@ -290,6 +301,12 @@ fn remote(
 ) -> Option<Result<(), Error>> {
     let server = loaded.config().client.server.as_str();
     if server.is_empty() {
+        if matches!(cli.command, Command::Login { .. }) && ctx.prompt.interactive() {
+            return Some(
+                set_up_server(loaded, ctx, out)
+                    .and_then(|server| run_remote(cli, &server, loaded, ctx, out)),
+            );
+        }
         return matches!(cli.command, Command::Login { .. } | Command::Logout).then(|| {
             Err(client::Error::Usage(
                 "set client.server, or pass --server URL, to log in to a server's admin API".into(),
@@ -314,6 +331,26 @@ fn remote(
         .into()));
     }
     Some(run_remote(cli, server, loaded, ctx, out))
+}
+
+/// `joedocs login` at a terminal with no server: asks for one, checks it,
+/// and saves it as `client.server` in the config file in use (or the
+/// user's own config file).
+fn set_up_server(loaded: &Loaded, ctx: &Context<'_>, out: &mut dyn Write) -> Result<String, Error> {
+    let target = config::client_file(loaded.resolved.file.as_deref(), &ctx.app, ctx.env)
+        .ok_or_else(|| {
+            client::Error::Usage(
+                "set HOME or XDG_CONFIG_HOME so `joedocs login` can save client.server, or pass --server URL".into(),
+            )
+        })?;
+    let server = client::ask_server(ctx.prompt)?;
+    config::set_client_server(&target, &server).map_err(|source| client::Error::Io {
+        action: "save client.server in",
+        path: target.clone(),
+        source,
+    })?;
+    writeln!(out, "Saved client.server in {}.", target.display())?;
+    Ok(server)
 }
 
 fn run_remote(
@@ -366,6 +403,53 @@ fn run_remote(
 
 /// Prints the `output` of an admin API call, as the local command would,
 /// and turns `check` problems into exit `1`.
+/// `joedocs document` through the admin API.
+fn remote_document(
+    remote: &client::Remote<'_>,
+    command: &DocumentCommand,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    use reqwest::Method;
+    match command {
+        DocumentCommand::Convert { document_id } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("documents/{document_id}/convert"),
+            None,
+            out,
+        ),
+        DocumentCommand::MoveFile {
+            document_id,
+            file,
+            to,
+            as_file,
+        } => {
+            let body = serde_json::json!({"file": file, "to": to, "as": as_file});
+            remote_text(
+                remote,
+                &Method::POST,
+                &format!("documents/{document_id}/files/move"),
+                Some(&body),
+                out,
+            )
+        }
+        DocumentCommand::RestoreFile {
+            document_id,
+            file,
+            version,
+        } => {
+            let body = serde_json::json!({"file": file, "version": version});
+            remote_text(
+                remote,
+                &Method::POST,
+                &format!("documents/{document_id}/files/restore"),
+                Some(&body),
+                out,
+            )
+        }
+    }
+}
+
 fn remote_text(
     remote: &client::Remote<'_>,
     method: &reqwest::Method,
@@ -460,6 +544,7 @@ fn remote_admin(
             None,
             out,
         ),
+        Command::Document { command } => remote_document(remote, command, out),
         Command::Check => remote_text(remote, &Method::GET, "check", None, out),
         Command::Reindex => remote_text(remote, &Method::POST, "reindex", None, out),
         Command::Get {
@@ -468,9 +553,17 @@ fn remote_admin(
             content_only,
             front_matter_only,
             file,
+            part: file_part,
+            archive,
         } => {
-            let part = admin::Part::new(*content_only, *front_matter_only);
-            remote_get(remote, document_id, *version, part, file.as_deref(), out)
+            let request = GetRequest {
+                id: document_id,
+                version: *version,
+                part: admin::Part::new(*content_only, *front_matter_only),
+                file_part: file_part.as_deref(),
+                archive: archive.as_deref(),
+            };
+            remote_get(remote, &request, file.as_deref(), out)
         }
         Command::Backup { file, .. } => remote_backup(remote, file, out),
         // Handled by `run_remote`, or refused by `remote` before it.
@@ -478,22 +571,99 @@ fn remote_admin(
     }
 }
 
-fn remote_get(
-    remote: &client::Remote<'_>,
-    id: &str,
-    version: Option<u64>,
-    part: admin::Part,
+/// `joedocs get` on the local store.
+fn local_get(
+    store: &store::Store,
+    request: &GetRequest<'_>,
     file: Option<&std::path::Path>,
     out: &mut dyn Write,
 ) -> Result<(), Error> {
-    let path = version.map_or_else(
-        || format!("documents/{id}"),
-        |v| format!("documents/{id}?version={v}"),
-    );
+    let id = request.id;
+    if let Some(path) = request.archive {
+        let bytes = admin::folder_archive(store, id, request.version)?;
+        admin::write_atomically(path, &bytes)?;
+    } else if let Some(name) = request.file_part {
+        let markdown = admin::fetch_file(store, id, name, request.version)?;
+        admin::write_document(&markdown, request.part, file, out)?;
+    } else {
+        let markdown = admin::fetch(store, id, request.version)?;
+        admin::write_document(&markdown, request.part, file, out)?;
+        if request.part == admin::Part::Whole
+            && file.is_none()
+            && let Some(files) = admin::other_files(store, id, request.version)?
+        {
+            admin::write_file_list(id.trim(), &files, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// What `joedocs get` asks for.
+struct GetRequest<'a> {
+    id: &'a str,
+    version: Option<u64>,
+    part: admin::Part,
+    file_part: Option<&'a str>,
+    archive: Option<&'a std::path::Path>,
+}
+
+fn remote_get(
+    remote: &client::Remote<'_>,
+    request: &GetRequest<'_>,
+    file: Option<&std::path::Path>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let mut query = Vec::new();
+    if let Some(version) = request.version {
+        query.push(format!("version={version}"));
+    }
+    if let Some(name) = request.file_part {
+        query.push(format!("part={}", percent_encode(name)));
+    }
+    if request.archive.is_some() {
+        query.push("archive=true".to_owned());
+    }
+    let path = if query.is_empty() {
+        format!("documents/{}", request.id)
+    } else {
+        format!("documents/{}?{}", request.id, query.join("&"))
+    };
     let reply = remote.call(&reqwest::Method::GET, &path, None)?;
+    if let Some(dest) = request.archive {
+        admin::check_folder_archive(&reply.body).map_err(|e| {
+            client::Error::Protocol(format!(
+                "{} did not send a document archive ({e}); is client.server the JoeDocs server?",
+                remote.server()
+            ))
+        })?;
+        admin::write_atomically(dest, &reply.body)?;
+        return Ok(());
+    }
     let document: client::DocumentReply = remote.parse(&reply, "document reply")?;
-    let markdown = document.markdown;
-    admin::write_document(&markdown, part, file, out)
+    admin::write_document(&document.markdown, request.part, file, out)?;
+    if let Some(files) = document.files
+        && request.part == admin::Part::Whole
+        && file.is_none()
+        && request.file_part.is_none()
+    {
+        admin::write_file_list(request.id.trim(), &files, out)?;
+    }
+    Ok(())
+}
+
+/// `text` with every byte but unreserved characters percent-encoded, for a
+/// query value.
+fn percent_encode(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 fn remote_backup(

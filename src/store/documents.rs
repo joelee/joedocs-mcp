@@ -9,7 +9,9 @@ use sha2::{Digest as _, Sha256};
 
 use super::journal::Journal;
 use super::{Actor, Error, Settings, Store, begin_write, index_file};
-use crate::db::{self, Connection, DocumentRow, ListQuery, RevisionRow, Sort};
+use std::fmt::Write as _;
+
+use crate::db::{self, Connection, DocumentRow, FileChange, ListQuery, RevisionRow, Sort};
 use crate::document::front_matter::{self, Fields};
 use crate::document::{DocumentId, Header, check_title, file_stem};
 use crate::history::{Commit, History};
@@ -37,6 +39,9 @@ pub struct NewDocument {
     pub front_matter: Fields,
     /// Commit summary; the title when `None`.
     pub summary: Option<String>,
+    /// Whether to create a multi-file document: a folder holding the main
+    /// file `<title>/<title>.md` and, later, other files.
+    pub multifile: bool,
 }
 
 /// A request to replace a document's body.
@@ -63,6 +68,9 @@ pub struct Changed {
     pub revision: u64,
     /// Vault-relative path.
     pub path: String,
+    /// The file changed, for a change to a sub-file of a multi-file
+    /// document: its path inside the folder, without `.md`.
+    pub file: Option<String>,
     /// The complete front matter now in the file.
     pub front_matter: Fields,
 }
@@ -105,6 +113,11 @@ pub struct DocumentInfo {
     pub updated_by: String,
     /// Client of the latest revision.
     pub client: String,
+    /// Whether it is a multi-file document.
+    pub multifile: bool,
+    /// How many live sub-files it has (0 for a single-file document). Only
+    /// [`Store::get`] and [`Store::list`] count them.
+    pub files: u64,
 }
 
 impl From<&DocumentRow> for DocumentInfo {
@@ -122,8 +135,19 @@ impl From<&DocumentRow> for DocumentInfo {
             updated: row.updated_at.clone(),
             updated_by: row.updated_by.clone(),
             client: row.client.clone(),
+            multifile: row.multifile,
+            files: 0,
         }
     }
+}
+
+/// [`DocumentInfo`] for `row`, with its sub-files counted.
+pub(super) fn document_info(conn: &Connection, row: &DocumentRow) -> Result<DocumentInfo, Error> {
+    let mut info = DocumentInfo::from(row);
+    if row.multifile {
+        info.files = db::count_live_files(conn, &row.id)?;
+    }
+    Ok(info)
 }
 
 /// One revision's history entry.
@@ -145,6 +169,9 @@ pub struct RevisionInfo {
     pub commit: String,
     /// Vault-relative path at that revision.
     pub path: String,
+    /// In a file's history, the file's path inside the folder at that
+    /// revision.
+    pub file: Option<String>,
 }
 
 impl From<RevisionRow> for RevisionInfo {
@@ -158,6 +185,7 @@ impl From<RevisionRow> for RevisionInfo {
             at: row.created_at,
             commit: row.commit_id,
             path: row.path,
+            file: None,
         }
     }
 }
@@ -171,6 +199,11 @@ pub struct Fetched {
     pub revision: RevisionInfo,
     /// The whole file: front matter and body.
     pub markdown: String,
+    /// The file returned, for a sub-file of a multi-file document: its path
+    /// inside the folder, without `.md`.
+    pub file: Option<String>,
+    /// For a multi-file document, its live sub-files at that revision.
+    pub files: Vec<String>,
 }
 
 /// Which documents to list.
@@ -214,6 +247,12 @@ pub(super) enum Action {
     Append,
     Restore,
     Unarchive,
+    CreateFile,
+    WriteFiles,
+    ArchiveFile,
+    Convert,
+    MoveFile,
+    RestoreFile,
 }
 
 impl Action {
@@ -230,10 +269,16 @@ impl Action {
             Self::Append => "append",
             Self::Restore => "restore",
             Self::Unarchive => "unarchive",
+            Self::CreateFile => "create_file",
+            Self::WriteFiles => "write_files",
+            Self::ArchiveFile => "archive_file",
+            Self::Convert => "convert",
+            Self::MoveFile => "move_file",
+            Self::RestoreFile => "restore_file",
         }
     }
 
-    fn verb(self) -> &'static str {
+    pub(super) fn verb(self) -> &'static str {
         match self {
             Self::Create => "Create",
             Self::Update => "Update",
@@ -245,6 +290,12 @@ impl Action {
             Self::Append => "Append to",
             Self::Restore => "Restore",
             Self::Unarchive => "Unarchive",
+            Self::CreateFile => "Add a file to",
+            Self::WriteFiles => "Write files of",
+            Self::ArchiveFile => "Archive a file of",
+            Self::Convert => "Convert",
+            Self::MoveFile => "Move a file of",
+            Self::RestoreFile => "Restore a file of",
         }
     }
 }
@@ -289,30 +340,7 @@ impl Store {
     /// status, title or front matter, [`Error::TooLarge`], and storage
     /// errors.
     pub fn create(&mut self, actor: &Actor, request: NewDocument) -> Result<Changed, Error> {
-        let doc_type = request
-            .doc_type
-            .unwrap_or_else(|| self.settings.default_type.clone());
-        check_member("type", &doc_type, &self.settings.types)?;
-        let mut status = request
-            .status
-            .unwrap_or_else(|| self.settings.default_status.clone());
-        check_member("status", &status, &self.settings.statuses)?;
-        let title = check_title(&request.title).map_err(|m| Error::invalid("title", m))?;
-        if request.front_matter.contains_key("status") {
-            return Err(Error::invalid(
-                "front_matter",
-                "\"status\" has its own parameter",
-            ));
-        }
-        let mut extra = Fields::new();
-        front_matter::apply(
-            &mut status,
-            &mut extra,
-            &request.front_matter,
-            &[],
-            &self.settings.statuses,
-        )
-        .map_err(|e| Error::invalid("front_matter", e.0))?;
+        let (doc_type, status, title, extra) = self.check_new(&request)?;
         let at = self.clock.now();
         let now = crate::clock::format_timestamp(at);
         let summary = tidy_line(request.summary.as_deref()).unwrap_or_else(|| title.clone());
@@ -326,9 +354,11 @@ impl Store {
         } = self;
         let _lock = begin_write(paths, conn, history.as_ref())?;
         let tx = conn.transaction()?;
-        let project = db::find_project(&tx, &request.project)?
-            .filter(|p| p.name == request.project)
-            .ok_or_else(|| Error::ProjectNotFound(request.project.clone()))?;
+        let Some(project) =
+            db::find_project(&tx, &request.project)?.filter(|p| p.name == request.project)
+        else {
+            return Err(Error::ProjectNotFound(request.project));
+        };
         let seq = db::allocate_seq(&tx, project.id)?;
         let id = DocumentId::new(&project.key, seq).to_string();
         let path = choose_path(
@@ -339,6 +369,11 @@ impl Store {
             &title,
             &id,
             None,
+            &if request.multifile {
+                Layout::Folder(&[])
+            } else {
+                Layout::Single
+            },
         )?;
         let row = DocumentRow {
             id: id.clone(),
@@ -359,6 +394,8 @@ impl Store {
             archived_at: None,
             archived_by: None,
             archive_reason: None,
+            multifile: request.multifile,
+            main_revision: 1,
         };
         let (row, fields, journal) = write_revision(
             &tx,
@@ -373,8 +410,10 @@ impl Store {
             id: row.id.clone(),
             revision: row.revision,
             path: row.path.clone(),
+            file: None,
             front_matter: fields,
         };
+        let touched = main_touch(&row, FileChange::Added);
         let commit = Change {
             row: &row,
             at,
@@ -382,10 +421,43 @@ impl Store {
             summary: &summary,
             actor,
             paths: &[&row.path],
+            files: &touched,
         };
         finish(tx, history.as_ref(), journal, &commit)?;
-        index_file::refresh(conn, &paths.home, settings, &row.project);
+        index_file::refresh_document(conn, &paths.home, settings, &row);
         Ok(changed)
+    }
+
+    /// Checks a new document's type, status, title and front matter, with
+    /// the defaults filled in.
+    fn check_new(&self, request: &NewDocument) -> Result<(String, String, String, Fields), Error> {
+        let doc_type = request
+            .doc_type
+            .clone()
+            .unwrap_or_else(|| self.settings.default_type.clone());
+        check_member("type", &doc_type, &self.settings.types)?;
+        let mut status = request
+            .status
+            .clone()
+            .unwrap_or_else(|| self.settings.default_status.clone());
+        check_member("status", &status, &self.settings.statuses)?;
+        let title = check_title(&request.title).map_err(|m| Error::invalid("title", m))?;
+        if request.front_matter.contains_key("status") {
+            return Err(Error::invalid(
+                "front_matter",
+                "\"status\" has its own parameter",
+            ));
+        }
+        let mut extra = Fields::new();
+        front_matter::apply(
+            &mut status,
+            &mut extra,
+            &request.front_matter,
+            &[],
+            &self.settings.statuses,
+        )
+        .map_err(|e| Error::invalid("front_matter", e.0))?;
+        Ok((doc_type, status, title, extra))
     }
 
     /// Replaces a document's body (and optionally sets front matter keys).
@@ -514,8 +586,12 @@ impl Store {
         let tx = conn.transaction()?;
         let mut row = live_row(&tx, &id)?;
         read_verified(&paths.home, &row)?;
+        if row.multifile {
+            super::files::verify_files(&tx, &paths.home, &row)?;
+        }
 
         row.revision += 1;
+        row.main_revision = row.revision;
         row.updated_at.clone_from(&now);
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);
@@ -528,16 +604,28 @@ impl Store {
         let file = paths.home.join(&row.path);
         let mut journal = Journal::default();
         journal.remove(&file)?;
+        let mut touched = main_touch(&row, FileChange::Removed);
+        let removed = super::folders::archive_files(
+            &tx,
+            &paths.home,
+            &row,
+            actor,
+            &mut journal,
+            &mut touched,
+        )?;
+        let mut changed: Vec<&str> = vec![&row.path];
+        changed.extend(removed.iter().map(String::as_str));
         let commit = Change {
             row: &row,
             at,
             action: Action::Archive,
             summary: &reason,
             actor,
-            paths: &[&row.path],
+            paths: &changed,
+            files: &touched,
         };
         finish(tx, history.as_ref(), journal, &commit)?;
-        remove_empty_parent(&file);
+        super::folders::clean_after_move(&paths.home, &row.path, None);
         index_file::refresh(conn, &paths.home, settings, &row.project);
         Ok(Archived {
             id: row.id,
@@ -569,10 +657,17 @@ impl Store {
                 self.committed_text(&row, &revision)?
             }
         };
+        let files = if row.multifile {
+            super::files::live_paths_at(&self.conn, &row, wanted)?
+        } else {
+            Vec::new()
+        };
         Ok(Fetched {
-            document: DocumentInfo::from(&row),
+            document: document_info(&self.conn, &row)?,
             revision: revision.into(),
             markdown,
+            file: None,
+            files,
         })
     }
 
@@ -626,7 +721,10 @@ impl Store {
         )?;
         let shown = offset + rows.len() as u64;
         Ok(Listing {
-            items: rows.iter().map(DocumentInfo::from).collect(),
+            items: rows
+                .iter()
+                .map(|row| document_info(&self.conn, row))
+                .collect::<Result<_, _>>()?,
             total,
             next_start: (shown < total).then_some(shown + 1),
         })
@@ -657,16 +755,13 @@ impl Store {
         let _lock = begin_write(paths, conn, history.as_ref())?;
         let tx = conn.transaction()?;
         let mut row = live_row(&tx, &id)?;
-        if let Some(expected) = expected
-            && expected != row.revision
-        {
-            return Err(Error::Conflict {
-                id: row.id,
-                expected,
-                current: row.revision,
-            });
+        if let Some(expected) = expected {
+            check_expected(&row, expected, action)?;
         }
         let text = read_verified(&paths.home, &row)?;
+        if row.multifile {
+            super::files::verify_files(&tx, &paths.home, &row)?;
+        }
         let parsed = front_matter::parse(&text).map_err(|_| integrity(&row))?;
         let mut draft = Draft {
             title: row.title.clone(),
@@ -681,6 +776,17 @@ impl Store {
         let old_title = std::mem::replace(&mut row.title, draft.title);
         let old_type = std::mem::replace(&mut row.doc_type, draft.doc_type);
         if row.title != old_title || row.doc_type != old_type {
+            let own = if row.multifile {
+                let live = db::live_files(&tx, &row.id)?;
+                top_level_stems(live.iter().map(|f| f.path.as_str()))
+            } else {
+                Vec::new()
+            };
+            let layout = if row.multifile {
+                Layout::Folder(&own)
+            } else {
+                Layout::Single
+            };
             row.path = choose_path(
                 &tx,
                 &paths.home,
@@ -689,21 +795,23 @@ impl Store {
                 &row.title,
                 &row.id,
                 Some(&old_path),
+                &layout,
             )?;
         }
         row.status = draft.status;
         row.revision += 1;
+        row.main_revision = row.revision;
         row.updated_at = now;
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);
-        let (row, fields, journal) = write_revision(
+        let (row, fields, journal, moved) = super::folders::write_main(
             &tx,
             &paths.home,
             settings,
             row,
             &draft.extra,
             &draft.body,
-            Some(&old_path),
+            &old_path,
         )?;
         let summary = summary.unwrap_or_else(|| match action {
             Action::Rename => format!("{old_title} → {}", row.title),
@@ -714,21 +822,26 @@ impl Store {
             id: row.id.clone(),
             revision: row.revision,
             path: row.path.clone(),
+            file: None,
             front_matter: fields,
         };
+        let touched = super::folders::main_moved(&row, &old_path);
+        let mut changed_paths: Vec<&str> = vec![&old_path, &row.path];
+        changed_paths.extend(moved.iter().map(String::as_str));
         let commit = Change {
             row: &row,
             at,
             action,
             summary: &summary,
             actor,
-            paths: &[&old_path, &row.path],
+            paths: &changed_paths,
+            files: &touched,
         };
         finish(tx, history.as_ref(), journal, &commit)?;
         if old_path != row.path {
-            remove_empty_parent(&paths.home.join(&old_path));
+            super::folders::clean_after_move(&paths.home, &old_path, Some(&row.path));
         }
-        index_file::refresh(conn, &paths.home, settings, &row.project);
+        index_file::refresh_document(conn, &paths.home, settings, &row);
         Ok(changed)
     }
 }
@@ -772,6 +885,7 @@ pub(super) fn write_revision(
         Some(old) if old != row.path => {
             let old_file = home.join(old);
             if old.eq_ignore_ascii_case(&row.path) {
+                super::vault::refuse_occupied(home, old, &row.path)?;
                 journal.rename(&old_file, &new_file)?;
                 journal.write(&new_file, text.as_bytes())?;
             } else {
@@ -793,6 +907,68 @@ pub(super) struct Change<'a> {
     pub(super) summary: &'a str,
     pub(super) actor: &'a Actor,
     pub(super) paths: &'a [&'a str],
+    /// For a multi-file document, the files the revision changes, recorded
+    /// as `JoeDocs-File` trailers and in `revision_files`; empty otherwise.
+    pub(super) files: &'a [FileTouch],
+}
+
+/// One file of a multi-file document changed by a revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FileTouch {
+    /// Path inside the folder, without `.md`; the main file's stem for the
+    /// main file.
+    pub(super) path: String,
+    pub(super) main: bool,
+    pub(super) change: FileChange,
+    /// The path before a rename.
+    pub(super) from: Option<String>,
+}
+
+/// The main file's touch for a revision of `row`, when it is multi-file.
+pub(super) fn main_touch(row: &DocumentRow, change: FileChange) -> Vec<FileTouch> {
+    if !row.multifile {
+        return Vec::new();
+    }
+    vec![FileTouch {
+        path: super::files::main_stem(row).to_owned(),
+        main: true,
+        change,
+        from: None,
+    }]
+}
+
+/// Checks `expected` against `row` for `action`. A change to the content or
+/// front matter of a multi-file document's main file conflicts only when
+/// the main file changed after `expected` (or `expected` is ahead of the
+/// document), so changes to its other files do not get in the way. Every
+/// other change needs the current revision.
+pub(super) fn check_expected(
+    row: &DocumentRow,
+    expected: u64,
+    action: Action,
+) -> Result<(), Error> {
+    let file_change = matches!(
+        action,
+        Action::Update | Action::Edit | Action::Append | Action::FrontMatter
+    );
+    if row.multifile && file_change {
+        if row.main_revision > expected || expected > row.revision {
+            return Err(Error::FileConflict {
+                id: row.id.clone(),
+                file: super::files::main_stem(row).to_owned(),
+                expected,
+                file_revision: row.main_revision,
+                current: row.revision,
+            });
+        }
+    } else if expected != row.revision {
+        return Err(Error::Conflict {
+            id: row.id.clone(),
+            expected,
+            current: row.revision,
+        });
+    }
+    Ok(())
 }
 
 /// Commits the change to history, then records the revision and the new
@@ -811,19 +987,26 @@ pub(super) fn finish(
         summary,
         actor,
         paths,
+        files,
     } = *change;
     let subject = if summary.is_empty() {
         format!("{} {}", action.verb(), row.id)
     } else {
         format!("{} {}: {summary}", action.verb(), row.id)
     };
-    let message = format!(
+    let mut message = format!(
         "{subject}\n\nJoeDocs-Document: {}\nJoeDocs-Revision: {}\nJoeDocs-Action: {}\nJoeDocs-Client: {}\n",
         row.id,
         row.revision,
         action.name(),
         actor.client(),
     );
+    for touch in files {
+        let _ = writeln!(message, "{FILE_TRAILER}: {}.md", touch.path);
+        if let Some(from) = &touch.from {
+            let _ = writeln!(message, "{FILE_FROM_TRAILER}: {from}.md");
+        }
+    }
     let mut changed: Vec<String> = paths.iter().map(|p| (*p).to_owned()).collect();
     changed.dedup();
     let commit_id = history.commit(&Commit {
@@ -847,10 +1030,29 @@ pub(super) fn finish(
             created_at: row.updated_at.clone(),
         },
     )?;
+    for touch in files {
+        db::insert_revision_file(
+            &tx,
+            &db::RevisionFileRow {
+                document_id: row.id.clone(),
+                revision: row.revision,
+                path: touch.path.clone(),
+                main: touch.main,
+                change: touch.change,
+                from_path: touch.from.clone(),
+            },
+        )?;
+    }
     db::set_history_head(&tx, &commit_id)?;
     tx.commit()?;
     Ok(())
 }
+
+/// The trailer naming each file a multi-file revision changes.
+pub(super) const FILE_TRAILER: &str = "JoeDocs-File";
+
+/// The trailer after a [`FILE_TRAILER`] giving a renamed file's old path.
+pub(super) const FILE_FROM_TRAILER: &str = "JoeDocs-File-From";
 
 fn header(row: &DocumentRow) -> Header {
     Header {
@@ -948,7 +1150,19 @@ pub(super) fn read_verified(home: &Path, row: &DocumentRow) -> Result<String, Er
 }
 
 /// Picks `<project>/<type>/<stem>.md`, or `<stem> (<id>).md` when that is
-/// taken by another document or by a file the index does not know.
+/// taken by another document or by a file the index does not know. For a
+/// multi-file document it picks the main file of a folder,
+/// `<project>/<type>/<stem>/<stem>.md` or `<stem> (<id>)/<stem> (<id>).md`,
+/// and a folder named `INDEX` (in any case) always takes the second, since
+/// its main file would be the folder's generated `INDEX.md`.
+///
+/// A folder whose name equals, ignoring case, one of the document's own
+/// top-level files (`Layout::Folder`) is taken too: its main file would be
+/// that file's path.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct part of the path"
+)]
 pub(super) fn choose_path(
     conn: &Connection,
     home: &Path,
@@ -957,21 +1171,67 @@ pub(super) fn choose_path(
     title: &str,
     id: &str,
     current: Option<&str>,
+    layout: &Layout<'_>,
 ) -> Result<String, Error> {
+    let multifile = matches!(layout, Layout::Folder(_));
     let stem = file_stem(title);
-    for candidate in [
-        format!("{project}/{doc_type}/{stem}.md"),
-        format!("{project}/{doc_type}/{stem} ({id}).md"),
-    ] {
-        let ours = current.is_some_and(|c| c.eq_ignore_ascii_case(&candidate));
-        if !db::path_taken(conn, &candidate, Some(id))? && (ours || !home.join(&candidate).exists())
-        {
+    let stems = [stem.clone(), format!("{stem} ({id})")];
+    for (index, stem) in stems.iter().enumerate() {
+        let candidate = if let Layout::Folder(own) = layout {
+            if index == 0 && stem.eq_ignore_ascii_case(crate::document::INDEX_STEM) {
+                continue;
+            }
+            if own.contains(&stem.to_lowercase()) {
+                continue;
+            }
+            format!("{project}/{doc_type}/{stem}/{stem}.md")
+        } else {
+            format!("{project}/{doc_type}/{stem}.md")
+        };
+        // What must be free: the folder for a multi-file document, else the file.
+        let parent = |path: &str| path.rsplit_once('/').map_or("", |(dir, _)| dir).to_owned();
+        let (taken, mine) = if multifile {
+            (parent(&candidate), current.map(parent))
+        } else {
+            (candidate.clone(), current.map(str::to_owned))
+        };
+        let target = home.join(&taken);
+        // Ours only when it is the document's own entry, not just a name
+        // that differs in case (another file, on a case-sensitive file system).
+        let ours = match mine {
+            Some(mine) if mine.eq_ignore_ascii_case(&taken) => {
+                super::vault::same_entry(&home.join(mine), &target)?
+            }
+            _ => false,
+        };
+        let on_disk = super::vault::occupied(&target)?;
+        if !db::path_taken(conn, &candidate, Some(id))? && (ours || !on_disk) {
             return Ok(candidate);
         }
     }
     Err(Error::AlreadyExists(format!(
         "a file for \"{title}\" in {project}/{doc_type}"
     )))
+}
+
+/// Where a document's main file goes, for [`choose_path`].
+pub(super) enum Layout<'a> {
+    /// `<project>/<type>/<stem>.md`.
+    Single,
+    /// `<project>/<type>/<stem>/<stem>.md`, with the case-folded names of
+    /// the document's own top-level files, which the folder name must not
+    /// equal.
+    Folder(&'a [String]),
+}
+
+/// The case-folded names of the top-level files among `paths` (paths inside
+/// a document folder, without `.md`).
+pub(super) fn top_level_stems<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|path| !path.contains('/'))
+        .map(str::to_lowercase)
+        .collect()
 }
 
 pub(super) fn check_member(
@@ -999,6 +1259,12 @@ pub(super) fn tidy_line(text: Option<&str>) -> Option<String> {
         .take(MAX_SUMMARY_CHARS)
         .collect();
     (!line.is_empty()).then_some(line)
+}
+
+/// The file name of a vault path without its directories and `.md`.
+pub(super) fn stem_of(path: &str) -> &str {
+    let name = path.rsplit_once('/').map_or(path, |(_, name)| name);
+    name.strip_suffix(".md").unwrap_or(name)
 }
 
 pub(super) fn sha256(bytes: &[u8]) -> Vec<u8> {

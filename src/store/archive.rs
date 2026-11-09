@@ -82,16 +82,11 @@ impl Store {
         let parsed = front_matter::parse(&text).map_err(|_| integrity(&row))?;
         let extra = front_matter::extras(&parsed.fields);
 
-        row.path = choose_path(
-            &tx,
-            &paths.home,
-            &row.project,
-            &row.doc_type,
-            &row.title,
-            &row.id,
-            None,
-        )?;
+        let (path, files) = place(&tx, &paths.home, history.as_ref(), &row, &before)?;
+        super::folders::check_file_limit(&row, files.len(), settings.max_files)?;
+        row.path = path;
         row.revision += 1;
+        row.main_revision = row.revision;
         row.updated_at = now;
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);
@@ -108,10 +103,30 @@ impl Store {
             parsed.body,
             Some(&path),
         )?;
+        let mut pending = super::folders::Pending {
+            journal,
+            touched: super::documents::main_touch(&row, crate::db::FileChange::Added),
+            paths: vec![row.path.clone()],
+        };
+        let scope = super::folders::Scope {
+            conn: &tx,
+            home: &paths.home,
+            settings,
+            row: &row,
+            actor,
+        };
+        super::folders::add_files(&scope, files.into_values().collect(), &mut pending)?;
+        let super::folders::Pending {
+            journal,
+            touched,
+            paths: changed,
+        } = pending;
+        let changed_paths: Vec<&str> = changed.iter().map(String::as_str).collect();
         let changed = Changed {
             id: row.id.clone(),
             revision: row.revision,
             path: row.path.clone(),
+            file: None,
             front_matter: fields,
         };
         let commit = Change {
@@ -120,10 +135,45 @@ impl Store {
             action: Action::Unarchive,
             summary: "",
             actor,
-            paths: &[&row.path],
+            paths: &changed_paths,
+            files: &touched,
         };
         finish(tx, history.as_ref(), journal, &commit)?;
-        index_file::refresh(conn, &paths.home, settings, &row.project);
+        index_file::refresh_document(conn, &paths.home, settings, &row);
         Ok(changed)
     }
+}
+
+/// Where an archived document comes back (as `choose_path` picks it, never
+/// a folder named like one of its returning files), and, for a multi-file
+/// document, the files that come back with it.
+fn place(
+    tx: &crate::db::Connection,
+    home: &std::path::Path,
+    history: &dyn crate::history::History,
+    row: &crate::db::DocumentRow,
+    before: &crate::db::RevisionRow,
+) -> Result<(String, super::folders::FilesThen), Error> {
+    let files = if row.multifile {
+        super::folders::files_then(tx, history, row, before)?
+    } else {
+        std::collections::BTreeMap::new()
+    };
+    let own = super::documents::top_level_stems(files.values().map(|(p, _)| p.as_str()));
+    let layout = if row.multifile {
+        super::documents::Layout::Folder(&own)
+    } else {
+        super::documents::Layout::Single
+    };
+    let path = choose_path(
+        tx,
+        home,
+        &row.project,
+        &row.doc_type,
+        &row.title,
+        &row.id,
+        None,
+        &layout,
+    )?;
+    Ok((path, files))
 }

@@ -107,6 +107,7 @@ fn vault() -> TestResult<Vault> {
                 content: content.into(),
                 front_matter: fields(&extra),
                 summary: None,
+                multifile: false,
             },
         )?;
         clock.advance(60);
@@ -123,6 +124,7 @@ fn request(projects: &[&str], query: &str, filters: &Value) -> SearchRequest {
         filters: filters.as_object().cloned().unwrap_or_else(Map::new),
         start: 1,
         limit: 20,
+        document_id: None,
     }
 }
 
