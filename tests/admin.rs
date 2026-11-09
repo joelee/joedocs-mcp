@@ -1079,6 +1079,65 @@ fn backup_waits_for_a_writer_holding_the_lock() {
     assert!(file.exists());
 }
 
+#[test]
+fn file_writes_and_folder_operations_wait_for_a_writer_holding_the_lock() {
+    use joedocs::store::Actor;
+    let root = TempDir::new().unwrap();
+    folder_store(root.path()).unwrap();
+    let mut store = library_store(root.path()).unwrap();
+    store
+        .append_file(
+            &Actor::new("laptop", "test"),
+            "JD-2",
+            "notes",
+            "later\n",
+            None,
+            None,
+        )
+        .unwrap();
+    drop(store);
+    let notes = root.path().join("vault/joedocs/home/Roadmap/notes.md");
+    let single = root.path().join("vault/joedocs/home/Plan.md");
+    let notes_before = std::fs::read_to_string(&notes).unwrap();
+    assert!(notes_before.ends_with("later\n"));
+
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .open(root.path().join("state/joedocs.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let mut restore = cmd(root.path());
+    restore.args([
+        "document",
+        "restore-file",
+        "JD-2",
+        "notes",
+        "--version",
+        "3",
+    ]);
+    let mut convert = cmd(root.path());
+    convert.args(["document", "convert", "JD-1"]);
+    let restoring = std::thread::spawn(move || restore.assert().success());
+    let converting = std::thread::spawn(move || convert.assert().success());
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert_eq!(
+        std::fs::read_to_string(&notes).unwrap(),
+        notes_before,
+        "a file write ran while the lock was held"
+    );
+    assert!(
+        single.exists(),
+        "a folder operation ran while the lock was held"
+    );
+    lock.unlock().unwrap();
+    restoring.join().unwrap();
+    converting.join().unwrap();
+    assert!(!std::fs::read_to_string(&notes).unwrap().contains("later"));
+    assert!(!single.exists());
+    assert!(root.path().join("vault/joedocs/home/Plan/Plan.md").exists());
+    cmd(root.path()).arg("check").assert().success();
+}
+
 /// A store under `root` with one project, one document and one key; returns
 /// the key's token.
 fn populated(root: &Path) -> String {
