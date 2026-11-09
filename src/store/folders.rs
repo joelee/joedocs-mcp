@@ -225,6 +225,25 @@ pub(super) fn files_then(
     Ok(files)
 }
 
+/// Refuses a change that would leave `row` with more than `max_files` live
+/// files besides its main file.
+pub(super) fn check_file_limit(
+    row: &DocumentRow,
+    files: usize,
+    max_files: u64,
+) -> Result<(), Error> {
+    if files as u64 > max_files {
+        return Err(Error::invalid(
+            "documents.max_files",
+            format!(
+                "{} would have {files} files besides its main file, over the limit of {max_files}",
+                row.id
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Refuses with `already_exists` when something is at `vault` (a path the
 /// index has no live file at), so it is never overwritten.
 pub(super) fn refuse_unknown(home: &Path, vault: &str) -> Result<(), Error> {
@@ -464,6 +483,7 @@ impl Store {
                 row.id
             )));
         }
+        check_file_limit(&row, wanted.len(), settings.max_files)?;
         // A file that comes back where no indexed file is must not land on a
         // file the index does not know.
         for (key, (path, _)) in &wanted {

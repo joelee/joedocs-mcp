@@ -1831,3 +1831,53 @@ fn archive_restore_never_writes_over_an_unknown_file() {
     assert_eq!(fs::read_to_string(&planted).unwrap(), "mine\n");
     assert!(read(dir.path(), "joedocs/plans/Roadmap (JD-1)/notes.md").ends_with("---\nnotes\n"));
 }
+
+// --- JD-14: restores respect documents.max_files (MED-02) -------------------
+
+fn with_max_files(root: &Path, max_files: u64) -> Result<Store, Error> {
+    let mut settings = Settings::from_config(&Config::default());
+    settings.max_files = max_files;
+    open_with(root, settings)
+}
+
+#[test]
+fn folder_restore_and_unarchive_respect_the_file_limit() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .archive_file(&actor(), "JD-1", "notes", None, None)
+        .unwrap();
+    drop(store);
+
+    let mut store = with_max_files(dir.path(), 1).unwrap();
+    let before = snapshot(dir.path()).unwrap();
+    let err = store
+        .restore_version(&actor(), "JD-1", 3, None, None)
+        .unwrap_err();
+    assert!(err.to_string().contains("documents.max_files"), "{err}");
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+    drop(store);
+    let mut store = with_max_files(dir.path(), 2).unwrap();
+    assert_eq!(
+        store
+            .restore_version(&actor(), "JD-1", 3, None, None)
+            .unwrap()
+            .revision,
+        5
+    );
+    store.archive(&actor(), "JD-1", "done").unwrap();
+    drop(store);
+
+    let mut store = with_max_files(dir.path(), 1).unwrap();
+    let before = snapshot(dir.path()).unwrap();
+    let tree = vault_tree(dir.path());
+    let err = store.unarchive(&actor(), "JD-1").unwrap_err();
+    assert!(err.to_string().contains("documents.max_files"), "{err}");
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+    assert_eq!(vault_tree(dir.path()), tree);
+    drop(store);
+    let mut store = with_max_files(dir.path(), 2).unwrap();
+    store.unarchive(&actor(), "JD-1").unwrap();
+    assert_eq!(store.list_files("JD-1", None).unwrap().len(), 3);
+}

@@ -83,6 +83,7 @@ impl Store {
         let extra = front_matter::extras(&parsed.fields);
 
         let (path, files) = place(&tx, &paths.home, history.as_ref(), &row, &before)?;
+        super::folders::check_file_limit(&row, files.len(), settings.max_files)?;
         row.path = path;
         row.revision += 1;
         row.main_revision = row.revision;
