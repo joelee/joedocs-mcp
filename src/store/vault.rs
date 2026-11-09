@@ -48,13 +48,6 @@ pub(super) fn refuse_unknown(home: &Path, vault: &str) -> Result<(), Error> {
 /// # Errors
 ///
 /// Returns I/O errors other than "not found".
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the case-only rename checks of JD-16 STEP-02 use it"
-    )
-)]
 pub(super) fn same_entry(a: &Path, b: &Path) -> Result<bool, Error> {
     let stat = |path: &Path| match fs::symlink_metadata(path) {
         Ok(meta) => Ok(Some((meta.dev(), meta.ino()))),
@@ -74,13 +67,6 @@ pub(super) fn same_entry(a: &Path, b: &Path) -> Result<bool, Error> {
 /// # Errors
 ///
 /// Returns [`Error::AlreadyExists`], and I/O errors.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the case-only rename checks of JD-16 STEP-02 use it"
-    )
-)]
 pub(super) fn refuse_occupied(home: &Path, from: &str, to: &str) -> Result<(), Error> {
     let target = home.join(to);
     if occupied(&target)? && !same_entry(&home.join(from), &target)? {

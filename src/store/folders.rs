@@ -473,11 +473,19 @@ impl Store {
             )));
         }
         check_file_limit(&row, wanted.len(), settings.max_files)?;
-        // A file that comes back where no indexed file is must not land on a
-        // file the index does not know.
+        // A file that comes back must not land on a file the index does not
+        // know: where no indexed file is, nothing may be there; where its
+        // name changes only in case, it must be the same file (a
+        // case-sensitive filesystem can hold both spellings).
         for (key, (path, _)) in &wanted {
-            if !live.iter().any(|f| f.path.to_lowercase() == *key) {
-                super::vault::refuse_unknown(&paths.home, &vault_path(&row, path))?;
+            match live.iter().find(|f| f.path.to_lowercase() == *key) {
+                None => super::vault::refuse_unknown(&paths.home, &vault_path(&row, path))?,
+                Some(file) if file.path != *path => super::vault::refuse_occupied(
+                    &paths.home,
+                    &vault_path(&row, &file.path),
+                    &vault_path(&row, path),
+                )?,
+                Some(_) => {}
             }
         }
 

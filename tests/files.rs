@@ -2005,3 +2005,58 @@ fn a_dangling_symlink_makes_a_document_path_taken() {
     );
     assert_eq!(fs::read_link(&folder).unwrap(), Path::new("nowhere"));
 }
+
+/// Whether the vault's filesystem treats names that differ only in case as
+/// one (macOS), or not (Linux).
+fn folds_case(root: &Path) -> bool {
+    let probe = root.join("vault/case-probe");
+    let _ = fs::write(&probe, "");
+    let folds = root.join("vault/CASE-PROBE").exists();
+    let _ = fs::remove_file(probe);
+    folds
+}
+
+#[test]
+fn case_only_restores_need_the_same_file() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .rename_file(&actor(), "JD-1", "notes", "Notes", None)
+        .unwrap();
+    if folds_case(dir.path()) {
+        // One file under both spellings: the restores bring `notes` back.
+        let folder = store
+            .restore_version(&actor(), "JD-1", 3, None, None)
+            .unwrap();
+        assert_eq!(folder.revision, 5);
+        let names: Vec<String> = store
+            .list_files("JD-1", None)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.file)
+            .collect();
+        assert!(names.contains(&"notes".to_owned()), "{names:?}");
+        return;
+    }
+    let planted = "joedocs/plans/Roadmap/notes.md";
+    fs::write(dir.path().join("vault").join(planted), "mine\n").unwrap();
+    assert_refused_keeping(dir.path(), planted, || {
+        store.restore_version(&actor(), "JD-1", 3, None, None)
+    })
+    .unwrap();
+    assert_refused_keeping(dir.path(), planted, || {
+        store.restore_file(&actor(), "JD-1", "notes", 3)
+    })
+    .unwrap();
+    // Without the unknown file, both restores rename `Notes` back.
+    fs::remove_file(dir.path().join("vault").join(planted)).unwrap();
+    store.restore_file(&actor(), "JD-1", "notes", 3).unwrap();
+    assert!(read(dir.path(), "joedocs/plans/Roadmap/notes.md").ends_with("---\nnotes\n"));
+    assert!(
+        !dir.path()
+            .join("vault/joedocs/plans/Roadmap/Notes.md")
+            .exists()
+    );
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
