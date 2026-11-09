@@ -1663,3 +1663,100 @@ fn one_file_is_restored_as_it_was_even_after_archiving_or_renaming() {
     assert_eq!(store.check().unwrap().problems(), 0);
     assert_rebuilds_identically(dir.path(), &mut store).unwrap();
 }
+
+// --- JD-14: the main file and other files never collide (MAJ-01) -------------
+
+#[test]
+fn renaming_onto_a_files_name_takes_the_id_folder_and_keeps_every_file() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .create_file(&actor(), &new_file("backlog/notes", "nested\n", None))
+        .unwrap();
+    let renamed = store.rename(&actor(), "JD-1", "notes", None).unwrap();
+    assert_eq!(renamed.path, "joedocs/plans/notes (JD-1)/notes (JD-1).md");
+    let folder = "joedocs/plans/notes (JD-1)";
+    assert!(read(dir.path(), &format!("{folder}/notes.md")).ends_with("---\nnotes\n"));
+    assert!(read(dir.path(), &format!("{folder}/backlog/notes.md")).ends_with("---\nnested\n"));
+    assert!(read(dir.path(), &renamed.path).ends_with("---\n# Roadmap\n"));
+    let upper = store.rename(&actor(), "JD-1", "NOTES", None).unwrap();
+    assert_eq!(upper.path, "joedocs/plans/NOTES (JD-1)/NOTES (JD-1).md");
+    assert!(read(dir.path(), "joedocs/plans/NOTES (JD-1)/notes.md").ends_with("---\nnotes\n"));
+    assert_eq!(store.check().unwrap().problems(), 0);
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
+
+#[test]
+fn a_rename_with_no_free_name_is_refused_and_changes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .create_file(&actor(), &new_file("notes (JD-1)", "x\n", None))
+        .unwrap();
+    let before = snapshot(dir.path()).unwrap();
+    let tree = vault_tree(dir.path());
+    let err = store.rename(&actor(), "JD-1", "Notes", None).unwrap_err();
+    assert!(matches!(err, Error::AlreadyExists(_)), "{err}");
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+    assert_eq!(vault_tree(dir.path()), tree);
+}
+
+#[test]
+fn unarchive_never_picks_a_folder_named_like_a_returning_file() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .create_file(&actor(), &new_file("Roadmap (JD-1)", "x\n", None))
+        .unwrap();
+    store.archive(&actor(), "JD-1", "done").unwrap();
+    // Another document takes the folder name.
+    backlog_named(&mut store, "Roadmap").unwrap();
+    let before = snapshot(dir.path()).unwrap();
+    let err = store.unarchive(&actor(), "JD-1").unwrap_err();
+    assert!(matches!(err, Error::AlreadyExists(_)), "{err}");
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+}
+
+/// A multi-file document titled `title` in `joedocs/plans`.
+fn backlog_named(store: &mut Store, title: &str) -> TestResult<()> {
+    store.create(
+        &actor(),
+        NewDocument {
+            project: "joedocs".into(),
+            doc_type: Some("plans".into()),
+            title: title.into(),
+            content: "x\n".into(),
+            multifile: true,
+            ..NewDocument::default()
+        },
+    )?;
+    Ok(())
+}
+
+#[test]
+fn restores_refuse_a_file_named_like_the_current_main_file() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    store
+        .rename_file(&actor(), "JD-1", "notes", "n2", None)
+        .unwrap();
+    let renamed = store.rename(&actor(), "JD-1", "notes", None).unwrap();
+    assert_eq!(renamed.path, "joedocs/plans/notes/notes.md");
+    let before = snapshot(dir.path()).unwrap();
+    let tree = vault_tree(dir.path());
+    let folder = store
+        .restore_version(&actor(), "JD-1", 3, None, None)
+        .unwrap_err();
+    assert!(matches!(folder, Error::AlreadyExists(_)), "{folder}");
+    let one = store
+        .restore_file(&actor(), "JD-1", "notes", 3)
+        .unwrap_err();
+    assert!(matches!(one, Error::AlreadyExists(_)), "{one}");
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+    assert_eq!(vault_tree(dir.path()), tree);
+    assert!(read(dir.path(), "joedocs/plans/notes/notes.md").ends_with("---\n# Roadmap\n"));
+}

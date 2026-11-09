@@ -82,16 +82,8 @@ impl Store {
         let parsed = front_matter::parse(&text).map_err(|_| integrity(&row))?;
         let extra = front_matter::extras(&parsed.fields);
 
-        row.path = choose_path(
-            &tx,
-            &paths.home,
-            &row.project,
-            &row.doc_type,
-            &row.title,
-            &row.id,
-            None,
-            row.multifile,
-        )?;
+        let (path, files) = place(&tx, &paths.home, history.as_ref(), &row, &before)?;
+        row.path = path;
         row.revision += 1;
         row.main_revision = row.revision;
         row.updated_at = now;
@@ -101,11 +93,6 @@ impl Store {
         row.archived_by = None;
         row.archive_reason = None;
         let path = row.path.clone();
-        let files = if row.multifile {
-            super::folders::files_then(&tx, history.as_ref(), &row, &before)?
-        } else {
-            std::collections::BTreeMap::new()
-        };
         let (row, fields, journal) = write_revision(
             &tx,
             &paths.home,
@@ -154,4 +141,38 @@ impl Store {
         index_file::refresh_document(conn, &paths.home, settings, &row);
         Ok(changed)
     }
+}
+
+/// Where an archived document comes back (as `choose_path` picks it, never
+/// a folder named like one of its returning files), and, for a multi-file
+/// document, the files that come back with it.
+fn place(
+    tx: &crate::db::Connection,
+    home: &std::path::Path,
+    history: &dyn crate::history::History,
+    row: &crate::db::DocumentRow,
+    before: &crate::db::RevisionRow,
+) -> Result<(String, super::folders::FilesThen), Error> {
+    let files = if row.multifile {
+        super::folders::files_then(tx, history, row, before)?
+    } else {
+        std::collections::BTreeMap::new()
+    };
+    let own = super::documents::top_level_stems(files.values().map(|(p, _)| p.as_str()));
+    let layout = if row.multifile {
+        super::documents::Layout::Folder(&own)
+    } else {
+        super::documents::Layout::Single
+    };
+    let path = choose_path(
+        tx,
+        home,
+        &row.project,
+        &row.doc_type,
+        &row.title,
+        &row.id,
+        None,
+        &layout,
+    )?;
+    Ok((path, files))
 }

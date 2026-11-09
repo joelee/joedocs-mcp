@@ -369,7 +369,11 @@ impl Store {
             &title,
             &id,
             None,
-            request.multifile,
+            &if request.multifile {
+                Layout::Folder(&[])
+            } else {
+                Layout::Single
+            },
         )?;
         let row = DocumentRow {
             id: id.clone(),
@@ -772,6 +776,17 @@ impl Store {
         let old_title = std::mem::replace(&mut row.title, draft.title);
         let old_type = std::mem::replace(&mut row.doc_type, draft.doc_type);
         if row.title != old_title || row.doc_type != old_type {
+            let own = if row.multifile {
+                let live = db::live_files(&tx, &row.id)?;
+                top_level_stems(live.iter().map(|f| f.path.as_str()))
+            } else {
+                Vec::new()
+            };
+            let layout = if row.multifile {
+                Layout::Folder(&own)
+            } else {
+                Layout::Single
+            };
             row.path = choose_path(
                 &tx,
                 &paths.home,
@@ -780,7 +795,7 @@ impl Store {
                 &row.title,
                 &row.id,
                 Some(&old_path),
-                row.multifile,
+                &layout,
             )?;
         }
         row.status = draft.status;
@@ -1139,6 +1154,10 @@ pub(super) fn read_verified(home: &Path, row: &DocumentRow) -> Result<String, Er
 /// `<project>/<type>/<stem>/<stem>.md` or `<stem> (<id>)/<stem> (<id>).md`,
 /// and a folder named `INDEX` (in any case) always takes the second, since
 /// its main file would be the folder's generated `INDEX.md`.
+///
+/// A folder whose name equals, ignoring case, one of the document's own
+/// top-level files (`Layout::Folder`) is taken too: its main file would be
+/// that file's path.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct part of the path"
@@ -1151,13 +1170,17 @@ pub(super) fn choose_path(
     title: &str,
     id: &str,
     current: Option<&str>,
-    multifile: bool,
+    layout: &Layout<'_>,
 ) -> Result<String, Error> {
+    let multifile = matches!(layout, Layout::Folder(_));
     let stem = file_stem(title);
     let stems = [stem.clone(), format!("{stem} ({id})")];
     for (index, stem) in stems.iter().enumerate() {
-        let candidate = if multifile {
+        let candidate = if let Layout::Folder(own) = layout {
             if index == 0 && stem.eq_ignore_ascii_case(crate::document::INDEX_STEM) {
+                continue;
+            }
+            if own.contains(&stem.to_lowercase()) {
                 continue;
             }
             format!("{project}/{doc_type}/{stem}/{stem}.md")
@@ -1177,6 +1200,26 @@ pub(super) fn choose_path(
     Err(Error::AlreadyExists(format!(
         "a file for \"{title}\" in {project}/{doc_type}"
     )))
+}
+
+/// Where a document's main file goes, for [`choose_path`].
+pub(super) enum Layout<'a> {
+    /// `<project>/<type>/<stem>.md`.
+    Single,
+    /// `<project>/<type>/<stem>/<stem>.md`, with the case-folded names of
+    /// the document's own top-level files, which the folder name must not
+    /// equal.
+    Folder(&'a [String]),
+}
+
+/// The case-folded names of the top-level files among `paths` (paths inside
+/// a document folder, without `.md`).
+pub(super) fn top_level_stems<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|path| !path.contains('/'))
+        .map(str::to_lowercase)
+        .collect()
 }
 
 pub(super) fn check_member(

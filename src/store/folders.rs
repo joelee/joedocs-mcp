@@ -201,6 +201,9 @@ fn archive_row(
     Ok(())
 }
 
+/// Sub-files as they were at a revision: case-folded path → (path, draft).
+pub(super) type FilesThen = BTreeMap<String, (String, FileDraft)>;
+
 /// The sub-files of `row` as they were at revision `at` (whose main file
 /// was at `at.path`), read from the history: case-folded path → (path,
 /// draft).
@@ -209,7 +212,7 @@ pub(super) fn files_then(
     history: &dyn History,
     row: &DocumentRow,
     at: &RevisionRow,
-) -> Result<BTreeMap<String, (String, FileDraft)>, Error> {
+) -> Result<FilesThen, Error> {
     let changes = db::revision_files(conn, &row.id)?;
     let then = folder_of(&at.path);
     let mut files = BTreeMap::new();
@@ -443,6 +446,12 @@ impl Store {
         let (status, extra, body) =
             restored_main(history.as_ref(), &row, &then, &current, settings)?;
         let mut wanted = files_then(&tx, history.as_ref(), &row, &then)?;
+        if let Some((path, _)) = wanted.get(&main_stem(&row).to_lowercase()) {
+            return Err(Error::AlreadyExists(format!(
+                "file {path} in {}: it is named like the main file; rename the document first",
+                row.id
+            )));
+        }
 
         let main_path = row.path.clone();
         row.status = status;

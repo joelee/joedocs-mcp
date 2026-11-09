@@ -8,14 +8,14 @@ use std::fmt::Write as _;
 use rusqlite::Transaction;
 
 use super::documents::{
-    Action, Change, Changed, FILE_TRAILER, FileTouch, choose_path, finish, integrity, live_row,
-    main_touch, parse_id, read_verified, revision_with_content, write_revision,
+    Action, Change, Changed, FILE_TRAILER, FileTouch, Layout, choose_path, finish, integrity,
+    live_row, main_touch, parse_id, read_verified, revision_with_content, write_revision,
 };
 use super::file_changes::{
     FileDraft, bump, new_row, parse_path, remove_empty_dirs, render, require_multifile, save,
     verify_all,
 };
-use super::files::{files_at, read_verified_file, vault_path};
+use super::files::{files_at, main_stem, read_verified_file, vault_path};
 use super::folders::clean_after_move;
 use super::journal::Journal;
 use super::{Actor, Error, Store, begin_write, index_file};
@@ -90,7 +90,7 @@ impl Store {
             &row.title,
             &row.id,
             None,
-            true,
+            &Layout::Folder(&[]),
         )?;
         row.multifile = true;
         row.revision += 1;
@@ -369,7 +369,10 @@ fn plan_restore(
 ) -> Result<RestorePlan, Error> {
     let then = revision_with_content(conn, row, version, "version")?;
     let changes = db::revision_files(conn, &row.id)?;
-    let path = parse_path(row, file, "file")?;
+    // `file` is the path at `version`, which may be the main file's name
+    // today; that collision is refused below, with `already_exists`.
+    let path = crate::document::FilePath::parse(file, "")
+        .map_err(|message| Error::invalid("file", message))?;
     let (path_then, _) = files_at(&changes, version)
         .files
         .remove(&path.key())
@@ -378,6 +381,12 @@ fn plan_restore(
             file: path.as_str(),
             at: format!(" at revision {version}"),
         })?;
+    if !path_then.contains('/') && path_then.to_lowercase() == main_stem(row).to_lowercase() {
+        return Err(Error::AlreadyExists(format!(
+            "file {path_then} in {}: it is named like the main file; rename the document first",
+            row.id
+        )));
+    }
     let live = db::live_files(conn, &row.id)?;
     verify_all(home, row, &live)?;
     let draft = draft_then(history, row, &then, &path_then)?;
