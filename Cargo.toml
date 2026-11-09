@@ -33,7 +33,7 @@ hmac = { version = "0.13.0", default-features = false }
 indexmap = { version = "2.14.2", default-features = false, features = ["std", "serde"] }
 jiff = { version = "0.2.39", default-features = false, features = ["std"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
-rmcp = { version = "3.8.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "fallible_uint"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10.3"
@@ -54,7 +54,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 [dev-dependencies]
 assert_cmd = "2.2.2"
 predicates = "3.1.4"
-rmcp = { version = "3.8.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3.9.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
 tempfile = "3.27.0"
 
 # Lint levels live here, not in source attributes. They are warnings so local
