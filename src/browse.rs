@@ -1,4 +1,5 @@
-//! The admin commands that view and find documents (`list`, `search`): from their
+//! The admin commands that view and find documents (`list`, `search`,
+//! `history`, `diff`): from their
 //! arguments to store requests, the JSON replies the admin API sends, and
 //! the tables the command line prints.
 //!
@@ -13,8 +14,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::Error;
-use crate::cli::{DEFAULT_SEARCH_LIMIT, ListArgs, SearchArgs};
-use crate::mcp::tools::{DocumentOut, ListDocumentsOut, SearchDocumentsOut, SearchHitOut};
+use crate::cli::{DEFAULT_SEARCH_LIMIT, DiffArgs, HistoryArgs, ListArgs, SearchArgs};
+use crate::mcp::tools::{
+    DiffOut, DocumentOut, HistoryOut, ListDocumentsOut, RevisionOut, SearchDocumentsOut,
+    SearchHitOut,
+};
 use crate::store::{self, ListRequest, SearchRequest, Store};
 
 /// `joedocs list`: one page of a project's live documents, as the
@@ -162,6 +166,49 @@ pub fn search(store: &Store, spec: &SearchSpec) -> Result<Value, Error> {
     })
 }
 
+/// `joedocs history`: one page of a document's revisions, or of one file's,
+/// as the `get_document_history` result.
+///
+/// # Errors
+///
+/// Returns [`Error::Store`] for an unknown or archived document or file, a
+/// bad start or limit, and database errors.
+pub fn history(store: &Store, args: &HistoryArgs) -> Result<Value, Error> {
+    let page = match &args.part {
+        Some(file) => store.history_file(&args.document_id, file, args.start, args.limit)?,
+        None => store.history(&args.document_id, args.start, args.limit)?,
+    };
+    to_json(&HistoryOut {
+        document: page.document.into(),
+        revisions: page.revisions.into_iter().map(RevisionOut::from).collect(),
+        total: page.total,
+        next_start: page.next_start,
+    })
+}
+
+/// `joedocs diff`: the `diff_document` result.
+///
+/// # Errors
+///
+/// Returns [`Error::Store`] for an unknown or archived document or file, a
+/// revision that does not exist, a bad context, and storage errors.
+pub fn diff(store: &Store, args: &DiffArgs) -> Result<Value, Error> {
+    let id = &args.document_id;
+    let multifile = store.document_info(id)?.multifile;
+    let diff = match &args.part {
+        Some(file) => store.diff_file(id, file, args.from, args.to, args.context)?,
+        None => store.diff(id, args.from, args.to, args.context)?,
+    };
+    to_json(&DiffOut {
+        document_id: diff.id,
+        from: diff.from,
+        to: diff.to,
+        changed: !diff.diff.is_empty(),
+        diff: diff.diff,
+        files: multifile.then_some(diff.files),
+    })
+}
+
 fn to_json(reply: &impl serde::Serialize) -> Result<Value, Error> {
     serde_json::to_value(reply).map_err(|e| Error::Output(std::io::Error::other(e)))
 }
@@ -171,6 +218,21 @@ fn to_json(reply: &impl serde::Serialize) -> Result<Value, Error> {
 #[must_use]
 pub fn is_page(reply: &Value) -> bool {
     reply["items"].is_array() && reply["total"].is_u64()
+}
+
+/// Whether `reply` has the shape of a `history` reply.
+#[must_use]
+pub fn is_history(reply: &Value) -> bool {
+    reply["revisions"].is_array() && reply["total"].is_u64() && reply["document"].is_object()
+}
+
+/// Whether `reply` has the shape of a `diff` reply.
+#[must_use]
+pub fn is_diff(reply: &Value) -> bool {
+    reply["diff"].is_string()
+        && reply["changed"].is_boolean()
+        && reply["from"].is_u64()
+        && reply["to"].is_u64()
 }
 
 /// Prints `reply`, as pretty JSON when `json`, otherwise as `render` does.
@@ -274,6 +336,58 @@ pub fn render_search(reply: &Value, out: &mut dyn Write) -> Result<(), Error> {
         }
     }
     write_paging(reply, items.len(), out)
+}
+
+/// Writes a `history` reply as a table, then the paging line.
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails.
+pub fn render_history(reply: &Value, out: &mut dyn Write) -> Result<(), Error> {
+    let revisions = reply["revisions"].as_array().map_or(&[][..], Vec::as_slice);
+    let rows: Vec<Vec<String>> = revisions
+        .iter()
+        .map(|rev| {
+            vec![
+                number(rev, "revision"),
+                text(rev, "at"),
+                text(rev, "action"),
+                text(rev, "author"),
+                text(rev, "client"),
+                text(rev, "summary"),
+            ]
+        })
+        .collect();
+    crate::admin::write_table(
+        out,
+        &["REV", "TIME", "ACTION", "AUTHOR", "CLIENT", "SUMMARY"],
+        &rows,
+    )?;
+    write_paging(reply, revisions.len(), out)
+}
+
+/// Writes a `diff` reply: the unified diff as it is, or a line saying
+/// nothing changed.
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails.
+pub fn render_diff(reply: &Value, out: &mut dyn Write) -> Result<(), Error> {
+    let diff = reply["diff"].as_str().unwrap_or_default();
+    if diff.is_empty() {
+        writeln!(
+            out,
+            "No changes between revisions {} and {}.",
+            number(reply, "from"),
+            number(reply, "to")
+        )?;
+    } else {
+        out.write_all(diff.as_bytes())?;
+        if !diff.ends_with('\n') {
+            writeln!(out)?;
+        }
+    }
+    Ok(())
 }
 
 fn items(reply: &Value) -> &[Value] {
@@ -458,6 +572,46 @@ mod tests {
         let mut out = Vec::new();
         render_search(&json!({"items": [], "total": 0}), &mut out).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "No matches.\n");
+    }
+
+    #[test]
+    fn history_and_diff_replies_render() {
+        let reply = json!({
+            "document": {"id": "P-1"},
+            "revisions": [
+                {"revision": 2, "at": "2026-11-10T00:00:00Z", "action": "edit",
+                 "author": "laptop", "client": "cli", "summary": "Fix\ttypo"},
+                {"revision": 1, "at": "2026-11-09T00:00:00Z", "action": "create",
+                 "author": "laptop", "client": "cli", "summary": "Create P-1"},
+            ],
+            "total": 3,
+            "next_start": 3,
+        });
+        let mut out = Vec::new();
+        render_history(&reply, &mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "REV  TIME                  ACTION  AUTHOR  CLIENT  SUMMARY\n\
+             2    2026-11-10T00:00:00Z  edit    laptop  cli     Fix\\ttypo\n\
+             1    2026-11-09T00:00:00Z  create  laptop  cli     Create P-1\n\
+             Showing 1-2 of 3; next page: --start 3\n"
+        );
+        assert!(is_history(&reply));
+        assert!(!is_history(&json!({"revisions": [], "total": 0})));
+
+        let mut out = Vec::new();
+        let diff = json!({"from": 1, "to": 2, "changed": true, "diff": "-a\n+b"});
+        render_diff(&diff, &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "-a\n+b\n");
+        let mut out = Vec::new();
+        let same = json!({"from": 2, "to": 2, "changed": false, "diff": ""});
+        render_diff(&same, &mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "No changes between revisions 2 and 2.\n"
+        );
+        assert!(is_diff(&diff) && is_diff(&same));
+        assert!(!is_diff(&json!({"diff": "x"})));
     }
 
     #[test]

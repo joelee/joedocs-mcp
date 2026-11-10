@@ -666,3 +666,61 @@ async fn the_search_route_takes_a_json_body_and_is_audited() -> TestResult<()> {
     );
     server.stop().await
 }
+
+#[tokio::test]
+async fn history_and_diff_routes_check_their_arguments_and_are_audited() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    for (path, status, needle) in [
+        ("/admin/v1/documents/JD-1/history", 404, "does not exist"),
+        (
+            "/admin/v1/documents/JD-1/history?limit=x",
+            400,
+            "`limit` must be a number",
+        ),
+        ("/admin/v1/documents/JD-1/diff", 400, "`from` is required"),
+        (
+            "/admin/v1/documents/JD-1/diff?from=1&context=99999999999",
+            400,
+            "`context` cannot be",
+        ),
+        (
+            "/admin/v1/documents/JD-1/diff?from=1",
+            404,
+            "does not exist",
+        ),
+    ] {
+        let reply = server.send("GET", path, &auth, "").await?;
+        assert_eq!(reply.status, status, "{path}: {:?}", reply.json);
+        assert!(
+            reply.json["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains(needle),
+            "{path}: {:?}",
+            reply.json
+        );
+    }
+    let audit = server.audit()?;
+    assert_eq!(
+        audit[audit.len() - 5..],
+        [
+            ("admin:documents.history".to_owned(), "not_found".to_owned()),
+            (
+                "admin:documents.history".to_owned(),
+                "invalid_argument".to_owned()
+            ),
+            (
+                "admin:documents.diff".to_owned(),
+                "invalid_argument".to_owned()
+            ),
+            (
+                "admin:documents.diff".to_owned(),
+                "invalid_argument".to_owned()
+            ),
+            ("admin:documents.diff".to_owned(), "not_found".to_owned()),
+        ]
+    );
+    server.stop().await
+}

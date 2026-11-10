@@ -275,17 +275,42 @@ pub fn execute(
                 local_get(&open_store(loaded, ctx)?, &request, file, out)?;
             }
         }
+        command @ (Command::List(_)
+        | Command::Search(_)
+        | Command::History(_)
+        | Command::Diff(_)) => local_browse(command, loaded, ctx, out)?,
+    }
+    Ok(())
+}
+
+/// The commands that view and find documents, on the local store.
+fn local_browse(
+    command: &Command,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let store = open_store(loaded, ctx)?;
+    match command {
         Command::List(args) => {
-            let reply = browse::list(&open_store(loaded, ctx)?, args)?;
-            browse::print(&reply, args.json, browse::render_list, out)?;
+            let reply = browse::list(&store, args)?;
+            browse::print(&reply, args.json, browse::render_list, out)
         }
         Command::Search(args) => {
             let spec = browse::SearchSpec::from_args(args)?;
-            let reply = browse::search(&open_store(loaded, ctx)?, &spec)?;
-            browse::print(&reply, args.json, browse::render_search, out)?;
+            let reply = browse::search(&store, &spec)?;
+            browse::print(&reply, args.json, browse::render_search, out)
         }
+        Command::History(args) => {
+            let reply = browse::history(&store, args)?;
+            browse::print(&reply, args.json, browse::render_history, out)
+        }
+        Command::Diff(args) => {
+            let reply = browse::diff(&store, args)?;
+            browse::print(&reply, args.json, browse::render_diff, out)
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Runs `cli` against the admin API of `client.server`, or returns `None`
@@ -558,9 +583,11 @@ fn remote_admin(
             let spec = browse::SearchSpec::from_args(args)?;
             let body =
                 serde_json::to_value(&spec).map_err(|e| Error::Output(io::Error::other(e)))?;
-            let reply = remote_page(remote, "search", Some(&body), "search", "search result")?;
+            let reply = remote_page(remote, "search", Some(&body), "search", browse::is_page)?;
             browse::print(&reply, args.json, browse::render_search, out)
         }
+        Command::History(args) => remote_history(remote, args, out),
+        Command::Diff(args) => remote_diff(remote, args, out),
         // Handled by `run_remote`, or refused by `remote` before it.
         _ => Ok(()),
     }
@@ -598,20 +625,62 @@ fn remote_list(
             ("limit", Some(&limit)),
         ],
     );
-    let reply = remote_page(remote, &path, None, "list", "document list")?;
+    let reply = remote_page(remote, &path, None, "list", browse::is_page)?;
     browse::print(&reply, args.json, browse::render_list, out)
 }
 
-/// Calls one of the routes added in 0.4.2 and checks that the reply is a
-/// page. A server without the route (an older `JoeDocs`) gets a message that
-/// says to upgrade it.
+/// `joedocs history` through the admin API.
+fn remote_history(
+    remote: &client::Remote<'_>,
+    args: &cli::HistoryArgs,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let (start, limit) = (args.start.to_string(), args.limit.to_string());
+    let path = with_query(
+        &format!("documents/{}/history", percent_encode(&args.document_id)),
+        &[
+            ("file", args.part.as_deref()),
+            ("start", Some(&start)),
+            ("limit", Some(&limit)),
+        ],
+    );
+    let reply = remote_page(remote, &path, None, "history", browse::is_history)?;
+    browse::print(&reply, args.json, browse::render_history, out)
+}
+
+/// `joedocs diff` through the admin API.
+fn remote_diff(
+    remote: &client::Remote<'_>,
+    args: &cli::DiffArgs,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let from = args.from.to_string();
+    let to = args.to.map(|to| to.to_string());
+    let context = args.context.to_string();
+    let path = with_query(
+        &format!("documents/{}/diff", percent_encode(&args.document_id)),
+        &[
+            ("from", Some(&from)),
+            ("to", to.as_deref()),
+            ("context", Some(&context)),
+            ("file", args.part.as_deref()),
+        ],
+    );
+    let reply = remote_page(remote, &path, None, "diff", browse::is_diff)?;
+    browse::print(&reply, args.json, browse::render_diff, out)
+}
+
+/// Calls one of the routes added in 0.4.2 and checks the reply with
+/// `expected`. A server without the route (an older `JoeDocs`) gets a
+/// message that says to upgrade it.
 fn remote_page(
     remote: &client::Remote<'_>,
     path: &str,
     body: Option<&serde_json::Value>,
     command: &str,
-    what: &str,
+    expected: fn(&serde_json::Value) -> bool,
 ) -> Result<serde_json::Value, Error> {
+    let what = format!("`{command}` reply");
     let method = if body.is_some() {
         reqwest::Method::POST
     } else {
@@ -620,8 +689,8 @@ fn remote_page(
     let reply = remote
         .call(&method, path, body)
         .map_err(|e| newer_route(e, remote.server(), command))?;
-    let page: serde_json::Value = remote.parse(&reply, what)?;
-    if !browse::is_page(&page) {
+    let page: serde_json::Value = remote.parse(&reply, &what)?;
+    if !expected(&page) {
         return Err(client::Error::Protocol(format!(
             "{} sent something that is not a JoeDocs {what}; is client.server the JoeDocs server?",
             remote.server()

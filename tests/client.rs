@@ -16,9 +16,10 @@ use secrecy::ExposeSecret as _;
 use tempfile::TempDir;
 
 /// Fills a store: project `joedocs`, JD-1 at revision 2, JD-2 archived,
-/// and an API key `laptop`.
+/// JD-3 a multi-file `notes` document with the file `notes/a b&c`, and an
+/// API key `laptop`.
 fn seed(store: &mut Store) -> Result<(), Box<dyn std::error::Error>> {
-    use joedocs::store::{Actor, NewDocument};
+    use joedocs::store::{Actor, NewDocument, NewFile};
     let actor = Actor::new("laptop", "test");
     store.add_project("joedocs", "JD", Some("JoeDocs"))?;
     for title in ["Plan", "Old"] {
@@ -34,6 +35,26 @@ fn seed(store: &mut Store) -> Result<(), Box<dyn std::error::Error>> {
     }
     store.append(&actor, "JD-1", "second\n", Some(1), None)?;
     store.archive(&actor, "JD-2", "done")?;
+    store.create(
+        &actor,
+        NewDocument {
+            project: "joedocs".into(),
+            title: "Book".into(),
+            doc_type: Some("notes".into()),
+            content: "contents\n".into(),
+            multifile: true,
+            ..NewDocument::default()
+        },
+    )?;
+    store.create_file(
+        &actor,
+        &NewFile {
+            document_id: "JD-3".into(),
+            file: "notes/a b&c".into(),
+            content: "one\n".into(),
+            ..NewFile::default()
+        },
+    )?;
     store.create_key(
         "laptop",
         &["joedocs:write".parse()?],
@@ -543,6 +564,20 @@ fn parity_steps() -> Vec<Vec<&'static str>> {
         vec!["search", "-p", "nope"],
         vec!["search", "-t", "nope"],
         vec!["search", "\"unclosed"],
+        vec!["history", "JD-1"],
+        vec!["history", "JD-1", "-n", "1"],
+        vec!["history", "JD-1", "--json"],
+        vec!["history", "JD-99"],
+        vec!["history", "JD-2"],
+        vec!["history", "JD-3", "-P", "notes/a b&c"],
+        vec!["history", "JD-3", "-P", "nope"],
+        vec!["diff", "JD-1", "--from", "1"],
+        vec!["diff", "JD-1", "--from", "1", "-j"],
+        vec!["diff", "JD-1", "--from", "2", "--to", "2"],
+        vec!["diff", "JD-1", "--from", "9"],
+        vec!["diff", "JD-1", "--from", "1", "--context", "500"],
+        vec!["diff", "JD-3", "--from", "1"],
+        vec!["diff", "JD-3", "--from", "2", "-P", "notes/a b&c", "-j"],
         vec!["get", "JD-1"],
         vec!["get", "JD-1", "--version", "1"],
         vec!["get", "JD-1", "--content-only"],
@@ -685,7 +720,7 @@ fn a_remote_backup_downloads_privately_and_restores() {
         .args(["backup", file.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Backed up 1 document"));
+        .stdout(predicate::str::contains("Backed up 2 documents"));
     assert_eq!(mode(&file), 0o600);
     server
         .cmd()
@@ -985,6 +1020,8 @@ fn malformed_success_replies_fail_without_writing() {
             vec!["list", "-p", "joedocs"],
             vec!["list", "-p", "joedocs", "--json"],
             vec!["search", "x"],
+            vec!["history", "JD-1"],
+            vec!["diff", "JD-1", "--from", "1"],
         ] {
             client_cmd(dir.path(), &url)
                 .args(&args)

@@ -156,6 +156,10 @@ pub enum Command {
     List(ListArgs),
     /// Search documents by text and front matter, in every project or one.
     Search(SearchArgs),
+    /// List a document's revisions, newest first.
+    History(HistoryArgs),
+    /// Show what changed in a document between two revisions.
+    Diff(DiffArgs),
 }
 
 /// Order of `joedocs list`.
@@ -283,6 +287,51 @@ pub struct SearchArgs {
 /// `joedocs search --limit` when none is given, as `search_documents`.
 pub const DEFAULT_SEARCH_LIMIT: u64 = 20;
 
+/// Arguments of `joedocs history`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct HistoryArgs {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Only the revisions that changed this file of a multi-file document
+    /// (its path in the folder), following its renames.
+    #[arg(short = 'P', long, value_name = "FILE")]
+    pub part: Option<String>,
+    /// 1-based position of the first revision (see the paging line).
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub start: u64,
+    /// Most revisions to show (1 to 1000).
+    #[arg(short = 'n', long, default_value_t = DEFAULT_HISTORY_LIMIT, value_name = "N")]
+    pub limit: u64,
+    /// Print JSON (as the admin API returns it) instead of a table.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
+/// `joedocs history --limit` when none is given, as `get_document_history`.
+pub const DEFAULT_HISTORY_LIMIT: u64 = 50;
+
+/// Arguments of `joedocs diff`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct DiffArgs {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// The older revision.
+    #[arg(long, value_name = "N")]
+    pub from: u64,
+    /// The newer revision (default: the latest).
+    #[arg(long, value_name = "N")]
+    pub to: Option<u64>,
+    /// Unchanged lines around each change (0 to 100).
+    #[arg(long, default_value_t = 3, value_name = "N")]
+    pub context: u32,
+    /// Only this file of a multi-file document (its path at `--to`).
+    #[arg(short = 'P', long, value_name = "FILE")]
+    pub part: Option<String>,
+    /// Print JSON (as the admin API returns it) instead of the diff.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
 impl Command {
     /// The command's name, e.g. `login` or `key create`, for logs. It never
     /// includes arguments, which can hold a TOTP code.
@@ -359,6 +408,8 @@ impl Command {
             Self::Get { .. } => "get",
             Self::List(_) => "list",
             Self::Search(_) => "search",
+            Self::History(_) => "history",
+            Self::Diff(_) => "diff",
         }
     }
 }
@@ -663,7 +714,7 @@ mod tests {
             all.extend_from_slice(args);
             Cli::try_parse_from(all).map(|cli| cli.command)
         };
-        let pairs: [(&[&str], &[&str]); 4] = [
+        let pairs: [(&[&str], &[&str]); 6] = [
             (
                 &[
                     "list", "-p", "a", "-t", "plans", "-s", "draft", "-n", "5", "-j",
@@ -713,6 +764,14 @@ mod tests {
                     "--json",
                 ],
             ),
+            (
+                &["history", "JD-1", "-P", "a", "-n", "2", "-j"],
+                &["history", "JD-1", "--part", "a", "--limit", "2", "--json"],
+            ),
+            (
+                &["diff", "JD-1", "--from", "1", "-P", "a", "-j"],
+                &["diff", "JD-1", "--from", "1", "--part", "a", "--json"],
+            ),
         ];
         for (short, long) in pairs {
             assert_eq!(parse(short).unwrap(), parse(long).unwrap(), "{short:?}");
@@ -737,6 +796,17 @@ mod tests {
             (0, 1, DEFAULT_SEARCH_LIMIT, false)
         );
         assert_eq!(Command::Search(args).name(), "search");
+        let Command::History(args) = parse(&["history", "JD-1"]).unwrap() else {
+            panic!("not history");
+        };
+        assert_eq!((args.start, args.limit), (1, DEFAULT_HISTORY_LIMIT));
+        assert_eq!(Command::History(args).name(), "history");
+        let Command::Diff(args) = parse(&["diff", "JD-1", "--from", "2"]).unwrap() else {
+            panic!("not diff");
+        };
+        assert_eq!((args.from, args.to, args.context), (2, None, 3));
+        assert_eq!(Command::Diff(args).name(), "diff");
+        assert!(parse(&["diff", "JD-1"]).is_err(), "--from is required");
     }
 
     #[test]

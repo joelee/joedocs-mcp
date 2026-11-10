@@ -407,6 +407,8 @@ enum Route {
     Reindex,
     DocumentsList,
     Search,
+    History(String),
+    Diff(String),
     Document(String),
     DocumentConvert(String),
     FileMove(String),
@@ -440,6 +442,8 @@ impl Route {
             ["documents"] if get => Self::DocumentsList,
             ["search"] if post => Self::Search,
             ["documents", id] if get => Self::Document((*id).to_owned()),
+            ["documents", id, "history"] if get => Self::History(percent_decode(id)),
+            ["documents", id, "diff"] if get => Self::Diff(percent_decode(id)),
             ["documents", id, "convert"] if post => Self::DocumentConvert((*id).to_owned()),
             ["documents", id, "files", "move"] if post => Self::FileMove((*id).to_owned()),
             ["documents", id, "files", "restore"] if post => Self::FileRestore((*id).to_owned()),
@@ -467,6 +471,8 @@ impl Route {
             Self::Reindex => "admin:reindex",
             Self::DocumentsList => "admin:documents.list",
             Self::Search => "admin:documents.search",
+            Self::History(_) => "admin:documents.history",
+            Self::Diff(_) => "admin:documents.diff",
             Self::Document(_) => "admin:documents.get",
             Self::DocumentConvert(_) => "admin:document.convert",
             Self::FileMove(_) => "admin:document.move_file",
@@ -510,6 +516,8 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         Route::Reindex => reindex(state, call).await,
         Route::DocumentsList => documents_list(state, call, uri).await,
         Route::Search => search(state, call, body).await,
+        Route::History(id) => history(state, call, id, uri).await,
+        Route::Diff(id) => diff(state, call, id, uri).await,
         Route::Document(id) => document(state, call, id, uri).await,
         Route::DocumentConvert(id) => document_command(state, call, id, body, "convert").await,
         Route::FileMove(id) => document_command(state, call, id, body, "move").await,
@@ -795,6 +803,46 @@ async fn search(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
                 )
             })?;
         let reply = crate::browse::search(store, &spec).map_err(|e| from_crate(&e))?;
+        Ok(axum::Json(reply).into_response())
+    })
+    .await
+}
+
+/// `GET /admin/v1/documents/{id}/history`: the `get_document_history`
+/// result.
+async fn history(state: Arc<ApiState>, call: Call, id: String, uri: axum::http::Uri) -> Response {
+    authorized(state, call, move |store, _, _| {
+        let args = crate::cli::HistoryArgs {
+            document_id: id,
+            part: decoded(&uri, "file"),
+            start: number(&uri, "start")?.unwrap_or(1),
+            limit: number(&uri, "limit")?.unwrap_or(crate::cli::DEFAULT_HISTORY_LIMIT),
+            json: false,
+        };
+        let reply = crate::browse::history(store, &args).map_err(|e| from_crate(&e))?;
+        Ok(axum::Json(reply).into_response())
+    })
+    .await
+}
+
+/// `GET /admin/v1/documents/{id}/diff?from=N`: the `diff_document` result.
+async fn diff(state: Arc<ApiState>, call: Call, id: String, uri: axum::http::Uri) -> Response {
+    authorized(state, call, move |store, _, _| {
+        let invalid =
+            |message: String| ApiError::new(StatusCode::BAD_REQUEST, "invalid_argument", message);
+        let context = match number(&uri, "context")? {
+            None => 3,
+            Some(n) => u32::try_from(n).map_err(|_| invalid(format!("`context` cannot be {n}")))?,
+        };
+        let args = crate::cli::DiffArgs {
+            document_id: id,
+            from: number(&uri, "from")?.ok_or_else(|| invalid("`from` is required".into()))?,
+            to: number(&uri, "to")?,
+            context,
+            part: decoded(&uri, "file"),
+            json: false,
+        };
+        let reply = crate::browse::diff(store, &args).map_err(|e| from_crate(&e))?;
         Ok(axum::Json(reply).into_response())
     })
     .await

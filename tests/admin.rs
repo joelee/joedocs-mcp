@@ -627,6 +627,125 @@ fn search_finds_documents_in_every_project() {
     }
 }
 
+/// `browse_store` with P-1 at revision 3: two appends, the second with a
+/// summary holding an escape sequence.
+fn revised_store(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use joedocs::store::Actor;
+    browse_store(root)?;
+    let mut store = library_store(root)?;
+    let actor = Actor::new("laptop", "test");
+    store.append(&actor, "P-1", "second line\n", Some(1), None)?;
+    store.append(
+        &actor,
+        "P-1",
+        "third line\n",
+        Some(2),
+        Some("bad \u{1b}[2J summary"),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn history_lists_revisions_newest_first() {
+    let root = TempDir::new().unwrap();
+    revised_store(root.path()).unwrap();
+
+    let output = cmd(root.path()).args(["history", "P-1"]).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[0].starts_with("REV  TIME                  ACTION  AUTHOR  CLIENT  SUMMARY"),
+        "{text}"
+    );
+    assert!(lines[1].starts_with("3    "), "{text}");
+    assert!(
+        lines[1].contains("append") && lines[1].contains("\\u{1b}[2J"),
+        "{text}"
+    );
+    assert!(
+        lines[3].starts_with("1    ") && lines[3].contains("create"),
+        "{text}"
+    );
+    assert!(!text.contains('\u{1b}'), "{text}");
+    cmd(root.path())
+        .args(["history", "P-1", "-n", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "Showing 1-1 of 3; next page: --start 2\n",
+        ));
+    cmd(root.path())
+        .args(["history", "P-2", "-P", "pages/one"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("create_file"))
+        .stdout(predicate::str::contains("\n1  ").not());
+    let json = cmd(root.path())
+        .args(["history", "P-1", "-j"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["total"], 3);
+    assert_eq!(json["document"]["id"], "P-1");
+    assert_eq!(json["revisions"][2]["action"], "create");
+}
+
+#[test]
+fn diff_shows_what_changed_between_revisions() {
+    let root = TempDir::new().unwrap();
+    revised_store(root.path()).unwrap();
+    cmd(root.path())
+        .args(["diff", "P-1", "--from", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "--- P-1 revision 1\n+++ P-1 revision 3\n",
+        ))
+        .stdout(predicate::str::contains("+second line\n"))
+        .stdout(predicate::str::contains("+third line\n"));
+    cmd(root.path())
+        .args(["diff", "P-1", "--from", "2", "--to", "2"])
+        .assert()
+        .success()
+        .stdout("No changes between revisions 2 and 2.\n");
+    cmd(root.path())
+        .args(["diff", "P-2", "--from", "1", "--context", "0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pages/one"))
+        .stdout(predicate::str::contains("+one"));
+    cmd(root.path())
+        .args(["diff", "P-2", "--from", "2", "-P", "pages/one"])
+        .assert()
+        .success()
+        .stdout("No changes between revisions 2 and 2.\n");
+    let json = cmd(root.path())
+        .args(["diff", "P-1", "--from", "1", "--to", "2", "--json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["changed"], true);
+    assert_eq!(
+        (json["from"].as_u64(), json["to"].as_u64()),
+        (Some(1), Some(2))
+    );
+    for args in [
+        vec!["diff", "P-1", "--from", "9"],
+        vec!["diff", "P-9", "--from", "1"],
+        vec!["history", "P-9"],
+        vec!["history", "P-3"],
+        vec!["diff", "P-1", "--from", "1", "--context", "101"],
+    ] {
+        cmd(root.path()).args(&args).assert().code(65);
+    }
+    cmd(root.path())
+        .args(["diff", "P-1"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--from"));
+}
+
 /// Control characters in stored text are printed as escapes in tables.
 #[test]
 fn list_escapes_control_characters_in_titles() {

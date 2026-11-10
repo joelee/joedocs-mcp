@@ -1236,6 +1236,12 @@ async fn admin_json_matches_the_mcp_results() -> TestResult<()> {
         )
         .await?;
     }
+    ok(
+        &client,
+        "new_document_file",
+        json!({"document_id": "JD-2", "file": "pages/one", "content": "one"}),
+    )
+    .await?;
     for (tool, args, cli) in [
         (
             "list_documents",
@@ -1253,6 +1259,16 @@ async fn admin_json_matches_the_mcp_results() -> TestResult<()> {
             vec![
                 "search", "-p", "joedocs", "-t", "plans", "-s", "draft", "-n", "1", "-j",
             ],
+        ),
+        (
+            "get_document_history",
+            json!({"document_id": "JD-1"}),
+            vec!["history", "JD-1", "-j"],
+        ),
+        (
+            "diff_document",
+            json!({"document_id": "JD-2", "from": 1}),
+            vec!["diff", "JD-2", "--from", "1", "-j"],
         ),
         (
             "list_documents",
