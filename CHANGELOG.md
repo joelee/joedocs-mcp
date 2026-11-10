@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Prebuilt binaries on each GitHub release: Linux x86_64 and aarch64 (static, musl) and macOS Apple silicon, as `joedocs-X.Y.Z-<target>.tar.gz`, with `SHA256SUMS` and a build-provenance attestation for each (`gh attestation verify`). The release workflow builds and checks them before the crates.io publish, so a failed build stops the release.
+
 ### Changed
 
 - Logs are plain (no ANSI colour codes) when stderr is not a terminal, such as the journal or `brew services` logs, or when `NO_COLOR` is set.

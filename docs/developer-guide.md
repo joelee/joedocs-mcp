@@ -103,7 +103,7 @@ Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS`, `GIT
 
 Versions number the command line, the configuration and the MCP tools; the Rust library in the crate is internal. A published version can never be replaced (only yanked), so check before publishing.
 
-Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml). It checks the tag, runs the full CI gate on the tagged commit, waits for approval in the `release` environment, publishes to crates.io with Trusted Publishing (no stored token), asks the Homebrew tap to bump the formula, and creates the GitHub release from the CHANGELOG section.
+Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml). It checks the tag, then runs the full CI gate on the tagged commit and, alongside it, builds the release binaries: Linux x86_64 and aarch64 (static, musl) and macOS Apple silicon. Each is checked (`--version`, and on Linux no shared libraries) and kept as a workflow artifact. The workflow then waits for approval in the `release` environment, publishes to crates.io with Trusted Publishing (no stored token), and asks the Homebrew tap to bump the formula. Last, it creates the GitHub release from the CHANGELOG section, with the three `joedocs-X.Y.Z-<target>.tar.gz` archives, their `SHA256SUMS`, and a build-provenance attestation for each archive. Release builds use no cache.
 
 ### One-time setup
 
@@ -124,10 +124,11 @@ Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/
    ```
 
 3. Run `just ci`, open a pull request, and merge it once CI passes.
-4. Optionally, dry-run the release workflow from `main`. It runs the checks, CI and `cargo publish --dry-run`, and never publishes:
+4. Dry-run the release workflow, from `main` or, before merging, from the pushed release branch. It runs the checks, CI, the binary builds and `cargo publish --dry-run`, and never publishes, releases or attests. Do this whenever the workflow changed:
 
    ```bash
-   gh workflow run release.yml -f dry_run=true
+   gh workflow run release.yml -f dry_run=true                 # from main
+   gh workflow run release.yml --ref <branch> -f dry_run=true  # from a branch
    ```
 
 5. From an up-to-date `main`, sign, check and push the tag:
@@ -139,13 +140,16 @@ Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/
    ```
 
 6. In the Actions tab, open the Release run and approve the `release` deployment once the checks and CI pass.
-7. Check the result: the version on crates.io, the GitHub release, and the tap's `joedocs X.Y.Z` pull request, which merges by itself once the tap's tests pass.
+7. Check the result:
+   - the version on crates.io;
+   - the GitHub release, with the three archives and `SHA256SUMS`, checked with `gh release download vX.Y.Z -p '*' -D /tmp/jd-X.Y.Z && (cd /tmp/jd-X.Y.Z && shasum -a 256 -c SHA256SUMS)` and `gh attestation verify /tmp/jd-X.Y.Z/joedocs-X.Y.Z-<target>.tar.gz -R joelee/joedocs-mcp`;
+   - the tap's `joedocs X.Y.Z` pull request, which merges by itself once the tap's tests pass.
 
 ### When the release fails
 
-- **Before publishing** (a check, CI, or the approval was rejected): nothing was published. Fix the problem on `main`, then move the tag: `git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`, and tag and push again.
+- **Before publishing** (a check, CI, a binary build, or the approval was rejected): nothing was published. Fix the problem on `main`, then move the tag: `git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`, and tag and push again.
 - **After publishing:** the version is on crates.io and cannot be replaced, so never rerun the Publish job: `cargo publish` fails for a version that already exists.
-  - If the GitHub release failed, rerun only the GitHub release job, or create the release by hand (below).
+  - If the GitHub release failed (including its checksums or attestations), rerun only the GitHub release job: it takes the binaries from the run's artifacts. Creating the release by hand (below) leaves out the binaries.
   - If the Homebrew dispatch failed, the tap's daily check bumps the formula by itself; to bump it now, run `gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z`.
   - Fix anything else forward with a new patch version.
 
@@ -163,4 +167,4 @@ gh release create vX.Y.Z --title "JoeDocs X.Y.Z" \
 gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z
 ```
 
-Pushing the tag also starts the release workflow; reject its `release` deployment, since the crate is already published.
+Pushing the tag also starts the release workflow; reject its `release` deployment, since the crate is already published. A release made by hand has no binaries.
