@@ -1135,7 +1135,8 @@ mod tests {
             out.starts_with("# Effective configuration for my-app"),
             "{out}"
         );
-        assert!(out.contains("# MY_APP_API_TOKEN: unset"), "{out}");
+        assert!(out.contains("# MY_APP_ADMIN_TOKEN: unset"), "{out}");
+        assert!(!out.contains("API_TOKEN"), "{out}");
 
         let fs = MemFs::new().with("/etc/my-app/config.toml", "");
         let out = run(&["app", "config", "paths"], &env, &fs).unwrap();

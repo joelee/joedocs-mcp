@@ -13,6 +13,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `joedocs get -f PATH` and `get --archive OUT.tgz`, locally and remotely, name the path they could not write: `cannot write missing/out.md: No such file or directory`, where they said `cannot write output`. The exit code is still `74` (issue JD-27).
 
+### Removed
+
+- `JOEDOCS_API_TOKEN`, the template's example secret, which JoeDocs never used; `config show` no longer lists it.
+
 ## [0.4.2] - 2026-11-10
 
 Admin commands to view and find documents and read the audit log, locally and through JSON admin API routes that the 0.5.0 admin web interface will build on.

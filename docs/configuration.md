@@ -64,7 +64,6 @@ Secrets are read from environment variables only and are never part of the confi
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `JOEDOCS_API_TOKEN` | No | Example secret; replace with your own. |
 | `JOEDOCS_ADMIN_TOKEN` | For `login` and remote commands | The admin token (`jda_...`) printed once by `joedocs admin-token create` on the server. Read it from a password manager, for example `JOEDOCS_ADMIN_TOKEN="$(pass show joedocs/admin)" joedocs login`. |
 
 Keep `.env.example` listing every supported secret with a safe placeholder value.

@@ -177,7 +177,7 @@ fn malformed_dotenv_exits_with_ex_config() {
 fn config_show_reports_sources_and_hides_secrets() {
     let home = TempDir::new().unwrap();
     write_user_config(home.path(), "[storage]\nhome = \"/srv/docs\"\n").unwrap();
-    let token_var = format!("{}_API_TOKEN", prefix());
+    let token_var = format!("{}_ADMIN_TOKEN", prefix());
     cmd(home.path())
         .env(&token_var, "do-not-print-me")
         .env(format!("{}__SERVER__MAX_DOCUMENT_BYTES", prefix()), "3")
@@ -193,7 +193,8 @@ fn config_show_reports_sources_and_hides_secrets() {
             "level = \"warn\"  # cli --log-level",
         ))
         .stdout(predicate::str::contains(format!("# {token_var}: set")))
-        .stdout(predicate::str::contains("do-not-print-me").not());
+        .stdout(predicate::str::contains("do-not-print-me").not())
+        .stdout(predicate::str::contains("_API_TOKEN").not());
 }
 
 #[test]
