@@ -78,6 +78,14 @@ pub enum Error {
     /// Writing output failed.
     #[error("cannot write output: {0}")]
     Output(#[from] io::Error),
+    /// Writing the file the user named (`get -f`, `get --archive`) failed.
+    #[error("cannot write {}: {source}", path.display())]
+    Write {
+        /// The path as given.
+        path: std::path::PathBuf,
+        /// Cause.
+        source: io::Error,
+    },
     /// A store operation failed.
     #[error(transparent)]
     Store(#[from] store::Error),
@@ -118,6 +126,7 @@ impl Error {
             Self::Systemd(error) if error.is_user_error() => EXIT_DATA,
             Self::Archived(_) => EXIT_DATA,
             Self::Output(_)
+            | Self::Write { .. }
             | Self::Systemd(systemd::Error::Output(_))
             | Self::Backup(backup::Error::Io { .. }) => EXIT_IO,
             Self::Store(_) | Self::Backup(_) => EXIT_SOFTWARE,
@@ -769,7 +778,7 @@ fn local_get(
     let id = request.id;
     if let Some(path) = request.archive {
         let bytes = admin::folder_archive(store, id, request.version)?;
-        admin::write_atomically(path, &bytes)?;
+        admin::write_file(path, &bytes)?;
     } else if let Some(name) = request.file_part {
         let markdown = admin::fetch_file(store, id, name, request.version)?;
         admin::write_document(&markdown, request.part, file, out)?;
@@ -851,7 +860,7 @@ fn remote_get(
                 remote.server()
             ))
         })?;
-        admin::write_atomically(dest, &reply.body)?;
+        admin::write_file(dest, &reply.body)?;
         return Ok(());
     }
     let document: client::DocumentReply = remote.parse(&reply, "document reply")?;
@@ -1166,6 +1175,16 @@ mod tests {
         let cli = Cli::try_parse_from(["app", "config", "paths"]).unwrap();
         let err = execute(&cli, &loaded, &ctx, &mut Broken).unwrap_err();
         assert_eq!(err.exit_code(), EXIT_IO);
+    }
+
+    #[test]
+    fn a_failed_file_write_names_the_path_and_maps_to_ex_ioerr() {
+        let err = Error::Write {
+            path: "missing/out.md".into(),
+            source: io::Error::new(io::ErrorKind::NotFound, "gone"),
+        };
+        assert_eq!(err.exit_code(), EXIT_IO);
+        assert_eq!(err.to_string(), "cannot write missing/out.md: gone");
     }
 
     #[test]

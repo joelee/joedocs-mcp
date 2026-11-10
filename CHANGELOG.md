@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- `joedocs get --help` describes `-f`/`--file` as the output file and points to `-P`/`--part` for a file of a multi-file document (issue JD-27).
+
+### Fixed
+
+- `joedocs get -f PATH` and `get --archive OUT.tgz`, locally and remotely, name the path they could not write: `cannot write missing/out.md: No such file or directory`, where they said `cannot write output`. The exit code is still `74` (issue JD-27).
+
 ## [0.4.2] - 2026-11-10
 
 Admin commands to view and find documents and read the audit log, locally and through JSON admin API routes that the 0.5.0 admin web interface will build on.
