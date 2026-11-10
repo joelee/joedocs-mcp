@@ -399,6 +399,7 @@ enum Route {
     KeysList,
     KeysCreate,
     KeysGrant(String),
+    KeysUngrant(String),
     KeysRotate(String),
     KeysRevoke(String),
     ArchiveList,
@@ -434,6 +435,7 @@ impl Route {
             ["keys"] if get => Self::KeysList,
             ["keys"] if post => Self::KeysCreate,
             ["keys", name, "grants"] if post => Self::KeysGrant((*name).to_owned()),
+            ["keys", name, "ungrant"] if post => Self::KeysUngrant(percent_decode(name)),
             ["keys", name, "rotate"] if post => Self::KeysRotate((*name).to_owned()),
             ["keys", name, "revoke"] if post => Self::KeysRevoke((*name).to_owned()),
             ["archive"] if get => Self::ArchiveList,
@@ -465,6 +467,7 @@ impl Route {
             Self::KeysList => "admin:keys.list",
             Self::KeysCreate => "admin:keys.create",
             Self::KeysGrant(_) => "admin:keys.grant",
+            Self::KeysUngrant(_) => "admin:keys.ungrant",
             Self::KeysRotate(_) => "admin:keys.rotate",
             Self::KeysRevoke(_) => "admin:keys.revoke",
             Self::ArchiveList => "admin:archive.list",
@@ -511,6 +514,7 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         Route::KeysList => keys_list(state, call).await,
         Route::KeysCreate => keys_create(state, call, body).await,
         Route::KeysGrant(name) => keys_grant(state, call, name, body).await,
+        Route::KeysUngrant(name) => keys_ungrant(state, call, name, body).await,
         Route::KeysRotate(name) => keys_rotate(state, call, name).await,
         Route::KeysRevoke(name) => keys_revoke(state, call, name).await,
         Route::ArchiveList => archive_list(state, call, uri).await,
@@ -917,6 +921,32 @@ async fn keys_grant(state: Arc<ApiState>, call: Call, name: String, body: Bytes)
             name,
             grants: grants(&body_json(&body)?)?,
         };
+        text(|out| crate::admin::key(store, &command, &OsRandom, out))
+    })
+    .await
+}
+
+/// `POST /admin/v1/keys/{name}/ungrant` with `{"projects": ["a"]}`.
+async fn keys_ungrant(state: Arc<ApiState>, call: Call, name: String, body: Bytes) -> Response {
+    authorized(state, call, move |store, _, _| {
+        let body = body_json(&body)?;
+        let projects: Vec<String> = body
+            .get("projects")
+            .and_then(Value::as_array)
+            .and_then(|list| {
+                list.iter()
+                    .map(|p| p.as_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()
+            })
+            .filter(|list| !list.is_empty())
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_argument",
+                    "`projects` must be a list of project names",
+                )
+            })?;
+        let command = crate::cli::KeyCommand::Ungrant { name, projects };
         text(|out| crate::admin::key(store, &command, &OsRandom, out))
     })
     .await

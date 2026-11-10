@@ -762,3 +762,69 @@ async fn the_audit_route_reads_the_log_and_is_audited() -> TestResult<()> {
     );
     server.stop().await
 }
+
+#[tokio::test]
+async fn the_ungrant_route_needs_a_list_of_projects() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    for (method, path, body) in [
+        ("POST", "/admin/v1/projects", r#"{"name":"p","key":"P"}"#),
+        (
+            "POST",
+            "/admin/v1/keys",
+            r#"{"name":"ci","grants":["p:read"]}"#,
+        ),
+    ] {
+        let reply = server.send(method, path, &auth, body).await?;
+        assert_eq!(reply.status, 200, "{path}: {:?}", reply.json);
+    }
+    for body in [
+        "",
+        r#"{"projects":[]}"#,
+        r#"{"projects":"p"}"#,
+        r#"{"projects":[1]}"#,
+    ] {
+        let bad = server
+            .send("POST", "/admin/v1/keys/ci/ungrant", &auth, body)
+            .await?;
+        assert_eq!(bad.status, 400, "{body}: {:?}", bad.json);
+    }
+    let done = server
+        .send(
+            "POST",
+            "/admin/v1/keys/ci/ungrant",
+            &auth,
+            r#"{"projects":["p"]}"#,
+        )
+        .await?;
+    assert_eq!(done.status, 200, "{:?}", done.json);
+    assert_eq!(done.json["output"], "API key ci grants: none\n");
+    let again = server
+        .send(
+            "POST",
+            "/admin/v1/keys/ci/ungrant",
+            &auth,
+            r#"{"projects":["p"]}"#,
+        )
+        .await?;
+    assert_eq!(again.status, 400, "{:?}", again.json);
+    let audit = server.audit()?;
+    let outcomes: Vec<&str> = audit
+        .iter()
+        .filter(|(tool, _)| tool == "admin:keys.ungrant")
+        .map(|(_, outcome)| outcome.as_str())
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "ok",
+            "invalid_argument"
+        ]
+    );
+    server.stop().await
+}

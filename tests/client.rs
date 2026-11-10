@@ -534,6 +534,11 @@ fn parity_steps() -> Vec<Vec<&'static str>> {
         vec!["key", "list"],
         vec!["key", "create", "ci", "--grant", "joedocs:read"],
         vec!["key", "grant", "ci", "other:write"],
+        vec!["key", "ungrant", "ci", "other"],
+        vec!["key", "ungrant", "ci", "other"],
+        vec!["key", "ungrant", "ci", "nope"],
+        vec!["key", "ungrant", "nobody", "joedocs"],
+        vec!["key", "grant", "ci", "other:write"],
         vec!["key", "rotate", "ci"],
         vec!["key", "revoke", "ci"],
         vec!["key", "revoke", "nobody"],
@@ -1028,7 +1033,18 @@ fn an_older_server_without_the_route_says_to_upgrade_it() {
         .stderr(predicate::str::contains(
             "has no admin API route for `joedocs list`; it may run an older JoeDocs, so upgrade it",
         ));
+    client_cmd(dir.path(), &url)
+        .args(["key", "ungrant", "ci", "a"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains(
+            "has no admin API route for `joedocs key ungrant`",
+        ));
     let requests = seen.lock().unwrap().clone();
+    assert!(
+        requests[1].starts_with("POST /admin/v1/keys/ci/ungrant "),
+        "{requests:?}"
+    );
     assert!(
         requests[0].starts_with(
             "GET /admin/v1/documents?project=a%20b&type=x%26y&sort=updated_desc&start=1&limit=200 "

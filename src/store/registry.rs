@@ -154,6 +154,41 @@ impl Store {
         Ok(key)
     }
 
+    /// Removes a key's grants on `projects`, all or nothing. The key stays
+    /// active, even with no grants left; its next request sees the change.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::KeyNotFound`], [`Error::ProjectNotFound`], and
+    /// [`Error::Invalid`] for no projects, a revoked key, or a project the
+    /// key has no grant on.
+    pub fn ungrant(&mut self, name: &str, projects: &[String]) -> Result<KeyRow, Error> {
+        if projects.is_empty() {
+            return Err(Error::invalid("project", "give at least one project"));
+        }
+        let tx = self.conn.transaction()?;
+        let key =
+            db::find_key_by_name(&tx, name)?.ok_or_else(|| Error::KeyNotFound(name.to_owned()))?;
+        if key.revoked_at.is_some() {
+            return Err(Error::invalid("name", format!("API key {name} is revoked")));
+        }
+        for project in projects {
+            let row = db::find_project(&tx, project)?
+                .filter(|p| &p.name == project)
+                .ok_or_else(|| Error::ProjectNotFound(project.clone()))?;
+            if db::remove_grant(&tx, &key.id, row.id)? == 0 {
+                return Err(Error::invalid(
+                    "project",
+                    format!("API key {name} has no grant on {project}"),
+                ));
+            }
+        }
+        let key =
+            db::find_key_by_name(&tx, name)?.ok_or_else(|| Error::KeyNotFound(name.to_owned()))?;
+        tx.commit()?;
+        Ok(key)
+    }
+
     /// Issues a new token for a key and invalidates the old one at once.
     /// The key keeps its ID, name and grants, so the audit log and the
     /// history still attribute its changes to it.

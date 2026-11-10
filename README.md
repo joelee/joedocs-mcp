@@ -161,7 +161,6 @@ Planned:
 - Plain logs (no colour codes) when `serve` is not writing to a terminal.
 - More agent skills: research notes, decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
-- Removing a single grant from a key.
 - Dropping the template's example secret `JOEDOCS_API_TOKEN`, which the server does not use.
 
 Further out:

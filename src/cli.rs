@@ -424,6 +424,9 @@ impl Command {
                 command: KeyCommand::Grant { .. },
             } => "key grant",
             Self::Key {
+                command: KeyCommand::Ungrant { .. },
+            } => "key ungrant",
+            Self::Key {
                 command: KeyCommand::Rotate { .. },
             } => "key rotate",
             Self::Key {
@@ -575,6 +578,15 @@ pub enum KeyCommand {
         #[arg(required = true, value_name = "PROJECT:PERMISSION")]
         grants: Vec<Grant>,
     },
+    /// Remove a key's grants on these projects (all or nothing); the key
+    /// stays active, even with no grants left.
+    Ungrant {
+        /// Key name.
+        name: String,
+        /// Projects to remove the key's grants on.
+        #[arg(required = true, value_name = "PROJECT")]
+        projects: Vec<String>,
+    },
     /// Print a new token for a key; the old token stops working at once.
     /// The key keeps its name and grants.
     Rotate {
@@ -686,6 +698,14 @@ mod tests {
         let err = Cli::try_parse_from(["app", "key", "grant", "laptop", "a:admin"]).unwrap_err();
         assert!(err.to_string().contains("read or write"), "{err}");
         assert!(Cli::try_parse_from(["app", "key", "grant", "laptop"]).is_err());
+        assert!(Cli::try_parse_from(["app", "key", "ungrant", "laptop"]).is_err());
+        let cli = Cli::try_parse_from(["app", "key", "ungrant", "laptop", "a", "b"]).unwrap();
+        assert_eq!(cli.command.name(), "key ungrant");
+        assert!(matches!(
+            &cli.command,
+            Command::Key { command: KeyCommand::Ungrant { name, projects } }
+                if name == "laptop" && projects == &["a", "b"]
+        ));
         let cli = Cli::try_parse_from(["app", "project", "add", "p", "--key", "P"]).unwrap();
         assert_eq!(
             cli.command,

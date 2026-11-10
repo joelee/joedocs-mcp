@@ -1311,6 +1311,20 @@ async fn admin_json_matches_the_mcp_results() -> TestResult<()> {
     server.stop().await
 }
 
+#[tokio::test]
+async fn an_ungranted_project_is_refused_on_the_next_call() -> TestResult<()> {
+    let server = start().await?;
+    let reader = server.client(&server.reader).await?;
+    ok(&reader, "list_documents", json!({"project": "joedocs"})).await?;
+    let printed = admin_output(&server.root, &["key", "ungrant", "viewer", "joedocs"])?;
+    assert_eq!(printed, "API key viewer grants: none\n");
+    // With no grant on it, the project is hidden, as for any other key.
+    let denied = error(&reader, "list_documents", json!({"project": "joedocs"})).await?;
+    assert_eq!(denied["code"], "not_found", "{denied}");
+    reader.cancel().await?;
+    server.stop().await
+}
+
 #[test]
 fn the_serve_command_runs_until_sigterm() {
     use std::io::{BufRead as _, BufReader};

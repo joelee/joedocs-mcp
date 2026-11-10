@@ -17,6 +17,7 @@ joedocs [--config PATH] [--log-level LEVEL] [--server URL] <COMMAND>
 | `key create NAME [--grant PROJECT:PERMISSION]...` | Create an API key and print its token once, alone on the last line. `PERMISSION` is `read` or `write`. `NAME` is recorded as the author of every change made with the key. |
 | `key list` | List keys and their grants (never the tokens). |
 | `key grant NAME PROJECT:PERMISSION...` | Add grants to a key, or change their permission. |
+| `key ungrant NAME PROJECT...` | Remove a key's grants on these projects, all or nothing, and print its remaining grants. Refuses (exit `65`, changing nothing) an unknown or revoked key, an unknown project, and a project the key has no grant on. The key stays active, even with no grants left; its next MCP request no longer reaches those projects. |
 | `key rotate NAME` | Print a new token for a key, alone on the last line. The old token stops working at once; the key keeps its name and grants. |
 | `key revoke NAME` | Revoke a key immediately and for good. |
 | `archive list [-p\|--project NAME] [-t\|--type TYPE]` | List archived documents, most recently archived first, of one project or type (an unknown type exits `65`). |
@@ -147,6 +148,7 @@ Every request carries `Authorization: Bearer jda_...` (an admin token from `joed
 | `GET /admin/v1/keys` | `keys.list` | | `{"output"}` |
 | `POST /admin/v1/keys` | `keys.create` | `{"name", "grants": ["project:read"]}` | `{"output"}`, ending with the token |
 | `POST /admin/v1/keys/{name}/grants` | `keys.grant` | `{"grants": [...]}` | `{"output"}` |
+| `POST /admin/v1/keys/{name}/ungrant` | `keys.ungrant` | `{"projects": ["project"]}` | `{"output"}` |
 | `POST /admin/v1/keys/{name}/rotate` | `keys.rotate` | | `{"output"}`, ending with the token |
 | `POST /admin/v1/keys/{name}/revoke` | `keys.revoke` | | `{"output"}` |
 | `GET /admin/v1/archive` | `archive.list` | `?project=NAME&type=TYPE` | `{"output"}` |

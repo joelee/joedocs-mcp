@@ -172,6 +172,30 @@ fn projects_and_keys_can_be_managed() {
         ));
 }
 
+#[test]
+fn key_ungrant_removes_grants() {
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    cmd(root.path())
+        .args(["key", "create", "laptop", "--grant", "p:write"])
+        .assert()
+        .success();
+    cmd(root.path())
+        .args(["key", "ungrant", "laptop", "p"])
+        .assert()
+        .success()
+        .stdout("API key laptop grants: none\n");
+    cmd(root.path())
+        .args(["key", "ungrant", "laptop", "p"])
+        .assert()
+        .code(65)
+        .stderr("error: invalid project: API key laptop has no grant on p\n");
+    cmd(root.path())
+        .args(["key", "ungrant", "laptop"])
+        .assert()
+        .code(2);
+}
+
 /// Opens the store the binary uses under `root`, through the library.
 fn library_store(root: &Path) -> Result<joedocs::store::Store, joedocs::store::Error> {
     use std::sync::Arc;

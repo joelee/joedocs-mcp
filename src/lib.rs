@@ -495,6 +495,57 @@ fn remote_text(
     }
 }
 
+/// `joedocs key` through the admin API.
+fn remote_key(
+    remote: &client::Remote<'_>,
+    command: &KeyCommand,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    use reqwest::Method;
+    use serde_json::json;
+    let grants =
+        |grants: &[auth::Grant]| grants.iter().map(ToString::to_string).collect::<Vec<_>>();
+    match command {
+        KeyCommand::List => remote_text(remote, &Method::GET, "keys", None, out),
+        KeyCommand::Create { name, grants: g } => {
+            let body = json!({"name": name, "grants": grants(g)});
+            remote_text(remote, &Method::POST, "keys", Some(&body), out)
+        }
+        KeyCommand::Grant { name, grants: g } => {
+            let body = json!({"grants": grants(g)});
+            remote_text(
+                remote,
+                &Method::POST,
+                &format!("keys/{name}/grants"),
+                Some(&body),
+                out,
+            )
+        }
+        KeyCommand::Ungrant { name, projects } => {
+            let body = json!({"projects": projects});
+            let path = format!("keys/{}/ungrant", percent_encode(name));
+            remote_text(remote, &Method::POST, &path, Some(&body), out).map_err(|e| match e {
+                Error::Client(error) => newer_route(error, remote.server(), "key ungrant").into(),
+                other => other,
+            })
+        }
+        KeyCommand::Rotate { name } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("keys/{name}/rotate"),
+            None,
+            out,
+        ),
+        KeyCommand::Revoke { name } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("keys/{name}/revoke"),
+            None,
+            out,
+        ),
+    }
+}
+
 /// The admin commands that run remotely and print what they print locally.
 fn remote_admin(
     remote: &client::Remote<'_>,
@@ -503,8 +554,6 @@ fn remote_admin(
 ) -> Result<(), Error> {
     use reqwest::Method;
     use serde_json::json;
-    let grants =
-        |grants: &[auth::Grant]| grants.iter().map(ToString::to_string).collect::<Vec<_>>();
     match command {
         Command::Project {
             command: ProjectCommand::List,
@@ -515,45 +564,7 @@ fn remote_admin(
             let body = json!({"name": name, "key": key, "title": title});
             remote_text(remote, &Method::POST, "projects", Some(&body), out)
         }
-        Command::Key {
-            command: KeyCommand::List,
-        } => remote_text(remote, &Method::GET, "keys", None, out),
-        Command::Key {
-            command: KeyCommand::Create { name, grants: g },
-        } => {
-            let body = json!({"name": name, "grants": grants(g)});
-            remote_text(remote, &Method::POST, "keys", Some(&body), out)
-        }
-        Command::Key {
-            command: KeyCommand::Grant { name, grants: g },
-        } => {
-            let body = json!({"grants": grants(g)});
-            remote_text(
-                remote,
-                &Method::POST,
-                &format!("keys/{name}/grants"),
-                Some(&body),
-                out,
-            )
-        }
-        Command::Key {
-            command: KeyCommand::Rotate { name },
-        } => remote_text(
-            remote,
-            &Method::POST,
-            &format!("keys/{name}/rotate"),
-            None,
-            out,
-        ),
-        Command::Key {
-            command: KeyCommand::Revoke { name },
-        } => remote_text(
-            remote,
-            &Method::POST,
-            &format!("keys/{name}/revoke"),
-            None,
-            out,
-        ),
+        Command::Key { command } => remote_key(remote, command, out),
         Command::Archive {
             command: ArchiveCommand::List { project, doc_type },
         } => {

@@ -743,6 +743,15 @@ pub fn key(
                 grant_list(&key.grants)
             )?;
         }
+        KeyCommand::Ungrant { name, projects } => {
+            let key = store.ungrant(name, projects)?;
+            writeln!(
+                out,
+                "API key {} grants: {}",
+                key.name,
+                grant_list(&key.grants)
+            )?;
+        }
         KeyCommand::Rotate { name } => {
             let rotated = store.rotate_key(name, random)?;
             writeln!(
