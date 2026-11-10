@@ -254,6 +254,9 @@ pub const DEFAULT_LIST_LIMIT: u64 = 200;
 pub struct SearchArgs {
     /// Words to find, in the search syntax (all must match; "a phrase",
     /// -word, word*, a OR b); leave out to search by front matter only.
+    ///
+    /// Put options first, and `--` before words that start with `-`:
+    /// `joedocs search -p NAME -- cache -redis`.
     #[arg(value_name = "QUERY")]
     pub query: Vec<String>,
     /// Only this project (default: every project).
@@ -894,6 +897,39 @@ mod tests {
         };
         assert_eq!((args.start, args.limit), (1, DEFAULT_AUDIT_LIMIT));
         assert_eq!(Command::Audit(args).name(), "audit");
+    }
+
+    #[test]
+    fn search_terms_that_start_with_a_hyphen_follow_two_dashes() {
+        let search = |args: &[&str]| {
+            let mut all = vec!["app", "search"];
+            all.extend_from_slice(args);
+            match Cli::try_parse_from(all).map(|cli| cli.command) {
+                Ok(Command::Search(args)) => Ok(args),
+                Ok(other) => panic!("{other:?}"),
+                Err(e) => Err(e.kind()),
+            }
+        };
+        assert_eq!(search(&["--", "-redis"]).unwrap().query, ["-redis"]);
+        let args = search(&["-p", "x", "-n", "3", "--", "cache", "-redis"]).unwrap();
+        assert_eq!(args.project.as_deref(), Some("x"));
+        assert_eq!(args.limit, 3);
+        assert_eq!(args.query, ["cache", "-redis"]);
+        assert_eq!(
+            search(&["-redis"]).unwrap_err(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+        assert_eq!(
+            search(&["cache", "-redis"]).unwrap_err(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("search")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("-- cache -redis"), "{help}");
     }
 
     #[test]

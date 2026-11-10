@@ -569,6 +569,8 @@ fn parity_steps() -> Vec<Vec<&'static str>> {
         vec!["search", "-p", "nope"],
         vec!["search", "-t", "nope"],
         vec!["search", "\"unclosed"],
+        vec!["search", "--", "first", "-second"],
+        vec!["search", "-p", "joedocs", "--", "-first"],
         vec!["history", "JD-1"],
         vec!["history", "JD-1", "-n", "1"],
         vec!["history", "JD-1", "--json"],

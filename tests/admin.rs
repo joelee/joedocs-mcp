@@ -624,6 +624,12 @@ fn search_finds_documents_in_every_project() {
         .success()
         .stdout(predicate::str::contains("\"id\": \"Q-1\""));
     cmd(root.path())
+        .args(["search", "--", "zebra", "-crossing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pages/zoo"))
+        .stdout(predicate::str::contains("Q-1").not());
+    cmd(root.path())
         .args(["search", "nothing-like-this"])
         .assert()
         .success()

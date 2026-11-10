@@ -13,7 +13,7 @@ Admin commands to view and find documents and read the audit log, locally and th
 - Short options for the frequent flags, with one meaning each: `-p` project, `-t` type, `-s` status, `-d` document, `-k` key, `-F` filter, `-n` limit, `-P` part, `-j` JSON.
 
 - **`joedocs list -p PROJECT`** lists a project's live documents as a table (`ID`, `TYPE`, `STATUS`, `REV`, `FILES`, `UPDATED`, `TITLE`), filtered with `-t/--type` and `-s/--status`, ordered with `--sort` (`updated-desc`, `updated-asc`, `created-desc`, `created-asc`, `title`), and paged with `--start` and `-n/--limit` (a last line says how to get the next page). `-j/--json` prints the `list_documents` result instead. It also runs remotely, through the new route `GET /admin/v1/documents`, which returns that JSON.
-- **`joedocs search [QUERY...]`** finds documents and their files by text and front matter in every project, or one (`-p`): `-t/--type`, `-s/--status`, `-F/--filter KEY=VALUE` (repeatable), `--filters JSON` (the operators of `search_documents`) and `-d/--document ID`. It prints each hit with its snippet, pages with `--start` and `-n/--limit`, and `-j/--json` prints the `search_documents` result. Remotely it uses the new route `POST /admin/v1/search`.
+- **`joedocs search [QUERY...]`** finds documents and their files by text and front matter in every project, or one (`-p`): `-t/--type`, `-s/--status`, `-F/--filter KEY=VALUE` (repeatable), `--filters JSON` (the operators of `search_documents`) and `-d/--document ID`. Words that start with `-` (exclusions) follow `--`, after the options: `joedocs search -p joedocs -- cache -redis`. It prints each hit with its snippet, pages with `--start` and `-n/--limit`, and `-j/--json` prints the `search_documents` result. Remotely it uses the new route `POST /admin/v1/search`.
 - **`joedocs history ID`** lists a document's revisions (`REV`, `TIME`, `ACTION`, `AUTHOR`, `CLIENT`, `SUMMARY`), newest first and paged, or with `-P/--part FILE` one file's; **`joedocs diff ID --from N [--to M]`** prints the unified diff between two revisions, with `--context` and `-P/--part FILE`. Both take `-j/--json` (the `get_document_history` and `diff_document` results) and run remotely through `GET /admin/v1/documents/{id}/history` and `.../diff`.
 - **`joedocs audit`** reads the audit log, newest first (`TIME`, `KEY`, `CLIENT`, `TOOL`, `DOCUMENT`, `OUTCOME`), filtered by `--since` and `--until` (UTC dates or times), `-k/--key`, `--tool` (a trailing `*` matches a prefix, e.g. `admin:*`), `-d/--document` and `--outcome`, paged, with `-j/--json`. Remotely it uses the new route `GET /admin/v1/audit`.
 - **`joedocs key ungrant NAME PROJECT...`** removes a key's grants on those projects, all or nothing; the key's next request no longer reaches them. Remotely it uses the new route `POST /admin/v1/keys/{name}/ungrant`.
@@ -21,6 +21,10 @@ Admin commands to view and find documents and read the audit log, locally and th
 - `joedocs get -P` is short for `--part`.
 - Tables of the new commands print control characters in stored text as escapes (`\n`, `\u{1b}`), so text written through MCP cannot change the terminal.
 - A command whose admin API route the server does not have says the server may run an older JoeDocs and should be upgraded.
+
+### Fixed
+
+- `joedocs get --part ""` in client mode reports the missing file, as it does on the server, instead of printing the whole document. More generally, the admin API no longer drops an option given as an empty value, so remote runs refuse or match it as local runs do.
 
 ## [0.4.1] - 2026-11-10
 
