@@ -197,6 +197,19 @@ fn config_show_reports_sources_and_hides_secrets() {
 }
 
 #[test]
+fn logs_have_no_colour_codes_when_stderr_is_not_a_terminal() {
+    let home = TempDir::new().unwrap();
+    // assert_cmd pipes stderr, as the journal and `brew services` do.
+    let output = cmd(home.path())
+        .args(["--log-level", "debug", "config", "show"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8(output.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("running command"), "{stderr}");
+    assert!(!stderr.contains('\u{1b}'), "{stderr:?}");
+}
+
+#[test]
 fn config_paths_lists_search_order() {
     let home = TempDir::new().unwrap();
     write_user_config(home.path(), "").unwrap();

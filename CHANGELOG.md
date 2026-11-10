@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Logs are plain (no ANSI colour codes) when stderr is not a terminal, such as the journal or `brew services` logs, or when `NO_COLOR` is set.
 - `joedocs get --help` describes `-f`/`--file` as the output file and points to `-P`/`--part` for a file of a multi-file document (issue JD-27).
 
 ### Fixed

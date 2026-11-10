@@ -188,6 +188,14 @@ pub fn load(cli: &Cli, ctx: &Context<'_>) -> Result<Loaded, Error> {
     Ok(Loaded { resolved, secrets })
 }
 
+/// Whether logs written to stderr may use ANSI colour: only when stderr is
+/// a terminal and `NO_COLOR` is unset or empty (<https://no-color.org>), so
+/// the journal, `brew services` logs and redirected output stay plain.
+#[must_use]
+pub fn log_colour(stderr_is_terminal: bool, env: &dyn Env) -> bool {
+    stderr_is_terminal && env.non_empty("NO_COLOR").is_none()
+}
+
 /// Runs the selected command, writing normal output to `out`.
 ///
 /// # Errors
@@ -1175,6 +1183,18 @@ mod tests {
         let cli = Cli::try_parse_from(["app", "config", "paths"]).unwrap();
         let err = execute(&cli, &loaded, &ctx, &mut Broken).unwrap_err();
         assert_eq!(err.exit_code(), EXIT_IO);
+    }
+
+    #[test]
+    fn logs_are_coloured_only_on_a_terminal_without_no_colour() {
+        let unset = MapEnv::new();
+        let set = MapEnv::new().with("NO_COLOR", "1");
+        let empty = MapEnv::new().with("NO_COLOR", "");
+        assert!(log_colour(true, &unset));
+        assert!(!log_colour(true, &set));
+        assert!(log_colour(true, &empty));
+        assert!(!log_colour(false, &unset));
+        assert!(!log_colour(false, &set));
     }
 
     #[test]
