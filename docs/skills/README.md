@@ -12,6 +12,7 @@ Ready-made [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skil
 | [`joedocs-planner`](joedocs-planner/SKILL.md) | Turns an accepted idea, an open review or a request into a traceable, step-by-step delivery plan for a builder. Lists ideas and reviews that have no plan yet, revises drafts, and records approval. | `plans` |
 | [`joedocs-builder`](joedocs-builder/SKILL.md) | Executes one approved plan on its own feature branch: one verified, committed step at a time, pausing for your review after each (or straight through if you say so), with evidence in the plan's work log. | the plan's work log; commits in the repository |
 | [`joedocs-code-review`](joedocs-code-review/SKILL.md) | Reviews a pull request, branch, commit or the working tree, against the plan when there is one, and records evidence-backed findings with calibrated severities and a verdict. Re-reviews link to the earlier review. | `reviews` |
+| [`joedocs-issue-log`](joedocs-issue-log/SKILL.md) | Files bugs, regressions and incidents with structured front matter (kind, severity, the version found in, the version to fix in), appends dated investigation notes, moves them through their statuses, closes the issues a release fixed, and lists what is open. | `issues` |
 
 None of the skills except the builder changes the repository, and the builder never pushes, merges or tags.
 
@@ -21,6 +22,7 @@ None of the skills except the builder changes the repository, and the builder ne
 flowchart LR
     I["joedocs-idea-architect<br/>ideas: JD-12"] -- "you accept it" --> P
     R["joedocs-code-review<br/>reviews: JD-40"] -- "open findings" --> P
+    L["joedocs-issue-log<br/>issues: JD-21"] -- "open issues" --> P
     P["joedocs-planner<br/>plans: JD-31"] -- "you approve it" --> B
     B["joedocs-builder<br/>feature/jd-31-..."] -- "steps committed" --> R
 ```
@@ -69,6 +71,7 @@ The skills share these conventions, so their documents work together:
 | `ideas` | `joedocs-idea-architect` | `draft` → `review` (revised) → `approved` (accepted), or `rejected`. Parked ideas are `parked` if you add that status to `documents.statuses`, otherwise `rejected` with `decision: parked`. |
 | `plans` | `joedocs-planner`, and the builder in the work log | `draft` → `approved` → `done` (set by you after review), or `superseded` or `rejected`. Progress is in `implementation_status`: `not-started`, `in-progress`, `blocked`, `completed`. |
 | `reviews` | `joedocs-code-review` | `review` while findings are open, `done` with none, `superseded` after a re-review. |
+| `issues` | `joedocs-issue-log` | `draft` (open) → `review` (being investigated or fixed) → `done` (fixed, with `resolution: fixed` and `fixed_in`), or `rejected` (`wont-fix`, `cannot-reproduce`) or `superseded` (a duplicate, with `duplicate_of`). Each issue records `kind`, `severity`, `repository`, `found_in` and `reported_by`, and optionally `target_version`. |
 
 - **IDs and citations.** The JoeDocs ID is the document's ID: an idea `JD-12`, a plan `JD-31`, a review `JD-40`. Items inside a document are numbered locally (`REQ-01`, `STEP-02`, `AC-03`, `MAJ-01`, `R2-MED-01`) and cited from outside with the document ID, as `JD-31 STEP-02`. A specific revision is cited as `JD-12 r3`. Documents also link each other with Obsidian wiki links to their titles.
 - **Revisions are the history.** An idea's revisions are the revisions of one document. A plan's approval is the revision with summary `Approve delivery plan`; the builder proves the plan has not changed since with `diff_document`. Every write passes `expected_revision`, so two agents never overwrite each other.
@@ -82,7 +85,6 @@ The types and statuses are the JoeDocs defaults (`documents.types` and `document
 
 | Skill | Purpose | JoeDocs features it uses |
 | --- | --- | --- |
-| **joedocs-issue-log** | Records bugs and incidents, then appends investigation notes and status changes as work happens. | `append_to_document`, `change_document_front_matter` for `status` and `tags`. |
 | **joedocs-research** | Saves research notes with their sources, and searches existing notes before researching again. | `search_documents` across projects (`project: "*"`), `new_document` of type `research`. |
 | **joedocs-decision-record** | Writes architecture decision records and marks old ones superseded. | `new_document` of type `specs`, `status: superseded` with a `superseded_by` key. |
 | **joedocs-session-journal** | Appends a short summary of each coding session (what changed, what is next) to one running document per project. | `append_to_document`, `get_document_history`. |

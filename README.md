@@ -143,6 +143,7 @@ Administration is not an MCP tool, so a leaked client key cannot create keys or 
 flowchart LR
     I["joedocs-idea-architect<br/>ideas: JD-12"] -- "you accept it" --> P
     R["joedocs-code-review<br/>reviews: JD-40"] -- "open findings" --> P
+    L["joedocs-issue-log<br/>issues: JD-21"] -- "open issues" --> P
     P["joedocs-planner<br/>plans: JD-31"] -- "you approve it" --> B
     B["joedocs-builder<br/>feature/jd-31-..."] -- "steps committed" --> R
 ```
@@ -151,6 +152,7 @@ flowchart LR
 - **joedocs-planner** turns an accepted idea, an open review or a request into a traceable, step-by-step delivery plan.
 - **joedocs-builder** executes an approved plan one reviewed, committed step at a time, logging evidence in the plan.
 - **joedocs-code-review** reviews the result against the plan and records findings that feed the next plan.
+- **joedocs-issue-log** files bugs and incidents with their severity and the versions they were found in and are to be fixed in, keeps their investigation notes, and closes them when a release fixes them.
 
 ## Documentation
 
