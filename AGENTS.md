@@ -158,4 +158,4 @@ Follow `docs/AGENTS.md` for documentation rules. The maintained set is:
 - `docs/configuration.md`
 - `docs/directory-structure.md`
 - `docs/developer-guide.md`
-- `docs/backlog.md`
+- the backlog: JoeDocs document JD-22 ("Backlog", a multi-file `notes` document, one file per item), summarised in the `README.md` Roadmap section

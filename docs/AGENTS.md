@@ -13,7 +13,7 @@ Documentation is part of the product. Update docs in the same change that makes 
 - `docs/configuration.md`: all non-secret config keys, defaults, lookup order, and secret handling rules.
 - `docs/directory-structure.md`: repository layout and what belongs in each directory.
 - `docs/developer-guide.md`: setup, development workflow, testing, linting, debugging, and releasing.
-- `docs/backlog.md`: high-level feature backlog and links to feature directories.
+- The backlog is not a file here: it is JoeDocs document JD-22 ("Backlog", a multi-file `notes` document with one `items/<slug>` file per item and `state` and `kind` in each item's front matter), and the `README.md` Roadmap section is its public summary. Bugs and incidents are `issues` documents (`docs/skills/joedocs-issue-log`).
 
 ## Rules
 
@@ -31,12 +31,12 @@ Documentation is part of the product. Update docs in the same change that makes 
 - If a feature changes config, update `docs/configuration.md` and `config.example.toml`, and `.env.example` when secret names change.
 - If a feature changes repository layout, update `docs/directory-structure.md`.
 - If a feature changes developer workflows, update `docs/developer-guide.md`.
-- If a feature is added, dropped, blocked, or completed, update `docs/backlog.md`.
+- If a feature is added, dropped, blocked, or completed, update its item in the JoeDocs Backlog (JD-22): add it, change its `state`, or archive it (`Shipped in X.Y.Z`, or why it was dropped). Change the `README.md` Roadmap in the same change when a planned or future headline appears or goes.
 - If release behavior changes, record it in `CHANGELOG.md`.
 
 ## Quality Bar
 
 - Documentation must match the current code and commands.
-- Avoid future-tense promises unless the item is explicitly in `docs/backlog.md`.
+- Avoid future-tense promises unless the item is explicitly in the JoeDocs Backlog (JD-22) and the `README.md` Roadmap.
 - Link to feature directories for implementation-specific detail.
 - Keep root-level documentation approachable for a new developer cloning a generated project.

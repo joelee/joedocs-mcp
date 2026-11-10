@@ -1,6 +1,6 @@
 # JoeDocs: initial plan
 
-Status: **phases 0 to 4 done, phase 5 partly done**; 0.1.0 is released on crates.io and Homebrew. The configuration, the document store, git history, the SQLite index, the admin commands (`init`, `project`, `key`, `reindex`, `archive`, `check`, `systemd`), the MCP server (`joedocs serve`, nineteen tools), search, and the history and editing tools are implemented. Of phase 5, the systemd unit, the Homebrew service and the [deployment guide](deployment.md) are done; backups are not. The [backlog](backlog.md) tracks what is left. Choices made while building phases 1 to 4 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
+Status: **phases 0 to 4 done, phase 5 partly done**; 0.1.0 is released on crates.io and Homebrew. The configuration, the document store, git history, the SQLite index, the admin commands (`init`, `project`, `key`, `reindex`, `archive`, `check`, `systemd`), the MCP server (`joedocs serve`, nineteen tools), search, and the history and editing tools are implemented. Of phase 5, the systemd unit, the Homebrew service and the [deployment guide](deployment.md) are done; backups are not. The [roadmap](../README.md#roadmap) tracks what is left. Choices made while building phases 1 to 4 are recorded in section 17. Answers from the first review are recorded in section 17. Items still marked **Proposed** have not been explicitly confirmed.
 
 ## 1. Goal
 
@@ -160,7 +160,7 @@ Rules:
   - **Server-owned** keys (`id`, `project`, `type`, `title`, `revision`, `created*`, `updated*`, `client`) change only as a side effect of the matching tool. They can never be set or removed directly.
   - **Validated** keys (`status`, `tags`, `aliases`) can be set by clients but are checked, and they can never be removed.
   - **Custom** keys are everything else. Clients can set and remove them freely, and git history audits every change.
-- **Approval is a status change.** Any key with `write` on the project can set `status: approved`. In v1 the trustworthy record of who did it is the revision history (the commit author is the API key name). A custom `approved_by` is client-asserted and unverified. Server-stamped approval fields and an `approve` grant are on the [backlog](backlog.md).
+- **Approval is a status change.** Any key with `write` on the project can set `status: approved`. In v1 the trustworthy record of who did it is the revision history (the commit author is the API key name). A custom `approved_by` is client-asserted and unverified. Server-stamped approval fields and an `approve` grant are on the [roadmap](../README.md#roadmap).
 - Who wrote a revision comes from the **API key's registered name**, not from anything the client claims. The MCP `clientInfo.name` is recorded separately as `client`.
 - The server owns the serialised form. Server keys come first in a fixed order, then custom keys in their insertion order. Comments inside client-supplied YAML are not preserved.
 - Timestamps are UTC RFC 3339. This still needs checking against how Obsidian's datetime property displays them.

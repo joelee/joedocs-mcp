@@ -154,6 +154,26 @@ flowchart LR
 - **joedocs-code-review** reviews the result against the plan and records findings that feed the next plan.
 - **joedocs-issue-log** files bugs and incidents with their severity and the versions they were found in and are to be fixed in, keeps their investigation notes, and closes them when a release fixes them.
 
+## Roadmap
+
+Planned:
+
+- Plain logs (no colour codes) when `serve` is not writing to a terminal.
+- More agent skills: research notes, decision records, a session journal and a gardener.
+- An optional `git push` of the history to a private remote after each commit.
+- Removing a single grant from a key.
+- Dropping the template's example secret `JOEDOCS_API_TOKEN`, which the server does not use.
+
+Further out:
+
+- A document graph agents can query, for example "what depends on JD-12" (an idea to explore first).
+- Rewriting `[[links]]` to a renamed document in the same project.
+- Approval provenance: server-stamped status changes, and optionally a grant needed to approve.
+- Prebuilt binaries for Linux and macOS on GitHub Releases, and a homebrew-core formula.
+- From the design plan's "Later" list: per-type templates, documents as MCP resources, backlinks, embedding search, attachments, secret scanning on write.
+
+The detailed backlog is kept in JoeDocs itself, as a multi-file document; what has shipped is in the [changelog](https://github.com/joelee/joedocs-mcp/blob/main/CHANGELOG.md).
+
 ## Documentation
 
 - [Deployment guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/deployment.md): Linux, macOS, Docker, remote access, managing from another machine
@@ -162,7 +182,7 @@ flowchart LR
 - [Configuration](https://github.com/joelee/joedocs-mcp/blob/main/docs/configuration.md): every key, its default and its environment override
 - [Skills](https://github.com/joelee/joedocs-mcp/blob/main/docs/skills/README.md): agent skills built on JoeDocs
 - [Architecture](https://github.com/joelee/joedocs-mcp/blob/main/docs/architecture.md) and [design plan](https://github.com/joelee/joedocs-mcp/blob/main/docs/plan.md)
-- [Developer guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/developer-guide.md), [directory structure](https://github.com/joelee/joedocs-mcp/blob/main/docs/directory-structure.md) and [backlog](https://github.com/joelee/joedocs-mcp/blob/main/docs/backlog.md)
+- [Developer guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/developer-guide.md) and [directory structure](https://github.com/joelee/joedocs-mcp/blob/main/docs/directory-structure.md)
 - [Changelog](https://github.com/joelee/joedocs-mcp/blob/main/CHANGELOG.md)
 
 ## Development
