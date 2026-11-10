@@ -116,7 +116,7 @@ pub struct DocumentInfo {
     /// Whether it is a multi-file document.
     pub multifile: bool,
     /// How many live sub-files it has (0 for a single-file document). Only
-    /// [`Store::get`] and [`Store::list`] count them.
+    /// [`Store::get`], [`Store::list`] and [`Store::search`] count them.
     pub files: u64,
 }
 

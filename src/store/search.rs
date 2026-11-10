@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-use super::documents::{DocumentInfo, check_member};
+use super::documents::{DocumentInfo, check_member, document_info};
 use super::{Error, Store};
 use crate::db::{self, SearchQuery};
 use crate::search::{Query, filter};
@@ -115,16 +115,20 @@ impl Store {
             },
         )?;
         let shown = offset + rows.len() as u64;
-        Ok(SearchResults {
-            items: rows
-                .into_iter()
-                .map(|row| SearchHit {
-                    document: DocumentInfo::from(&row.document),
+        // Each hit counts its document's files, as `get` and `list` do.
+        let items = rows
+            .into_iter()
+            .map(|row| {
+                Ok(SearchHit {
+                    document: document_info(&self.conn, &row.document)?,
                     score: row.score,
                     snippet: row.snippet,
                     file: row.file,
                 })
-                .collect(),
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok(SearchResults {
+            items,
             total,
             next_start: (shown < total).then_some(shown + 1),
         })
