@@ -14,7 +14,7 @@
 mod admin_api;
 mod auth;
 mod errors;
-mod tools;
+pub(crate) mod tools;
 
 use std::future::Future;
 use std::io::{self, Write};

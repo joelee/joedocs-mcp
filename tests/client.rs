@@ -530,6 +530,16 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["key", "list"],
         vec!["archive", "list"],
         vec!["archive", "list", "--project", "joedocs"],
+        vec!["archive", "list", "-t", "home"],
+        vec!["archive", "list", "-p", "joedocs", "-t", "notes"],
+        vec!["archive", "list", "--type", "nope"],
+        vec!["list", "-p", "joedocs"],
+        vec!["list", "-p", "joedocs", "--json"],
+        vec!["list", "-p", "joedocs", "-n", "1", "--sort", "title"],
+        vec!["list", "-p", "joedocs", "-s", "draft", "-t", "home", "-j"],
+        vec!["list", "-p", "nope"],
+        vec!["list", "-p", "joedocs", "--limit", "0"],
+        vec!["list", "-p", "joedocs", "-t", "nope"],
         vec!["get", "JD-1"],
         vec!["get", "JD-1", "--version", "1"],
         vec!["get", "JD-1", "--content-only"],
@@ -551,6 +561,8 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["get", "JD-1", "--part", "x y"],
         vec!["get", "JD-2", "--part", "x"],
         vec!["get", "JD-2", "--archive", "x.tgz"],
+        vec!["list", "-p", "joedocs"],
+        vec!["list", "-p", "joedocs", "-j"],
     ];
     for step in &steps {
         let local_run = outcome(local.cmd(), step).unwrap();
@@ -889,6 +901,47 @@ fn client_cmd(root: &Path, url: &str) -> Command {
 }
 
 #[test]
+fn an_older_server_without_the_route_says_to_upgrade_it() {
+    let dir = TempDir::new().unwrap();
+    let body = br#"{"error":{"code":"not_found","message":"no such admin API route"}}"#;
+    let reply: &'static [u8] = Box::leak(
+        format!(
+            "HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            String::from_utf8_lossy(body)
+        )
+        .into_bytes()
+        .into_boxed_slice(),
+    );
+    let (url, seen) = fake(vec![Answer::Send(reply)]).unwrap();
+    client_cmd(dir.path(), &url)
+        .args(["list", "-p", "a b", "-t", "x&y"])
+        .assert()
+        .code(65)
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "has no admin API route for `joedocs list`; it may run an older JoeDocs, so upgrade it",
+        ));
+    let requests = seen.lock().unwrap().clone();
+    assert!(
+        requests[0].starts_with(
+            "GET /admin/v1/documents?project=a%20b&type=x%26y&sort=updated_desc&start=1&limit=200 "
+        ),
+        "{requests:?}"
+    );
+    // Other not-found replies keep their own message.
+    let (url, _) = fake(vec![Answer::Send(
+        b"HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 67\r\n\r\n{\"error\":{\"code\":\"not_found\",\"message\":\"project a does not exist\"}}",
+    )])
+    .unwrap();
+    client_cmd(dir.path(), &url)
+        .args(["list", "-p", "a"])
+        .assert()
+        .code(65)
+        .stderr("error: project a does not exist\n");
+}
+
+#[test]
 fn malformed_success_replies_fail_without_writing() {
     let dir = TempDir::new().unwrap();
     let bodies: [&'static [u8]; 4] = [
@@ -906,6 +959,8 @@ fn malformed_success_replies_fail_without_writing() {
             vec!["login", "--code", "123456"],
             vec!["status"],
             vec!["get", "JD-1"],
+            vec!["list", "-p", "joedocs"],
+            vec!["list", "-p", "joedocs", "--json"],
         ] {
             client_cmd(dir.path(), &url)
                 .args(&args)

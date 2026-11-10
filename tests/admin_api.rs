@@ -521,3 +521,89 @@ async fn document_routes_are_audited_by_operation() -> TestResult<()> {
     );
     server.stop().await
 }
+
+#[tokio::test]
+async fn the_documents_list_route_returns_json_and_is_audited() -> TestResult<()> {
+    let server = start(true).await?;
+    let no_session = server
+        .send(
+            "GET",
+            "/admin/v1/documents?project=p",
+            &server.auth(None),
+            "",
+        )
+        .await?;
+    assert_eq!(no_session.status, 401, "{:?}", no_session.json);
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let added = server
+        .send(
+            "POST",
+            "/admin/v1/projects",
+            &auth,
+            r#"{"name":"p","key":"P"}"#,
+        )
+        .await?;
+    assert_eq!(added.status, 200, "{:?}", added.json);
+    let listed = server
+        .send(
+            "GET",
+            "/admin/v1/documents?project=p&sort=title&limit=5",
+            &auth,
+            "",
+        )
+        .await?;
+    assert_eq!(listed.status, 200, "{:?}", listed.json);
+    assert!(listed.head.contains("application/json"), "{}", listed.head);
+    assert_eq!(
+        listed.json,
+        serde_json::json!({"items": [], "total": 0, "next_start": null})
+    );
+    for (path, needle) in [
+        ("/admin/v1/documents", "`project` is required"),
+        (
+            "/admin/v1/documents?project=p&limit=many",
+            "`limit` must be a number",
+        ),
+        (
+            "/admin/v1/documents?project=p&sort=newest",
+            "`sort` cannot be",
+        ),
+        ("/admin/v1/documents?project=p&type=nope", "is not one of"),
+    ] {
+        let bad = server.send("GET", path, &auth, "").await?;
+        assert_eq!(bad.status, 400, "{path}: {:?}", bad.json);
+        assert_eq!(bad.json["error"]["code"], "invalid_argument");
+        assert!(
+            bad.json["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains(needle),
+            "{path}: {:?}",
+            bad.json
+        );
+    }
+    let unknown = server
+        .send("GET", "/admin/v1/documents?project=nope", &auth, "")
+        .await?;
+    assert_eq!(unknown.status, 404);
+    let audit = server.audit()?;
+    let listing: Vec<&str> = audit
+        .iter()
+        .filter(|(tool, _)| tool == "admin:documents.list")
+        .map(|(_, outcome)| outcome.as_str())
+        .collect();
+    assert_eq!(
+        listing,
+        [
+            "no_session",
+            "ok",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "not_found"
+        ]
+    );
+    server.stop().await
+}

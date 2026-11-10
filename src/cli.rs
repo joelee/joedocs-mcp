@@ -2,11 +2,12 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use toml::Value;
 
 use crate::auth::Grant;
 use crate::config::{CliValue, LogLevel};
+use crate::db::Sort;
 
 /// Command-line arguments.
 #[derive(Debug, Parser)]
@@ -140,7 +141,7 @@ pub enum Command {
         file: Option<PathBuf>,
         /// Print this file of a multi-file document (its path in the folder,
         /// e.g. backlog/item-1) instead of the main file.
-        #[arg(long, value_name = "FILE")]
+        #[arg(short = 'P', long, value_name = "FILE")]
         part: Option<String>,
         /// Write the whole multi-file document (every file, paths relative
         /// to its folder) to this `.tgz` file, replacing it.
@@ -151,7 +152,94 @@ pub enum Command {
         )]
         archive: Option<PathBuf>,
     },
+    /// List a project's documents (metadata only), one page at a time.
+    List(ListArgs),
 }
+
+/// Order of `joedocs list`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum SortArg {
+    /// Most recently updated first.
+    #[default]
+    UpdatedDesc,
+    /// Least recently updated first.
+    UpdatedAsc,
+    /// Newest first.
+    CreatedDesc,
+    /// Oldest first.
+    CreatedAsc,
+    /// By title, A to Z.
+    Title,
+}
+
+impl SortArg {
+    const ALL: [Self; 5] = [
+        Self::UpdatedDesc,
+        Self::UpdatedAsc,
+        Self::CreatedDesc,
+        Self::CreatedAsc,
+        Self::Title,
+    ];
+
+    /// The store's order.
+    #[must_use]
+    pub fn sort(self) -> Sort {
+        match self {
+            Self::UpdatedDesc => Sort::UpdatedDesc,
+            Self::UpdatedAsc => Sort::UpdatedAsc,
+            Self::CreatedDesc => Sort::CreatedDesc,
+            Self::CreatedAsc => Sort::CreatedAsc,
+            Self::Title => Sort::Title,
+        }
+    }
+
+    /// The name the admin API and `list_documents` use, e.g. `updated_desc`.
+    #[must_use]
+    pub fn api_name(self) -> &'static str {
+        match self {
+            Self::UpdatedDesc => "updated_desc",
+            Self::UpdatedAsc => "updated_asc",
+            Self::CreatedDesc => "created_desc",
+            Self::CreatedAsc => "created_asc",
+            Self::Title => "title",
+        }
+    }
+
+    /// The order with this API name.
+    #[must_use]
+    pub fn from_api_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.api_name() == name)
+    }
+}
+
+/// Arguments of `joedocs list`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct ListArgs {
+    /// Project name.
+    #[arg(short = 'p', long)]
+    pub project: String,
+    /// Only this document type.
+    #[arg(short = 't', long = "type", value_name = "TYPE")]
+    pub doc_type: Option<String>,
+    /// Only this status.
+    #[arg(short = 's', long)]
+    pub status: Option<String>,
+    /// Order.
+    #[arg(long, value_enum, default_value_t = SortArg::UpdatedDesc)]
+    pub sort: SortArg,
+    /// 1-based position of the first document (see the paging line).
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub start: u64,
+    /// Most documents to show (1 to 1000).
+    #[arg(short = 'n', long, default_value_t = DEFAULT_LIST_LIMIT, value_name = "N")]
+    pub limit: u64,
+    /// Print JSON (as the admin API returns it) instead of a table.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
+/// `joedocs list --limit` when none is given, as `list_documents`.
+pub const DEFAULT_LIST_LIMIT: u64 = 200;
 
 impl Command {
     /// The command's name, e.g. `login` or `key create`, for logs. It never
@@ -227,6 +315,7 @@ impl Command {
             Self::Backup { restore: false, .. } => "backup",
             Self::Backup { restore: true, .. } => "backup --restore",
             Self::Get { .. } => "get",
+            Self::List(_) => "list",
         }
     }
 }
@@ -318,8 +407,11 @@ pub enum ArchiveCommand {
     /// List archived documents, most recently archived first.
     List {
         /// Only this project.
-        #[arg(long)]
+        #[arg(short = 'p', long)]
         project: Option<String>,
+        /// Only this document type.
+        #[arg(short = 't', long = "type", value_name = "TYPE")]
+        doc_type: Option<String>,
     },
     /// Bring an archived document back as it was before it was archived.
     Restore {
@@ -519,6 +611,68 @@ mod tests {
         ])
         .unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn short_options_parse_as_their_long_forms() {
+        let parse = |args: &[&str]| {
+            let mut all = vec!["app"];
+            all.extend_from_slice(args);
+            Cli::try_parse_from(all).map(|cli| cli.command)
+        };
+        let pairs: [(&[&str], &[&str]); 3] = [
+            (
+                &[
+                    "list", "-p", "a", "-t", "plans", "-s", "draft", "-n", "5", "-j",
+                ],
+                &[
+                    "list",
+                    "--project",
+                    "a",
+                    "--type",
+                    "plans",
+                    "--status",
+                    "draft",
+                    "--limit",
+                    "5",
+                    "--json",
+                ],
+            ),
+            (
+                &["archive", "list", "-p", "a", "-t", "notes"],
+                &["archive", "list", "--project", "a", "--type", "notes"],
+            ),
+            (
+                &["get", "JD-1", "-P", "items/a"],
+                &["get", "JD-1", "--part", "items/a"],
+            ),
+        ];
+        for (short, long) in pairs {
+            assert_eq!(parse(short).unwrap(), parse(long).unwrap(), "{short:?}");
+        }
+        let Command::List(args) = parse(&["list", "-p", "a"]).unwrap() else {
+            panic!("not list");
+        };
+        assert_eq!(
+            (args.sort, args.start, args.limit, args.json),
+            (SortArg::UpdatedDesc, 1, DEFAULT_LIST_LIMIT, false)
+        );
+        assert_eq!(
+            parse(&["list"]).unwrap_err().kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(Command::List(args).name(), "list");
+    }
+
+    #[test]
+    fn sort_names_round_trip() {
+        for sort in SortArg::ALL {
+            assert_eq!(SortArg::from_api_name(sort.api_name()), Some(sort));
+            let name = sort.to_possible_value().unwrap();
+            assert_eq!(name.get_name().replace('-', "_"), sort.api_name());
+        }
+        assert_eq!(SortArg::from_api_name("newest"), None);
+        assert_eq!(SortArg::Title.sort(), Sort::Title);
     }
 
     #[test]

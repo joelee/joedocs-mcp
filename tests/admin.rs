@@ -361,6 +361,179 @@ fn archived_documents_are_listed_and_restored_and_check_reports_drift() {
         ));
 }
 
+/// A store with project `p` (key `P`): P-1 a `plans` draft, P-2 a
+/// multi-file `notes` document with one other file, P-3 a `notes` document
+/// archived, and P-4 an archived `plans` document.
+fn browse_store(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    cmd(root).arg("init").assert().success();
+    cmd(root)
+        .args(["project", "add", "p", "--key", "P"])
+        .assert()
+        .success();
+    let mut store = library_store(root)?;
+    let actor = Actor::new("laptop", "test");
+    for (title, doc_type, multifile) in [
+        ("Roadmap", "plans", false),
+        ("Notebook", "notes", true),
+        ("Old notes", "notes", false),
+        ("Old plan", "plans", false),
+    ] {
+        store.create(
+            &actor,
+            NewDocument {
+                project: "p".into(),
+                title: title.into(),
+                doc_type: Some(doc_type.into()),
+                content: "body\n".into(),
+                multifile,
+                ..NewDocument::default()
+            },
+        )?;
+    }
+    store.create_file(
+        &actor,
+        &NewFile {
+            document_id: "P-2".into(),
+            file: "pages/one".into(),
+            content: "one\n".into(),
+            ..NewFile::default()
+        },
+    )?;
+    store.archive(&actor, "P-3", "done")?;
+    store.archive(&actor, "P-4", "dropped")?;
+    Ok(())
+}
+
+#[test]
+fn list_prints_a_projects_documents() {
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    cmd(root.path())
+        .args(["list", "-p", "p", "--sort", "title"])
+        .assert()
+        .success()
+        .stdout(
+            "ID   TYPE   STATUS  REV  FILES  UPDATED               TITLE\n\
+             P-2  notes  draft   2    1      2026-10-26T07:33:20Z  Notebook\n\
+             P-1  plans  draft   1    -      2026-10-26T07:33:20Z  Roadmap\n",
+        );
+    cmd(root.path())
+        .args(["list", "--project", "p", "--type", "plans"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Roadmap"))
+        .stdout(predicate::str::contains("Notebook").not());
+    cmd(root.path())
+        .args(["list", "-p", "p", "-s", "review"])
+        .assert()
+        .success()
+        .stdout("No documents.\n");
+    cmd(root.path())
+        .args(["list", "-p", "p", "--sort", "title", "-n", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "Showing 1-1 of 2; next page: --start 2\n",
+        ));
+    cmd(root.path())
+        .args([
+            "list", "-p", "p", "--sort", "title", "--start", "2", "-n", "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Roadmap"))
+        .stdout(predicate::str::contains("Showing").not());
+    cmd(root.path())
+        .args(["list", "-p", "nope"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("project nope does not exist"));
+    for bad in [["--limit", "0"], ["--type", "nope"]] {
+        cmd(root.path())
+            .args(["list", "-p", "p"])
+            .args(bad)
+            .assert()
+            .code(65);
+    }
+    let output = cmd(root.path())
+        .args(["list", "-p", "p", "-t", "notes", "-j"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.ends_with("}\n"), "{text}");
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["next_start"], serde_json::Value::Null);
+    assert_eq!(json["items"][0]["id"], "P-2");
+    assert_eq!(json["items"][0]["type"], "notes");
+    assert_eq!(json["items"][0]["multifile"], true);
+    assert_eq!(json["items"][0]["files"], 1);
+    let long = cmd(root.path())
+        .args(["list", "--project", "p", "--type", "notes", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(long.stdout).unwrap(), text);
+}
+
+#[test]
+fn archive_list_filters_by_type() {
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    let all = cmd(root.path()).args(["archive", "list"]).output().unwrap();
+    let all = String::from_utf8(all.stdout).unwrap();
+    assert!(
+        all.contains("Old notes") && all.contains("Old plan"),
+        "{all}"
+    );
+    cmd(root.path())
+        .args(["archive", "list", "-t", "notes"])
+        .assert()
+        .success()
+        .stdout(
+            "ID   PROJECT  TYPE   TITLE      ARCHIVED              BY      REASON\n\
+             P-3  p        notes  Old notes  2026-10-26T07:33:20Z  laptop  done\n",
+        );
+    cmd(root.path())
+        .args(["archive", "list", "-p", "p", "--type", "plans"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Old plan"))
+        .stdout(predicate::str::contains("Old notes").not());
+    cmd(root.path())
+        .args(["archive", "list", "--type", "nope"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("\"nope\" is not one of"));
+}
+
+/// Control characters in stored text are printed as escapes in tables.
+#[test]
+fn list_escapes_control_characters_in_titles() {
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    // Titles cannot hold control characters, so write one into the index
+    // directly: the table must still not pass it through.
+    let conn = joedocs::db::open(&root.path().join("state/joedocs.db")).unwrap();
+    conn.execute(
+        "UPDATE documents SET title = 'Bad\u{1b}[31m\nP-9  x' WHERE seq = 1",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let output = cmd(root.path())
+        .args(["list", "-p", "p", "-t", "plans"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Bad\\u{1b}[31m\\nP-9  x"), "{text}");
+    assert!(!text.contains('\u{1b}'), "{text}");
+    assert_eq!(text.lines().count(), 2, "{text}");
+}
+
 #[test]
 fn systemd_install_dry_run_shows_the_unit_for_this_binary() {
     let root = TempDir::new().unwrap();

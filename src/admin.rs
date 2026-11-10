@@ -102,8 +102,8 @@ pub fn archive(
     out: &mut dyn Write,
 ) -> Result<(), Error> {
     match command {
-        ArchiveCommand::List { project } => {
-            let archived = store.archived(project.as_deref())?;
+        ArchiveCommand::List { project, doc_type } => {
+            let archived = store.archived(project.as_deref(), doc_type.as_deref())?;
             if archived.is_empty() {
                 writeln!(out, "No archived documents.")?;
                 return Ok(());
@@ -800,7 +800,11 @@ fn grant_list(grants: &[Grant]) -> String {
 }
 
 /// Writes left-aligned columns separated by two spaces.
-fn write_table(out: &mut dyn Write, header: &[&str], rows: &[Vec<String>]) -> Result<(), Error> {
+pub(crate) fn write_table(
+    out: &mut dyn Write,
+    header: &[&str],
+    rows: &[Vec<String>],
+) -> Result<(), Error> {
     let mut widths: Vec<usize> = header.iter().map(|h| h.chars().count()).collect();
     for row in rows {
         for (width, cell) in widths.iter_mut().zip(row) {

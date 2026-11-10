@@ -16,6 +16,7 @@ pub mod agents;
 pub mod app_id;
 pub mod auth;
 pub mod backup;
+pub mod browse;
 pub mod cli;
 pub mod client;
 pub mod clock;
@@ -269,23 +270,14 @@ pub fn execute(
             status::render(&report, out)?;
         }
         Command::Login { .. } | Command::Logout => {}
-        Command::Get {
-            document_id,
-            version,
-            content_only,
-            front_matter_only,
-            file,
-            part: file_part,
-            archive,
-        } => {
-            let request = GetRequest {
-                id: document_id,
-                version: *version,
-                part: admin::Part::new(*content_only, *front_matter_only),
-                file_part: file_part.as_deref(),
-                archive: archive.as_deref(),
-            };
-            local_get(&open_store(loaded, ctx)?, &request, file.as_deref(), out)?;
+        command @ Command::Get { .. } => {
+            if let Some((request, file)) = GetRequest::of(command) {
+                local_get(&open_store(loaded, ctx)?, &request, file, out)?;
+            }
+        }
+        Command::List(args) => {
+            let reply = browse::list(&open_store(loaded, ctx)?, args)?;
+            browse::print(&reply, args.json, browse::render_list, out)?;
         }
     }
     Ok(())
@@ -528,11 +520,15 @@ fn remote_admin(
             out,
         ),
         Command::Archive {
-            command: ArchiveCommand::List { project },
+            command: ArchiveCommand::List { project, doc_type },
         } => {
-            let path = project
-                .as_ref()
-                .map_or_else(|| "archive".to_owned(), |p| format!("archive?project={p}"));
+            let path = with_query(
+                "archive",
+                &[
+                    ("project", project.as_deref()),
+                    ("type", doc_type.as_deref()),
+                ],
+            );
             remote_text(remote, &Method::GET, &path, None, out)
         }
         Command::Archive {
@@ -547,27 +543,97 @@ fn remote_admin(
         Command::Document { command } => remote_document(remote, command, out),
         Command::Check => remote_text(remote, &Method::GET, "check", None, out),
         Command::Reindex => remote_text(remote, &Method::POST, "reindex", None, out),
-        Command::Get {
-            document_id,
-            version,
-            content_only,
-            front_matter_only,
-            file,
-            part: file_part,
-            archive,
-        } => {
-            let request = GetRequest {
-                id: document_id,
-                version: *version,
-                part: admin::Part::new(*content_only, *front_matter_only),
-                file_part: file_part.as_deref(),
-                archive: archive.as_deref(),
-            };
-            remote_get(remote, &request, file.as_deref(), out)
-        }
+        command @ Command::Get { .. } => match GetRequest::of(command) {
+            Some((request, file)) => remote_get(remote, &request, file, out),
+            None => Ok(()),
+        },
         Command::Backup { file, .. } => remote_backup(remote, file, out),
+        Command::List(args) => remote_list(remote, args, out),
         // Handled by `run_remote`, or refused by `remote` before it.
         _ => Ok(()),
+    }
+}
+
+/// `path?name=value&...` with each value percent-encoded; `None` values are
+/// left out.
+fn with_query(path: &str, pairs: &[(&str, Option<&str>)]) -> String {
+    let query: Vec<String> = pairs
+        .iter()
+        .filter_map(|(name, value)| value.map(|v| format!("{name}={}", percent_encode(v))))
+        .collect();
+    if query.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{}", query.join("&"))
+    }
+}
+
+/// `joedocs list` through the admin API.
+fn remote_list(
+    remote: &client::Remote<'_>,
+    args: &cli::ListArgs,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let (start, limit) = (args.start.to_string(), args.limit.to_string());
+    let path = with_query(
+        "documents",
+        &[
+            ("project", Some(&args.project)),
+            ("type", args.doc_type.as_deref()),
+            ("status", args.status.as_deref()),
+            ("sort", Some(args.sort.api_name())),
+            ("start", Some(&start)),
+            ("limit", Some(&limit)),
+        ],
+    );
+    let reply = remote_page(remote, &path, None, "list", "document list")?;
+    browse::print(&reply, args.json, browse::render_list, out)
+}
+
+/// Calls one of the routes added in 0.4.2 and checks that the reply is a
+/// page. A server without the route (an older `JoeDocs`) gets a message that
+/// says to upgrade it.
+fn remote_page(
+    remote: &client::Remote<'_>,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    command: &str,
+    what: &str,
+) -> Result<serde_json::Value, Error> {
+    let method = if body.is_some() {
+        reqwest::Method::POST
+    } else {
+        reqwest::Method::GET
+    };
+    let reply = remote
+        .call(&method, path, body)
+        .map_err(|e| newer_route(e, remote.server(), command))?;
+    let page: serde_json::Value = remote.parse(&reply, what)?;
+    if !browse::is_page(&page) {
+        return Err(client::Error::Protocol(format!(
+            "{} sent something that is not a JoeDocs {what}; is client.server the JoeDocs server?",
+            remote.server()
+        ))
+        .into());
+    }
+    Ok(page)
+}
+
+/// The message for a route the server does not have.
+fn newer_route(error: client::Error, server: &str, command: &str) -> client::Error {
+    match error {
+        client::Error::Remote { code, message }
+            if code == "not_found" && message == "no such admin API route" =>
+        {
+            client::Error::Remote {
+                code,
+                message: format!(
+                    "{server} has no admin API route for `joedocs {command}`; it may run an older JoeDocs, so upgrade it to {} or later",
+                    env!("CARGO_PKG_VERSION")
+                ),
+            }
+        }
+        other => other,
     }
 }
 
@@ -605,6 +671,33 @@ struct GetRequest<'a> {
     part: admin::Part,
     file_part: Option<&'a str>,
     archive: Option<&'a std::path::Path>,
+}
+
+impl<'a> GetRequest<'a> {
+    /// The request of a `get` command and its `-f` file; `None` for any
+    /// other command.
+    fn of(command: &'a Command) -> Option<(Self, Option<&'a std::path::Path>)> {
+        let Command::Get {
+            document_id,
+            version,
+            content_only,
+            front_matter_only,
+            file,
+            part: file_part,
+            archive,
+        } = command
+        else {
+            return None;
+        };
+        let request = Self {
+            id: document_id,
+            version: *version,
+            part: admin::Part::new(*content_only, *front_matter_only),
+            file_part: file_part.as_deref(),
+            archive: archive.as_deref(),
+        };
+        Some((request, file.as_deref()))
+    }
 }
 
 fn remote_get(

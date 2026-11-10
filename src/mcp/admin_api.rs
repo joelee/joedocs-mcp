@@ -405,6 +405,7 @@ enum Route {
     ArchiveRestore(String),
     Check,
     Reindex,
+    DocumentsList,
     Document(String),
     DocumentConvert(String),
     FileMove(String),
@@ -435,6 +436,7 @@ impl Route {
             ["archive", id, "restore"] if post => Self::ArchiveRestore((*id).to_owned()),
             ["check"] if get => Self::Check,
             ["reindex"] if post => Self::Reindex,
+            ["documents"] if get => Self::DocumentsList,
             ["documents", id] if get => Self::Document((*id).to_owned()),
             ["documents", id, "convert"] if post => Self::DocumentConvert((*id).to_owned()),
             ["documents", id, "files", "move"] if post => Self::FileMove((*id).to_owned()),
@@ -461,6 +463,7 @@ impl Route {
             Self::ArchiveRestore(_) => "admin:archive.restore",
             Self::Check => "admin:check",
             Self::Reindex => "admin:reindex",
+            Self::DocumentsList => "admin:documents.list",
             Self::Document(_) => "admin:documents.get",
             Self::DocumentConvert(_) => "admin:document.convert",
             Self::FileMove(_) => "admin:document.move_file",
@@ -502,6 +505,7 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         Route::ArchiveRestore(id) => archive_restore(state, call, id).await,
         Route::Check => check(state, call).await,
         Route::Reindex => reindex(state, call).await,
+        Route::DocumentsList => documents_list(state, call, uri).await,
         Route::Document(id) => document(state, call, id, uri).await,
         Route::DocumentConvert(id) => document_command(state, call, id, body, "convert").await,
         Route::FileMove(id) => document_command(state, call, id, body, "move").await,
@@ -723,6 +727,57 @@ fn query(uri: &axum::http::Uri, name: &str) -> Option<String> {
     })
 }
 
+/// A query parameter from `uri`, percent-decoded.
+fn decoded(uri: &axum::http::Uri, name: &str) -> Option<String> {
+    query(uri, name).map(|value| percent_decode(&value))
+}
+
+/// A number query parameter, or `invalid_argument`.
+fn number(uri: &axum::http::Uri, name: &str) -> Result<Option<u64>, ApiError> {
+    decoded(uri, name)
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_argument",
+                    format!("`{name}` must be a number, not \"{value}\""),
+                )
+            })
+        })
+        .transpose()
+}
+
+/// The arguments of `GET /admin/v1/documents`.
+fn list_args(uri: &axum::http::Uri) -> Result<crate::cli::ListArgs, ApiError> {
+    use crate::cli::SortArg;
+    let invalid =
+        |message: String| ApiError::new(StatusCode::BAD_REQUEST, "invalid_argument", message);
+    let sort = match decoded(uri, "sort") {
+        None => SortArg::default(),
+        Some(name) => SortArg::from_api_name(&name)
+            .ok_or_else(|| invalid(format!("`sort` cannot be \"{name}\"")))?,
+    };
+    Ok(crate::cli::ListArgs {
+        project: decoded(uri, "project").ok_or_else(|| invalid("`project` is required".into()))?,
+        doc_type: decoded(uri, "type"),
+        status: decoded(uri, "status"),
+        sort,
+        start: number(uri, "start")?.unwrap_or(1),
+        limit: number(uri, "limit")?.unwrap_or(crate::cli::DEFAULT_LIST_LIMIT),
+        json: false,
+    })
+}
+
+/// `GET /admin/v1/documents`: the `list_documents` result.
+async fn documents_list(state: Arc<ApiState>, call: Call, uri: axum::http::Uri) -> Response {
+    authorized(state, call, move |store, _, _| {
+        let args = list_args(&uri)?;
+        let reply = crate::browse::list(store, &args).map_err(|e| from_crate(&e))?;
+        Ok(axum::Json(reply).into_response())
+    })
+    .await
+}
+
 async fn projects_list(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, _, _| {
         text(|out| crate::admin::project(store, &crate::cli::ProjectCommand::List, out))
@@ -792,7 +847,8 @@ async fn keys_revoke(state: Arc<ApiState>, call: Call, name: String) -> Response
 async fn archive_list(state: Arc<ApiState>, call: Call, uri: axum::http::Uri) -> Response {
     authorized(state, call, move |store, _, _| {
         let command = crate::cli::ArchiveCommand::List {
-            project: query(&uri, "project"),
+            project: decoded(&uri, "project"),
+            doc_type: decoded(&uri, "type"),
         };
         text(|out| crate::admin::archive(store, &command, out))
     })

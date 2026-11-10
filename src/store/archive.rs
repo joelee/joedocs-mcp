@@ -1,7 +1,7 @@
 //! Archived documents: listing them and bringing them back (admin only).
 
 use super::documents::{
-    Action, Change, Changed, DocumentInfo, choose_path, finish, integrity, parse_id,
+    Action, Change, Changed, DocumentInfo, check_member, choose_path, finish, integrity, parse_id,
     revision_with_content, write_revision,
 };
 use super::{Actor, Error, Store, begin_write, index_file};
@@ -24,12 +24,20 @@ pub struct ArchivedInfo {
 
 impl Store {
     /// Archived documents, most recently archived first, of one project or
-    /// all.
+    /// all, and of one type or all.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ProjectNotFound`] and database errors.
-    pub fn archived(&self, project: Option<&str>) -> Result<Vec<ArchivedInfo>, Error> {
+    /// Returns [`Error::ProjectNotFound`], [`Error::Invalid`] for a type that
+    /// is not configured, and database errors.
+    pub fn archived(
+        &self,
+        project: Option<&str>,
+        doc_type: Option<&str>,
+    ) -> Result<Vec<ArchivedInfo>, Error> {
+        if let Some(doc_type) = doc_type {
+            check_member("type", doc_type, &self.settings.types)?;
+        }
         let project_id = project
             .map(|name| {
                 db::find_project(&self.conn, name)?
@@ -38,7 +46,7 @@ impl Store {
                     .ok_or_else(|| Error::ProjectNotFound(name.to_owned()))
             })
             .transpose()?;
-        Ok(db::archived_documents(&self.conn, project_id)?
+        Ok(db::archived_documents(&self.conn, project_id, doc_type)?
             .into_iter()
             .map(|row| ArchivedInfo {
                 document: DocumentInfo::from(&row),
