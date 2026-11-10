@@ -84,13 +84,15 @@ brew install joelee/oss/joedocs
 
 ```bash
 V=0.4.3 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
-gh release download "v$V" -R joelee/joedocs-mcp -p "joedocs-$V-$T.tar.gz" -p SHA256SUMS
-shasum -a 256 -c --ignore-missing SHA256SUMS
-gh attestation verify "joedocs-$V-$T.tar.gz" -R joelee/joedocs-mcp
-tar xzf "joedocs-$V-$T.tar.gz" joedocs && install -m 0755 joedocs ~/.local/bin/
+A="joedocs-$V-$T.tar.gz"
+gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber &&
+  shasum -a 256 -c --ignore-missing SHA256SUMS &&
+  gh attestation verify "$A" -R joelee/joedocs-mcp &&
+  tar xzf "$A" joedocs &&
+  mkdir -p ~/.local/bin && install -m 0755 joedocs ~/.local/bin/
 ```
 
-`gh attestation verify` checks that the archive was built by this repository's release workflow. Without `gh`, download the files from the release page and check them with `shasum` alone.
+Each step runs only if the one before it succeeded, so a failed download, checksum or attestation stops before anything is installed. `gh attestation verify` checks that the archive was built by this repository's release workflow. `~/.local/bin` must be on your `PATH`. Without `gh`, download the archive and `SHA256SUMS` from the release page and run the `shasum` line; if it reports anything but `OK`, do not install the archive.
 
 **Linux or macOS** (Cargo, Rust 1.99 or newer and a C compiler):
 

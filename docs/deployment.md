@@ -30,13 +30,15 @@ JoeDocs needs `git` at run time (`sudo pacman -S git`, `sudo apt install git`, o
 
 ```bash
 V=0.4.3 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
-gh release download "v$V" -R joelee/joedocs-mcp -p "joedocs-$V-$T.tar.gz" -p SHA256SUMS
-shasum -a 256 -c --ignore-missing SHA256SUMS
-gh attestation verify "joedocs-$V-$T.tar.gz" -R joelee/joedocs-mcp
-tar xzf "joedocs-$V-$T.tar.gz" joedocs && install -m 0755 joedocs ~/.local/bin/
+A="joedocs-$V-$T.tar.gz"
+gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber &&
+  shasum -a 256 -c --ignore-missing SHA256SUMS &&
+  gh attestation verify "$A" -R joelee/joedocs-mcp &&
+  tar xzf "$A" joedocs &&
+  mkdir -p ~/.local/bin && install -m 0755 joedocs ~/.local/bin/
 ```
 
-Install it wherever your service expects it: `joedocs systemd install` pins the binary's path in the unit, so put it on `PATH` first (here `~/.local/bin`) and run `systemd install` from there. The macOS binary is not notarised: if you downloaded it in a browser, run `xattr -d com.apple.quarantine joedocs` once (files fetched with `gh` or `curl` are not quarantined).
+Each step runs only if the one before it succeeded, so a failed download, checksum or attestation stops before anything is installed; `~/.local/bin` is created if it is missing and must be on your `PATH`. Without `gh`, download the archive and `SHA256SUMS` from the release page and run the `shasum` line; if it reports anything but `OK`, do not install the archive. Install it wherever your service expects it: `joedocs systemd install` pins the binary's path in the unit, so put it on `PATH` first (here `~/.local/bin`) and run `systemd install` from there. The macOS binary is not notarised: if you downloaded it in a browser, run `xattr -d com.apple.quarantine joedocs` once (files fetched with `gh` or `curl` are not quarantined).
 
 ## 2. Configure
 
