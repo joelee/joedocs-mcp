@@ -613,6 +613,8 @@ fn parity_steps() -> Vec<Vec<&'static str>> {
         vec!["get", "JD-1", "--part", "x y"],
         vec!["get", "JD-2", "--part", "x"],
         vec!["get", "JD-2", "--archive", "x.tgz"],
+        vec!["get", "JD-1", "-f", "missing/out.md"],
+        vec!["get", "JD-1", "--archive", "missing/out.tgz"],
         // The local binary stamps changes with the real clock and the server
         // with its fixed one, so order by title once documents have changed.
         vec!["list", "-p", "joedocs", "--sort", "title"],
@@ -691,6 +693,16 @@ fn remote_commands_print_what_local_commands_print() {
         normalize(&std::fs::read_to_string(remote_file).unwrap()),
         normalize(&std::fs::read_to_string(local_file).unwrap())
     );
+
+    // A write that fails names its path, as it does locally.
+    for (option, path) in [("-f", "missing/out.md"), ("--archive", "missing/out.tgz")] {
+        server
+            .cmd()
+            .args(["get", "JD-1", option, path])
+            .assert()
+            .code(74)
+            .stderr(predicate::str::contains(format!("cannot write {path}: ")));
+    }
 }
 
 #[test]

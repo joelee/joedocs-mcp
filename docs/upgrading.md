@@ -62,6 +62,7 @@ For a system unit, run `tar` with `sudo` so it can read the service account's fi
 | Install | Upgrade |
 | --- | --- |
 | `cargo install`, systemd user unit | `cargo install joedocs --locked` |
+| Prebuilt binary (0.4.3 or later) | Download and check the new archive as in the [install guide](deployment.md#1-install), then install it over the old file (`install -m 0755 joedocs <the old path>`). Rerun `joedocs systemd install` only if the path changed, for example when moving from `~/.cargo/bin` to `~/.local/bin`. |
 | `cargo install`, systemd system unit | `sudo cargo install joedocs --locked --root /usr/local` (or wherever the unit's `ExecStart` points) |
 | Homebrew | `brew update && brew upgrade joedocs` |
 | Docker Compose | `docker compose pull` (or `docker compose build` for a local image) |
@@ -98,6 +99,15 @@ If the upgrade added a migration (see the notes), the old version refuses the da
 Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
+
+### 0.4.2 to 0.4.3
+
+- **No migration**, and no configuration change: install the new version and restart, as in steps 2 and 3. Going back to 0.4.2 needs no restore.
+- **Prebuilt binaries:** from 0.4.3, each GitHub release has static Linux binaries (x86_64, aarch64) and an Apple silicon binary, with `SHA256SUMS` and build-provenance attestations, so an upgrade need not compile. See the [install guide](deployment.md#1-install) and the row in step 2.
+- **Plain logs:** when stderr is not a terminal (the journal, `brew services` logs, a file), logs have no ANSI colour codes; `NO_COLOR` turns colour off on a terminal too. Nothing to change.
+- **`JOEDOCS_API_TOKEN` is gone:** it was the template's example secret and JoeDocs never used it. `config show` no longer lists it; unset it wherever you set it (`.env`, a unit's `Environment=`). Clients' API keys are unaffected.
+- **`get -f` and `get --archive`** name the path they could not write (`cannot write missing/out.md: ...`); the exit code is still `74`. `-f` is the output file; a file of a multi-file document is `-P/--part`.
+- MCP clients see no change, and a 0.4.2 client works with a 0.4.3 server and the other way round.
 
 ### 0.4.1 to 0.4.2
 

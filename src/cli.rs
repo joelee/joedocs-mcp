@@ -136,7 +136,8 @@ pub enum Command {
         /// Print only the front matter, as YAML without the `---` lines.
         #[arg(long)]
         front_matter_only: bool,
-        /// Write to this file (replacing it) instead of standard output.
+        /// Write the output to this file (replacing it) instead of standard
+        /// output. To print a file of a multi-file document, use -P/--part.
         #[arg(short = 'f', long, value_name = "PATH")]
         file: Option<PathBuf>,
         /// Print this file of a multi-file document (its path in the folder,

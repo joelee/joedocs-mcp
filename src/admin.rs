@@ -459,8 +459,9 @@ pub fn check_folder_archive(bytes: &[u8]) -> Result<(), String> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Output`] when writing fails, and a store integrity error
-/// when the stored text has no front matter block.
+/// Returns [`Error::Write`] when writing `file` fails, [`Error::Output`]
+/// when writing to `out` fails, and a store integrity error when the stored
+/// text has no front matter block.
 pub fn write_document(
     markdown: &str,
     part: Part,
@@ -476,7 +477,7 @@ pub fn write_document(
         }
     };
     match file {
-        Some(path) => write_atomically(path, text.as_bytes())?,
+        Some(path) => write_file(path, text.as_bytes())?,
         None => out.write_all(text.as_bytes())?,
     }
     Ok(())
@@ -537,6 +538,18 @@ pub fn document(
         }
     }
     Ok(())
+}
+
+/// [`write_atomically`] for a file the user named, such as `get -f PATH`.
+///
+/// # Errors
+///
+/// Returns [`Error::Write`], which names `path`, when writing fails.
+pub fn write_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    write_atomically(path, bytes).map_err(|source| Error::Write {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Writes `bytes` to `path` through a temporary file in the same directory,

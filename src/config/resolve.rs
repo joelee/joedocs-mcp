@@ -633,7 +633,7 @@ mod tests {
     fn unrelated_variables_are_ignored() {
         let env = MapEnv::new()
             .with("MY_APP_CONFIG_FILE", "")
-            .with("MY_APP_API_TOKEN", "secret")
+            .with("MY_APP_ADMIN_TOKEN", "secret")
             .with("OTHER__SERVER__MAX_DOCUMENT_BYTES", "x");
         assert!(resolve_with(&env, &MemFs::new()).is_ok());
     }

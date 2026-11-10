@@ -4,7 +4,7 @@
 .
 ├── .github/
 │   ├── workflows/ci.yml    just ci on Linux and macOS, and just docker-test
-│   ├── workflows/release.yml  Signed vX.Y.Z tag: checks, CI, approval, crates.io, tap, GitHub release
+│   ├── workflows/release.yml  Signed vX.Y.Z tag: checks, CI and binaries, approval, crates.io, tap, GitHub release with binaries
 │   └── dependabot.yml      Weekly action and crate update proposals
 ├── AGENTS.md               Instructions for coding agents
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code

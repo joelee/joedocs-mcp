@@ -20,10 +20,25 @@ flowchart LR
 | Platform | Command |
 | --- | --- |
 | macOS | `brew trust joelee/oss && brew tap joelee/oss && brew install joelee/oss/joedocs` |
+| Linux or macOS | A prebuilt binary from [GitHub Releases](https://github.com/joelee/joedocs-mcp/releases) (0.4.3 or later; below) |
 | Linux or macOS | `cargo install joedocs --locked` (Rust 1.99 or newer and a C compiler; installs to `~/.cargo/bin`) |
 | Docker | Build from a clone with the `Dockerfile` and `compose.yaml` (see the [developer guide](developer-guide.md#running-with-docker)) |
 
 JoeDocs needs `git` at run time (`sudo pacman -S git`, `sudo apt install git`, or the Xcode Command Line Tools on macOS).
+
+**Prebuilt binaries.** Each release has `joedocs-X.Y.Z-<target>.tar.gz` for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (static, so they run on any distribution) and `aarch64-apple-darwin` (Apple silicon), with a `SHA256SUMS` file and a build-provenance attestation for each archive. Check both before installing:
+
+```bash
+V=0.4.3 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
+A="joedocs-$V-$T.tar.gz"
+gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber &&
+  shasum -a 256 -c --ignore-missing SHA256SUMS &&
+  gh attestation verify "$A" -R joelee/joedocs-mcp &&
+  tar xzf "$A" joedocs &&
+  mkdir -p ~/.local/bin && install -m 0755 joedocs ~/.local/bin/
+```
+
+Each step runs only if the one before it succeeded, so a failed download, checksum or attestation stops before anything is installed; `~/.local/bin` is created if it is missing and must be on your `PATH`. Without `gh`, download the archive and `SHA256SUMS` from the release page and run the `shasum` line; if it reports anything but `OK`, do not install the archive. Install it wherever your service expects it: `joedocs systemd install` pins the binary's path in the unit, so put it on `PATH` first (here `~/.local/bin`) and run `systemd install` from there. The macOS binary is not notarised: if you downloaded it in a browser, run `xattr -d com.apple.quarantine joedocs` once (files fetched with `gh` or `curl` are not quarantined).
 
 ## 2. Configure
 

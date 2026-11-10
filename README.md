@@ -80,13 +80,27 @@ brew trust joelee/oss && brew tap joelee/oss
 brew install joelee/oss/joedocs
 ```
 
+**Linux or macOS** (a prebuilt binary from [GitHub Releases](https://github.com/joelee/joedocs-mcp/releases), from 0.4.3: static for Linux x86_64 and aarch64, and for Apple silicon Macs):
+
+```bash
+V=0.4.3 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
+A="joedocs-$V-$T.tar.gz"
+gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber &&
+  shasum -a 256 -c --ignore-missing SHA256SUMS &&
+  gh attestation verify "$A" -R joelee/joedocs-mcp &&
+  tar xzf "$A" joedocs &&
+  mkdir -p ~/.local/bin && install -m 0755 joedocs ~/.local/bin/
+```
+
+Each step runs only if the one before it succeeded, so a failed download, checksum or attestation stops before anything is installed. `gh attestation verify` checks that the archive was built by this repository's release workflow. `~/.local/bin` must be on your `PATH`. Without `gh`, download the archive and `SHA256SUMS` from the release page and run the `shasum` line; if it reports anything but `OK`, do not install the archive.
+
 **Linux or macOS** (Cargo, Rust 1.99 or newer and a C compiler):
 
 ```bash
 cargo install joedocs --locked
 ```
 
-JoeDocs needs `git` at run time. On macOS the Xcode Command Line Tools provide it.
+JoeDocs needs `git` at run time. On macOS the Xcode Command Line Tools provide it. The macOS binary is not notarised: if you downloaded it in a browser, clear the quarantine flag with `xattr -d com.apple.quarantine joedocs` (files fetched with `gh` or `curl` have none).
 
 ## Quick start
 
@@ -159,17 +173,15 @@ flowchart LR
 Planned:
 
 - An admin web interface (0.5.0), built on the admin API's JSON routes.
-- Plain logs (no colour codes) when `serve` is not writing to a terminal.
 - More agent skills: research notes, decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
-- Dropping the template's example secret `JOEDOCS_API_TOKEN`, which the server does not use.
 
 Further out:
 
 - A document graph agents can query, for example "what depends on JD-12" (an idea to explore first).
 - Rewriting `[[links]]` to a renamed document in the same project.
 - Approval provenance: server-stamped status changes, and optionally a grant needed to approve.
-- Prebuilt binaries for Linux and macOS on GitHub Releases, and a homebrew-core formula.
+- A homebrew-core formula.
 - From the design plan's "Later" list: per-type templates, documents as MCP resources, backlinks, embedding search, attachments, secret scanning on write.
 
 The detailed backlog is kept in JoeDocs itself, as a multi-file document; what has shipped is in the [changelog](https://github.com/joelee/joedocs-mcp/blob/main/CHANGELOG.md).

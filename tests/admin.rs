@@ -1535,6 +1535,37 @@ fn get_prints_a_folder_and_its_parts() {
 }
 
 #[test]
+fn a_failed_write_names_the_output_path() {
+    let root = TempDir::new().unwrap();
+    folder_store(root.path()).unwrap();
+    let run = |args: &[&str]| cmd(root.path()).args(args).assert();
+    for args in [
+        vec!["get", "JD-1", "-f", "missing/out.md"],
+        vec!["get", "JD-2", "-P", "notes", "-f", "missing/notes.md"],
+        vec!["get", "JD-2", "--archive", "missing/out.tgz"],
+    ] {
+        let path = args[args.len() - 1];
+        run(&args).code(74).stderr(format!(
+            "error: cannot write {path}: No such file or directory (os error 2)\n"
+        ));
+    }
+    assert!(!root.path().join("missing").exists());
+}
+
+#[test]
+fn get_help_points_to_part_for_a_file_of_a_document() {
+    let root = TempDir::new().unwrap();
+    let output = cmd(root.path()).args(["get", "--help"]).assert().success();
+    let help = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    let file = help
+        .split("\n  -")
+        .find(|option| option.starts_with("f, --file"))
+        .unwrap();
+    assert!(file.contains("output"), "{file}");
+    assert!(file.contains("-P/--part"), "{file}");
+}
+
+#[test]
 fn get_archives_a_folder() {
     use std::os::unix::fs::PermissionsExt as _;
     let root = TempDir::new().unwrap();

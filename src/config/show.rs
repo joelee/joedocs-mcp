@@ -101,7 +101,7 @@ mod tests {
             value: Value::String("debug".into()),
         }];
         let resolved = resolve(&app, None, &cli, &env, &fs).unwrap();
-        let text = render_show(&app, &resolved, &[("MY_APP_API_TOKEN".into(), true)]);
+        let text = render_show(&app, &resolved, &[("MY_APP_ADMIN_TOKEN".into(), true)]);
 
         assert!(text.contains("# Config file: config.toml"), "{text}");
         assert!(text.contains("[storage]"), "{text}");
@@ -121,16 +121,16 @@ mod tests {
             text.contains("level = \"debug\"  # cli --log-level"),
             "{text}"
         );
-        assert!(text.contains("# MY_APP_API_TOKEN: set"), "{text}");
+        assert!(text.contains("# MY_APP_ADMIN_TOKEN: set"), "{text}");
     }
 
     #[test]
     fn show_reports_missing_file_and_unset_secrets() {
         let app = AppId::new("my-app");
         let resolved = resolve(&app, None, &[], &MapEnv::new(), &MemFs::new()).unwrap();
-        let text = render_show(&app, &resolved, &[("MY_APP_API_TOKEN".into(), false)]);
+        let text = render_show(&app, &resolved, &[("MY_APP_ADMIN_TOKEN".into(), false)]);
         assert!(text.contains("# Config file: none"), "{text}");
-        assert!(text.contains("# MY_APP_API_TOKEN: unset"), "{text}");
+        assert!(text.contains("# MY_APP_ADMIN_TOKEN: unset"), "{text}");
         let text = render_show(&app, &resolved, &[]);
         assert!(!text.contains("Secrets"), "{text}");
     }

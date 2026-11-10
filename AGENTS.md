@@ -93,7 +93,7 @@ The first source that exists wins; files are never merged.
 ### Environment override rules
 
 - Prefix is `JOEDOCS__` (double underscore). Each further `__` separates a table level. Names are upper case; snake_case keys keep their single underscores. Example: `[server] max_document_bytes` → `JOEDOCS__SERVER__MAX_DOCUMENT_BYTES`.
-- `JOEDOCS_CONFIG_FILE` and secrets such as `JOEDOCS_API_TOKEN` (single underscore) are not overrides.
+- `JOEDOCS_CONFIG_FILE` and secrets such as `JOEDOCS_ADMIN_TOKEN` (single underscore) are not overrides.
 - Values are parsed as the target field's type: booleans, integers and floats use TOML scalar syntax, strings are taken literally, arrays use TOML inline-array syntax (`["a", "b"]`).
 - An unknown override path, an unparseable value, or an empty value for a non-string field is a startup error that names the variable.
 - Every config key's override variable name is listed in `docs/configuration.md` alongside its type, default, and example.

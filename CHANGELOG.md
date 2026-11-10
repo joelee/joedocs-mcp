@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-10
+
+Prebuilt, checksummed and attested binaries on GitHub Releases, plain logs off a terminal, clearer `get -f` errors, and the unused example secret removed.
+
+### Added
+
+- Prebuilt binaries on each GitHub release: Linux x86_64 and aarch64 (static, musl) and macOS Apple silicon, as `joedocs-X.Y.Z-<target>.tar.gz`, with `SHA256SUMS` and a build-provenance attestation for each (`gh attestation verify`). The release workflow builds and checks them before the crates.io publish, so a failed build stops the release.
+
+### Changed
+
+- Logs are plain (no ANSI colour codes) when stderr is not a terminal, such as the journal or `brew services` logs, or when `NO_COLOR` is set.
+- `joedocs get --help` describes `-f`/`--file` as the output file and points to `-P`/`--part` for a file of a multi-file document (issue JD-27).
+
+### Fixed
+
+- `joedocs get -f PATH` and `get --archive OUT.tgz`, locally and remotely, name the path they could not write: `cannot write missing/out.md: No such file or directory`, where they said `cannot write output`. The exit code is still `74` (issue JD-27).
+
+### Removed
+
+- `JOEDOCS_API_TOKEN`, the template's example secret, which JoeDocs never used; `config show` no longer lists it.
+
 ## [0.4.2] - 2026-11-10
 
 Admin commands to view and find documents and read the audit log, locally and through JSON admin API routes that the 0.5.0 admin web interface will build on.
@@ -159,7 +180,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/joelee/joedocs-mcp/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/joelee/joedocs-mcp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/joelee/joedocs-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/joelee/joedocs-mcp/compare/v0.3.0...v0.4.0

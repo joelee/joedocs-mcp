@@ -1,5 +1,6 @@
 //! Binary entry point: a thin wrapper around the library.
 
+use std::io::IsTerminal as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -39,6 +40,7 @@ fn main() -> ExitCode {
 
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_ansi(joedocs::log_colour(std::io::stderr().is_terminal(), &env))
         .with_max_level(loaded.config().log.level.as_filter())
         .init();
 

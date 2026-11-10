@@ -31,7 +31,7 @@ Run `joedocs config paths` to see the search order and the selected file.
 
 | Key | Type | Default | Environment override | CLI flag | Description |
 | --- | --- | --- | --- | --- | --- |
-| `log.level` | string: `error`, `warn`, `info`, `debug`, `trace` | `"info"` | `JOEDOCS__LOG__LEVEL` | `--log-level` | Minimum level written to stderr. |
+| `log.level` | string: `error`, `warn`, `info`, `debug`, `trace` | `"info"` | `JOEDOCS__LOG__LEVEL` | `--log-level` | Minimum level written to stderr. Logs are coloured only when stderr is a terminal and `NO_COLOR` is not set. |
 | `server.bind` | string: socket address | `"127.0.0.1:8750"` | `JOEDOCS__SERVER__BIND` | | Address and port the MCP server listens on. Use a TLS reverse proxy or Tailscale for remote clients. |
 | `server.allowed_hosts` | array of strings: `host` or `host:port` (1 or more) | `["localhost", "127.0.0.1", "::1"]` | `JOEDOCS__SERVER__ALLOWED_HOSTS` | | `Host` header values to accept, which blocks DNS rebinding. Behind a reverse proxy, add the public name, e.g. `docs.example.net`. |
 | `server.allowed_origins` | array of strings: `http(s)://host[:port]` | `[]` | `JOEDOCS__SERVER__ALLOWED_ORIGINS` | | `Origin` header values to accept, e.g. `["https://docs.example.net"]`. Requests without `Origin` (CLI and desktop clients) are allowed; any other `Origin` gets `403`. |
@@ -64,7 +64,6 @@ Secrets are read from environment variables only and are never part of the confi
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `JOEDOCS_API_TOKEN` | No | Example secret; replace with your own. |
 | `JOEDOCS_ADMIN_TOKEN` | For `login` and remote commands | The admin token (`jda_...`) printed once by `joedocs admin-token create` on the server. Read it from a password manager, for example `JOEDOCS_ADMIN_TOKEN="$(pass show joedocs/admin)" joedocs login`. |
 
 Keep `.env.example` listing every supported secret with a safe placeholder value.
