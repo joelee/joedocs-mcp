@@ -279,6 +279,11 @@ pub fn execute(
             let reply = browse::list(&open_store(loaded, ctx)?, args)?;
             browse::print(&reply, args.json, browse::render_list, out)?;
         }
+        Command::Search(args) => {
+            let spec = browse::SearchSpec::from_args(args)?;
+            let reply = browse::search(&open_store(loaded, ctx)?, &spec)?;
+            browse::print(&reply, args.json, browse::render_search, out)?;
+        }
     }
     Ok(())
 }
@@ -549,6 +554,13 @@ fn remote_admin(
         },
         Command::Backup { file, .. } => remote_backup(remote, file, out),
         Command::List(args) => remote_list(remote, args, out),
+        Command::Search(args) => {
+            let spec = browse::SearchSpec::from_args(args)?;
+            let body =
+                serde_json::to_value(&spec).map_err(|e| Error::Output(io::Error::other(e)))?;
+            let reply = remote_page(remote, "search", Some(&body), "search", "search result")?;
+            browse::print(&reply, args.json, browse::render_search, out)
+        }
         // Handled by `run_remote`, or refused by `remote` before it.
         _ => Ok(()),
     }

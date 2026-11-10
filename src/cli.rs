@@ -154,6 +154,8 @@ pub enum Command {
     },
     /// List a project's documents (metadata only), one page at a time.
     List(ListArgs),
+    /// Search documents by text and front matter, in every project or one.
+    Search(SearchArgs),
 }
 
 /// Order of `joedocs list`.
@@ -241,6 +243,46 @@ pub struct ListArgs {
 /// `joedocs list --limit` when none is given, as `list_documents`.
 pub const DEFAULT_LIST_LIMIT: u64 = 200;
 
+/// Arguments of `joedocs search`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct SearchArgs {
+    /// Words to find, in the search syntax (all must match; "a phrase",
+    /// -word, word*, a OR b); leave out to search by front matter only.
+    #[arg(value_name = "QUERY")]
+    pub query: Vec<String>,
+    /// Only this project (default: every project).
+    #[arg(short = 'p', long)]
+    pub project: Option<String>,
+    /// Only this document type.
+    #[arg(short = 't', long = "type", value_name = "TYPE")]
+    pub doc_type: Option<String>,
+    /// Only this status (short for `--filter status=STATUS`).
+    #[arg(short = 's', long)]
+    pub status: Option<String>,
+    /// A front matter key that must equal this text (repeatable).
+    #[arg(short = 'F', long = "filter", value_name = "KEY=VALUE")]
+    pub filter: Vec<String>,
+    /// Front matter conditions as a JSON object, with the operators of
+    /// `search_documents`, e.g. `{"severity": {"in": ["major"]}}`.
+    #[arg(long, value_name = "JSON")]
+    pub filters: Option<String>,
+    /// Only this document's files (its main file included).
+    #[arg(short = 'd', long, value_name = "DOCUMENT_ID")]
+    pub document: Option<String>,
+    /// 1-based position of the first result (see the paging line).
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub start: u64,
+    /// Most results to show (1 to 200).
+    #[arg(short = 'n', long, default_value_t = DEFAULT_SEARCH_LIMIT, value_name = "N")]
+    pub limit: u64,
+    /// Print JSON (as the admin API returns it) instead of a table.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
+/// `joedocs search --limit` when none is given, as `search_documents`.
+pub const DEFAULT_SEARCH_LIMIT: u64 = 20;
+
 impl Command {
     /// The command's name, e.g. `login` or `key create`, for logs. It never
     /// includes arguments, which can hold a TOTP code.
@@ -316,6 +358,7 @@ impl Command {
             Self::Backup { restore: true, .. } => "backup --restore",
             Self::Get { .. } => "get",
             Self::List(_) => "list",
+            Self::Search(_) => "search",
         }
     }
 }
@@ -620,7 +663,7 @@ mod tests {
             all.extend_from_slice(args);
             Cli::try_parse_from(all).map(|cli| cli.command)
         };
-        let pairs: [(&[&str], &[&str]); 3] = [
+        let pairs: [(&[&str], &[&str]); 4] = [
             (
                 &[
                     "list", "-p", "a", "-t", "plans", "-s", "draft", "-n", "5", "-j",
@@ -646,6 +689,30 @@ mod tests {
                 &["get", "JD-1", "-P", "items/a"],
                 &["get", "JD-1", "--part", "items/a"],
             ),
+            (
+                &[
+                    "search", "a", "b", "-p", "x", "-t", "plans", "-s", "draft", "-F", "k=v", "-d",
+                    "JD-1", "-n", "3", "-j",
+                ],
+                &[
+                    "search",
+                    "a",
+                    "b",
+                    "--project",
+                    "x",
+                    "--type",
+                    "plans",
+                    "--status",
+                    "draft",
+                    "--filter",
+                    "k=v",
+                    "--document",
+                    "JD-1",
+                    "--limit",
+                    "3",
+                    "--json",
+                ],
+            ),
         ];
         for (short, long) in pairs {
             assert_eq!(parse(short).unwrap(), parse(long).unwrap(), "{short:?}");
@@ -662,6 +729,14 @@ mod tests {
             clap::error::ErrorKind::MissingRequiredArgument
         );
         assert_eq!(Command::List(args).name(), "list");
+        let Command::Search(args) = parse(&["search"]).unwrap() else {
+            panic!("not search");
+        };
+        assert_eq!(
+            (args.query.len(), args.start, args.limit, args.json),
+            (0, 1, DEFAULT_SEARCH_LIMIT, false)
+        );
+        assert_eq!(Command::Search(args).name(), "search");
     }
 
     #[test]

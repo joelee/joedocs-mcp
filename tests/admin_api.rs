@@ -607,3 +607,62 @@ async fn the_documents_list_route_returns_json_and_is_audited() -> TestResult<()
     );
     server.stop().await
 }
+
+#[tokio::test]
+async fn the_search_route_takes_a_json_body_and_is_audited() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let added = server
+        .send(
+            "POST",
+            "/admin/v1/projects",
+            &auth,
+            r#"{"name":"p","key":"P"}"#,
+        )
+        .await?;
+    assert_eq!(added.status, 200, "{:?}", added.json);
+    for body in ["", r#"{"query":"nothing","project":"*","limit":5}"#] {
+        let found = server.send("POST", "/admin/v1/search", &auth, body).await?;
+        assert_eq!(found.status, 200, "{body}: {:?}", found.json);
+        assert_eq!(
+            found.json,
+            serde_json::json!({"items": [], "total": 0, "next_start": null})
+        );
+    }
+    for (body, needle) in [
+        (r#"{"nope":1}"#, "unknown field"),
+        (r#"{"filters":{"k":{"near":1}}}"#, "invalid filters"),
+        ("[1", "invalid JSON"),
+        (r#"{"limit":"many"}"#, "invalid search"),
+    ] {
+        let bad = server.send("POST", "/admin/v1/search", &auth, body).await?;
+        assert_eq!(bad.status, 400, "{body}: {:?}", bad.json);
+        assert!(
+            bad.json["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains(needle),
+            "{body}: {:?}",
+            bad.json
+        );
+    }
+    let audit = server.audit()?;
+    let outcomes: Vec<&str> = audit
+        .iter()
+        .filter(|(tool, _)| tool == "admin:documents.search")
+        .map(|(_, outcome)| outcome.as_str())
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            "ok",
+            "ok",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument"
+        ]
+    );
+    server.stop().await
+}

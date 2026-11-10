@@ -1243,6 +1243,18 @@ async fn admin_json_matches_the_mcp_results() -> TestResult<()> {
             vec!["list", "-p", "joedocs", "-j"],
         ),
         (
+            "search_documents",
+            json!({"project": "joedocs", "query": "body"}),
+            vec!["search", "body", "-p", "joedocs", "-j"],
+        ),
+        (
+            "search_documents",
+            json!({"project": "joedocs", "type": "plans", "filters": {"status": "draft"}, "limit": 1}),
+            vec![
+                "search", "-p", "joedocs", "-t", "plans", "-s", "draft", "-n", "1", "-j",
+            ],
+        ),
+        (
             "list_documents",
             json!({"project": "joedocs", "type": "plans", "sort": "title", "limit": 1}),
             vec![

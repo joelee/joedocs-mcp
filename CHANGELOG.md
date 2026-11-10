@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - **`joedocs list -p PROJECT`** lists a project's live documents as a table (`ID`, `TYPE`, `STATUS`, `REV`, `FILES`, `UPDATED`, `TITLE`), filtered with `-t/--type` and `-s/--status`, ordered with `--sort` (`updated-desc`, `updated-asc`, `created-desc`, `created-asc`, `title`), and paged with `--start` and `-n/--limit` (a last line says how to get the next page). `-j/--json` prints the `list_documents` result instead. It also runs remotely, through the new route `GET /admin/v1/documents`, which returns that JSON.
+- **`joedocs search [QUERY...]`** finds documents and their files by text and front matter in every project, or one (`-p`): `-t/--type`, `-s/--status`, `-F/--filter KEY=VALUE` (repeatable), `--filters JSON` (the operators of `search_documents`) and `-d/--document ID`. It prints each hit with its snippet, pages with `--start` and `-n/--limit`, and `-j/--json` prints the `search_documents` result. Remotely it uses the new route `POST /admin/v1/search`.
 - **`joedocs archive list -t/--type TYPE`** lists only archived documents of that type; `-p` is now short for `--project`. Remotely, `GET /admin/v1/archive` takes `type`.
 - `joedocs get -P` is short for `--part`.
 - Tables of the new commands print control characters in stored text as escapes (`\n`, `\u{1b}`), so text written through MCP cannot change the terminal.

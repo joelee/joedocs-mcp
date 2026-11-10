@@ -502,21 +502,10 @@ fn same_archive(local: &Local, server: &Server) -> std::io::Result<()> {
     Ok(())
 }
 
-#[test]
-fn remote_commands_print_what_local_commands_print() {
-    let server = Server::start().unwrap();
-    let local = Local::new().unwrap();
-    server
-        .cmd()
-        .args(["login", "--code", &server.code()])
-        .assert()
-        .success();
-    for name in ["out-local.md", "out-remote.md"] {
-        let _ = std::fs::remove_file(server.root.path().join(name));
-    }
-    std::fs::write(server.root.path().join("vault/stray.md"), "x").unwrap();
-    std::fs::write(local.dir.path().join("vault/stray.md"), "x").unwrap();
-    let steps: Vec<Vec<&str>> = vec![
+/// The commands `remote_commands_print_what_local_commands_print` runs both
+/// ways, in order: later steps see what earlier ones changed.
+fn parity_steps() -> Vec<Vec<&'static str>> {
+    vec![
         vec!["project", "list"],
         vec!["project", "add", "other", "--key", "OT", "--title", "Other"],
         vec!["project", "add", "other", "--key", "OT"],
@@ -540,6 +529,20 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["list", "-p", "nope"],
         vec!["list", "-p", "joedocs", "--limit", "0"],
         vec!["list", "-p", "joedocs", "-t", "nope"],
+        vec!["search", "first"],
+        vec!["search", "first", "second", "--json"],
+        vec!["search", "-p", "joedocs", "-F", "status=draft", "-n", "1"],
+        vec![
+            "search",
+            "--filters",
+            r#"{"status": {"in": ["draft"]}}"#,
+            "-j",
+        ],
+        vec!["search", "-F", "status"],
+        vec!["search", "-s", "draft", "-F", "status=done"],
+        vec!["search", "-p", "nope"],
+        vec!["search", "-t", "nope"],
+        vec!["search", "\"unclosed"],
         vec!["get", "JD-1"],
         vec!["get", "JD-1", "--version", "1"],
         vec!["get", "JD-1", "--content-only"],
@@ -561,9 +564,29 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["get", "JD-1", "--part", "x y"],
         vec!["get", "JD-2", "--part", "x"],
         vec!["get", "JD-2", "--archive", "x.tgz"],
-        vec!["list", "-p", "joedocs"],
-        vec!["list", "-p", "joedocs", "-j"],
-    ];
+        // The local binary stamps changes with the real clock and the server
+        // with its fixed one, so order by title once documents have changed.
+        vec!["list", "-p", "joedocs", "--sort", "title"],
+        vec!["list", "-p", "joedocs", "-j", "--sort", "title"],
+        vec!["search", "first", "-d", "JD-1"],
+    ]
+}
+
+#[test]
+fn remote_commands_print_what_local_commands_print() {
+    let server = Server::start().unwrap();
+    let local = Local::new().unwrap();
+    server
+        .cmd()
+        .args(["login", "--code", &server.code()])
+        .assert()
+        .success();
+    for name in ["out-local.md", "out-remote.md"] {
+        let _ = std::fs::remove_file(server.root.path().join(name));
+    }
+    std::fs::write(server.root.path().join("vault/stray.md"), "x").unwrap();
+    std::fs::write(local.dir.path().join("vault/stray.md"), "x").unwrap();
+    let steps = parity_steps();
     for step in &steps {
         let local_run = outcome(local.cmd(), step).unwrap();
         let remote_run = outcome(server.cmd(), step).unwrap();
@@ -961,6 +984,7 @@ fn malformed_success_replies_fail_without_writing() {
             vec!["get", "JD-1"],
             vec!["list", "-p", "joedocs"],
             vec!["list", "-p", "joedocs", "--json"],
+            vec!["search", "x"],
         ] {
             client_cmd(dir.path(), &url)
                 .args(&args)

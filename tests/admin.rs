@@ -510,6 +510,123 @@ fn archive_list_filters_by_type() {
         .stderr(predicate::str::contains("\"nope\" is not one of"));
 }
 
+/// `browse_store`, plus project `q` (key `Q`) with Q-1, a `plans` document
+/// about a zebra (front matter `kind: bug`, and an escape sequence in its
+/// body), and a zebra page `pages/zoo` in P-2.
+fn search_store(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    browse_store(root)?;
+    cmd(root)
+        .args(["project", "add", "q", "--key", "Q"])
+        .assert()
+        .success();
+    let mut store = library_store(root)?;
+    let actor = Actor::new("laptop", "test");
+    store.create(
+        &actor,
+        NewDocument {
+            project: "q".into(),
+            title: "Zebra plan".into(),
+            doc_type: Some("plans".into()),
+            content: "a zebra \u{1b}[31m crossing\n".into(),
+            front_matter: [("kind".to_owned(), "bug".into())].into_iter().collect(),
+            ..NewDocument::default()
+        },
+    )?;
+    store.create_file(
+        &actor,
+        &NewFile {
+            document_id: "P-2".into(),
+            file: "pages/zoo".into(),
+            content: "the zebra page\n".into(),
+            ..NewFile::default()
+        },
+    )?;
+    Ok(())
+}
+
+#[test]
+fn search_finds_documents_in_every_project() {
+    let root = TempDir::new().unwrap();
+    search_store(root.path()).unwrap();
+
+    let output = cmd(root.path()).args(["search", "zebra"]).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.starts_with("ID   FILE "), "{text}");
+    assert!(text.contains("Q-1  -  "), "{text}");
+    assert!(text.contains("P-2  pages/zoo"), "{text}");
+    let snippet = text
+        .lines()
+        .find(|line| line.starts_with("    ") && line.contains("crossing"))
+        .unwrap_or_default();
+    assert!(snippet.contains("«zebra»"), "{text}");
+    assert!(snippet.contains("\\u{1b}[31m"), "{text}");
+    assert!(!text.contains('\u{1b}'), "{text}");
+    cmd(root.path())
+        .args(["search", "zebra", "-p", "p"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Q-1").not())
+        .stdout(predicate::str::contains("P-2"));
+    cmd(root.path())
+        .args(["search", "zebra", "-d", "P-2", "-t", "notes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pages/zoo"))
+        .stdout(predicate::str::contains("Q-1").not());
+    // Filters test the matched file's own front matter: the page has no
+    // status.
+    cmd(root.path())
+        .args(["search", "zebra", "-s", "draft"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Q-1"))
+        .stdout(predicate::str::contains("pages/zoo").not());
+    cmd(root.path())
+        .args(["search", "-F", "kind=bug"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Q-1"))
+        .stdout(predicate::str::contains("P-1").not());
+    cmd(root.path())
+        .args([
+            "search",
+            "--filters",
+            r#"{"kind": {"in": ["bug", "chore"]}}"#,
+            "-j",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"id\": \"Q-1\""));
+    cmd(root.path())
+        .args(["search", "nothing-like-this"])
+        .assert()
+        .success()
+        .stdout("No matches.\n");
+    cmd(root.path())
+        .args(["search", "zebra", "-n", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "Showing 1-1 of 2; next page: --start 2\n",
+        ));
+    for (args, needle) in [
+        (vec!["-s", "draft", "-F", "status=done"], "status"),
+        (vec!["-F", "kind"], "--filter"),
+        (vec!["--filters", "[1]"], "--filters"),
+        (vec!["--filters", "{nope"], "--filters"),
+        (vec!["-p", "nope"], "project nope does not exist"),
+    ] {
+        cmd(root.path())
+            .arg("search")
+            .args(args)
+            .assert()
+            .code(65)
+            .stderr(predicate::str::contains(needle));
+    }
+}
+
 /// Control characters in stored text are printed as escapes in tables.
 #[test]
 fn list_escapes_control_characters_in_titles() {

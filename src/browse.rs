@@ -1,4 +1,4 @@
-//! The admin commands that view and find documents (`list`): from their
+//! The admin commands that view and find documents (`list`, `search`): from their
 //! arguments to store requests, the JSON replies the admin API sends, and
 //! the tables the command line prints.
 //!
@@ -9,12 +9,13 @@
 
 use std::io::Write;
 
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::Error;
-use crate::cli::ListArgs;
-use crate::mcp::tools::{DocumentOut, ListDocumentsOut};
-use crate::store::{ListRequest, Store};
+use crate::cli::{DEFAULT_SEARCH_LIMIT, ListArgs, SearchArgs};
+use crate::mcp::tools::{DocumentOut, ListDocumentsOut, SearchDocumentsOut, SearchHitOut};
+use crate::store::{self, ListRequest, SearchRequest, Store};
 
 /// `joedocs list`: one page of a project's live documents, as the
 /// `list_documents` result.
@@ -36,6 +37,128 @@ pub fn list(store: &Store, args: &ListArgs) -> Result<Value, Error> {
         items: listing.items.into_iter().map(DocumentOut::from).collect(),
         total: listing.total,
         next_start: listing.next_start,
+    })
+}
+
+/// What `joedocs search` asks for: the body of `POST /admin/v1/search`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchSpec {
+    /// One project; `None` or `"*"` for every project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// One document type.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub doc_type: Option<String>,
+    /// Words to find.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// Front matter conditions, as `search_documents` takes them.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub filters: Map<String, Value>,
+    /// Only this document's files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    /// 1-based position of the first result.
+    #[serde(default = "one")]
+    pub start: u64,
+    /// Most results.
+    #[serde(default = "default_search_limit")]
+    pub limit: u64,
+}
+
+fn one() -> u64 {
+    1
+}
+
+fn default_search_limit() -> u64 {
+    DEFAULT_SEARCH_LIMIT
+}
+
+impl SearchSpec {
+    /// The search the command line asks for: `--status`, each `--filter`
+    /// and `--filters` merged into one filter object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument [`Error::Store`] for `--filter` text
+    /// without `=`, `--filters` that is not a JSON object, and a key given
+    /// twice.
+    pub fn from_args(args: &SearchArgs) -> Result<Self, Error> {
+        let mut filters = match &args.filters {
+            None => Map::new(),
+            Some(text) => match serde_json::from_str::<Value>(text) {
+                Ok(Value::Object(map)) => map,
+                Ok(_) => return Err(invalid("filters", "--filters must be a JSON object")),
+                Err(e) => return Err(invalid("filters", format!("--filters is not JSON: {e}"))),
+            },
+        };
+        let mut add = |key: &str, value: &str| {
+            if filters.contains_key(key) {
+                return Err(invalid("filter", format!("the key `{key}` is given twice")));
+            }
+            filters.insert(key.to_owned(), Value::String(value.to_owned()));
+            Ok(())
+        };
+        if let Some(status) = &args.status {
+            add("status", status)?;
+        }
+        for pair in &args.filter {
+            let (key, value) = pair.split_once('=').ok_or_else(|| {
+                invalid(
+                    "filter",
+                    format!("--filter takes KEY=VALUE, not \"{pair}\""),
+                )
+            })?;
+            add(key.trim(), value)?;
+        }
+        let query = args.query.join(" ");
+        Ok(Self {
+            project: args.project.clone(),
+            doc_type: args.doc_type.clone(),
+            query: (!query.trim().is_empty()).then_some(query),
+            filters,
+            document_id: args.document.clone(),
+            start: args.start,
+            limit: args.limit,
+        })
+    }
+}
+
+fn invalid(field: &'static str, message: impl Into<String>) -> Error {
+    Error::Store(store::Error::invalid(field, message))
+}
+
+/// `joedocs search`: one page of hits, as the `search_documents` result. The
+/// administrator reads every project.
+///
+/// # Errors
+///
+/// Returns [`Error::Store`] for an unknown project, a bad type, query,
+/// filter, start or limit, and database errors.
+pub fn search(store: &Store, spec: &SearchSpec) -> Result<Value, Error> {
+    let projects = match spec.project.as_deref() {
+        None | Some("*") => store.projects()?.into_iter().map(|p| p.name).collect(),
+        Some(name) => {
+            store
+                .project(name)?
+                .ok_or_else(|| store::Error::ProjectNotFound(name.to_owned()))?;
+            vec![name.to_owned()]
+        }
+    };
+    let results = store.search(&SearchRequest {
+        projects,
+        doc_type: spec.doc_type.clone(),
+        query: spec.query.clone().unwrap_or_default(),
+        filters: spec.filters.clone(),
+        start: spec.start,
+        limit: spec.limit,
+        document_id: spec.document_id.clone(),
+    })?;
+    to_json(&SearchDocumentsOut {
+        items: results.items.into_iter().map(SearchHitOut::from).collect(),
+        total: results.total,
+        next_start: results.next_start,
     })
 }
 
@@ -104,6 +227,52 @@ pub fn render_list(reply: &Value, out: &mut dyn Write) -> Result<(), Error> {
         &["ID", "TYPE", "STATUS", "REV", "FILES", "UPDATED", "TITLE"],
         &rows,
     )?;
+    write_paging(reply, items.len(), out)
+}
+
+/// Writes a `search` reply as a table, each hit followed by its snippet
+/// (indented) when there is one, then the paging line; or `No matches.`
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails.
+pub fn render_search(reply: &Value, out: &mut dyn Write) -> Result<(), Error> {
+    let items = items(reply);
+    if items.is_empty() {
+        writeln!(out, "No matches.")?;
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|hit| {
+            let file = hit["file"].as_str().map_or_else(|| "-".to_owned(), escape);
+            vec![
+                text(hit, "id"),
+                file,
+                text(hit, "type"),
+                text(hit, "status"),
+                text(hit, "updated"),
+                text(hit, "title"),
+            ]
+        })
+        .collect();
+    let mut table = Vec::new();
+    crate::admin::write_table(
+        &mut table,
+        &["ID", "FILE", "TYPE", "STATUS", "UPDATED", "TITLE"],
+        &rows,
+    )?;
+    let table = String::from_utf8_lossy(&table);
+    let mut lines = table.lines();
+    if let Some(header) = lines.next() {
+        writeln!(out, "{header}")?;
+    }
+    for (line, hit) in lines.zip(items) {
+        writeln!(out, "{line}")?;
+        if let Some(snippet) = hit["snippet"].as_str() {
+            writeln!(out, "    {}", escape(snippet))?;
+        }
+    }
     write_paging(reply, items.len(), out)
 }
 
@@ -200,6 +369,95 @@ mod tests {
             rendered(&json!({"items": [], "total": 0})),
             "No documents.\n"
         );
+    }
+
+    fn args(extra: &[&str]) -> SearchArgs {
+        use clap::Parser as _;
+        let mut all = vec!["joedocs", "search"];
+        all.extend_from_slice(extra);
+        match crate::Cli::try_parse_from(all).unwrap().command {
+            crate::Command::Search(args) => args,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn message(error: &Error) -> String {
+        error.to_string()
+    }
+
+    #[test]
+    fn search_filters_merge_and_refuse_duplicates() {
+        let spec = SearchSpec::from_args(&args(&[
+            "two",
+            "words",
+            "-s",
+            "draft",
+            "-F",
+            "kind=bug",
+            "--filters",
+            r#"{"severity": {"in": ["major"]}}"#,
+        ]))
+        .unwrap();
+        assert_eq!(spec.query.as_deref(), Some("two words"));
+        assert_eq!(
+            Value::Object(spec.filters),
+            json!({"status": "draft", "kind": "bug", "severity": {"in": ["major"]}})
+        );
+        assert_eq!(SearchSpec::from_args(&args(&[])).unwrap().query, None);
+        for (extra, needle) in [
+            (vec!["-s", "a", "-F", "status=b"], "`status` is given twice"),
+            (vec!["-F", "k=a", "-F", "k=b"], "`k` is given twice"),
+            (
+                vec!["--filters", r#"{"k": 1}"#, "-F", "k=b"],
+                "`k` is given twice",
+            ),
+            (vec!["-F", "kind"], "--filter takes KEY=VALUE"),
+            (vec!["--filters", "[1]"], "--filters must be a JSON object"),
+            (vec!["--filters", "{x"], "--filters is not JSON"),
+        ] {
+            let error = SearchSpec::from_args(&args(&extra)).unwrap_err();
+            assert!(message(&error).contains(needle), "{extra:?}: {error}");
+            assert_eq!(error.exit_code(), crate::EXIT_DATA);
+        }
+    }
+
+    #[test]
+    fn a_search_spec_is_the_admin_api_body() {
+        let spec = SearchSpec::from_args(&args(&["x", "-p", "p", "-n", "5"])).unwrap();
+        let body = serde_json::to_value(&spec).unwrap();
+        assert_eq!(
+            body,
+            json!({"project": "p", "query": "x", "start": 1, "limit": 5})
+        );
+        assert_eq!(serde_json::from_value::<SearchSpec>(body).unwrap(), spec);
+        let defaults: SearchSpec = serde_json::from_value(json!({})).unwrap();
+        assert_eq!((defaults.start, defaults.limit), (1, DEFAULT_SEARCH_LIMIT));
+        assert!(serde_json::from_value::<SearchSpec>(json!({"nope": 1})).is_err());
+    }
+
+    #[test]
+    fn a_search_reply_renders_hits_with_their_snippets() {
+        let reply = json!({
+            "items": [
+                {"id": "P-1", "type": "plans", "status": "draft", "updated": "2026-11-10T00:00:00Z",
+                 "title": "One", "score": 1.5, "snippet": "a «zebra»\nhere"},
+                {"id": "P-2", "type": "notes", "status": "draft", "updated": "2026-11-10T00:00:00Z",
+                 "title": "Two", "file": "pages/zoo"},
+            ],
+            "total": 2,
+            "next_start": null,
+        });
+        let mut out = Vec::new();
+        render_search(&reply, &mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "ID   FILE       TYPE   STATUS  UPDATED               TITLE\n\
+             P-1  -          plans  draft   2026-11-10T00:00:00Z  One\n    a «zebra»\\nhere\n\
+             P-2  pages/zoo  notes  draft   2026-11-10T00:00:00Z  Two\n"
+        );
+        let mut out = Vec::new();
+        render_search(&json!({"items": [], "total": 0}), &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "No matches.\n");
     }
 
     #[test]

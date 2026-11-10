@@ -406,6 +406,7 @@ enum Route {
     Check,
     Reindex,
     DocumentsList,
+    Search,
     Document(String),
     DocumentConvert(String),
     FileMove(String),
@@ -437,6 +438,7 @@ impl Route {
             ["check"] if get => Self::Check,
             ["reindex"] if post => Self::Reindex,
             ["documents"] if get => Self::DocumentsList,
+            ["search"] if post => Self::Search,
             ["documents", id] if get => Self::Document((*id).to_owned()),
             ["documents", id, "convert"] if post => Self::DocumentConvert((*id).to_owned()),
             ["documents", id, "files", "move"] if post => Self::FileMove((*id).to_owned()),
@@ -464,6 +466,7 @@ impl Route {
             Self::Check => "admin:check",
             Self::Reindex => "admin:reindex",
             Self::DocumentsList => "admin:documents.list",
+            Self::Search => "admin:documents.search",
             Self::Document(_) => "admin:documents.get",
             Self::DocumentConvert(_) => "admin:document.convert",
             Self::FileMove(_) => "admin:document.move_file",
@@ -506,6 +509,7 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         Route::Check => check(state, call).await,
         Route::Reindex => reindex(state, call).await,
         Route::DocumentsList => documents_list(state, call, uri).await,
+        Route::Search => search(state, call, body).await,
         Route::Document(id) => document(state, call, id, uri).await,
         Route::DocumentConvert(id) => document_command(state, call, id, body, "convert").await,
         Route::FileMove(id) => document_command(state, call, id, body, "move").await,
@@ -773,6 +777,24 @@ async fn documents_list(state: Arc<ApiState>, call: Call, uri: axum::http::Uri) 
     authorized(state, call, move |store, _, _| {
         let args = list_args(&uri)?;
         let reply = crate::browse::list(store, &args).map_err(|e| from_crate(&e))?;
+        Ok(axum::Json(reply).into_response())
+    })
+    .await
+}
+
+/// `POST /admin/v1/search` with a [`crate::browse::SearchSpec`]: the
+/// `search_documents` result over every project, or one.
+async fn search(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
+    authorized(state, call, move |store, _, _| {
+        let spec: crate::browse::SearchSpec =
+            serde_json::from_value(body_json(&body)?).map_err(|e| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_argument",
+                    format!("invalid search: {e}"),
+                )
+            })?;
+        let reply = crate::browse::search(store, &spec).map_err(|e| from_crate(&e))?;
         Ok(axum::Json(reply).into_response())
     })
     .await

@@ -50,7 +50,7 @@
 │   ├── agents.rs           joedocs agents: the maintenance guide filled in with this installation's facts
 │   ├── agents.md           The guide's template (shipped in the crate)
 │   ├── backup.rs           joedocs backup: archive format, writing, safe restore
-│   ├── browse.rs           joedocs list: store requests, the admin API's JSON replies, tables
+│   ├── browse.rs           joedocs list and search: store requests, the admin API's JSON replies, tables
 │   ├── client.rs           Client of a server's admin API: login, sessions, prompts, remote calls
 │   ├── status.rs           joedocs status: StatusReport, the /health probe, unit state, sizes
 │   ├── totp.rs             TOTP (RFC 6238), base32, otpauth URIs
