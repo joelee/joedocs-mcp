@@ -99,6 +99,13 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.4.1 to 0.4.2
+
+- **No migration**, and no configuration change: install the new version and restart, as in steps 2 and 3. Going back to 0.4.1 needs no restore.
+- **New commands:** `joedocs list`, `search`, `history`, `diff` and `audit` view and find documents and read the audit log, as tables or with `-j/--json`; `joedocs key ungrant` removes a key's grants; `archive list` takes `-t/--type`. Frequent options have short forms (`-p`, `-t`, `-s`, `-d`, `-k`, `-F`, `-n`, `-P`, `-j`). See the [reference](reference.md#command-line).
+- **Remote use needs the server upgraded too.** The new commands use new admin API routes; a 0.4.1 server answers `no such admin API route`, and the client says to upgrade it. `archive list --type` against a 0.4.1 server is not filtered, because that server ignores the unknown `type` parameter; the `TYPE` column still shows each document's type.
+- MCP clients see no change: the tools and their results are as in 0.4.1.
+
 ### 0.4.0 to 0.4.1
 
 - **No migration**, and no configuration change: install the new version and restart, as in steps 2 and 3. Going back to 0.4.0 needs no restore.

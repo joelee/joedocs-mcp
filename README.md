@@ -133,7 +133,7 @@ To use one server from several machines, run it on a server and publish it over 
 | Write | `new_document`, `update_document`, `edit_document`, `append_to_document`, `change_document_front_matter` |
 | Organise | `rename_document`, `move_document`, `restore_document_version`, `archive_document` |
 
-Administration is not an MCP tool, so a leaked client key cannot create keys or delete history: `joedocs project`, `key create|grant|rotate|revoke`, `archive list|restore`, `reindex`, `check`, `status`, `get` and `backup` run on the server's command line. To run them from another machine, turn on the server's admin API: it needs a separate admin token and a code from an authenticator app (`joedocs login`). `joedocs backup` writes a consistent backup while the server runs, and `joedocs agents` prints instructions for an AI agent that maintains the server. The [reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md) lists every command, tool, parameter and error code.
+Administration is not an MCP tool, so a leaked client key cannot create keys or delete history: `joedocs project`, `key create|grant|ungrant|rotate|revoke`, `archive list|restore`, `reindex`, `check`, `status`, `get` and `backup` run on the server's command line, and so do `list`, `search`, `history`, `diff` and `audit`, which view and find documents and read the audit log (`--json` prints what the admin API returns). To run them from another machine, turn on the server's admin API: it needs a separate admin token and a code from an authenticator app (`joedocs login`). `joedocs backup` writes a consistent backup while the server runs, and `joedocs agents` prints instructions for an AI agent that maintains the server. The [reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md) lists every command, tool, parameter and error code.
 
 ## Skills for agents
 
@@ -158,6 +158,7 @@ flowchart LR
 
 Planned:
 
+- An admin web interface (0.5.0), built on the admin API's JSON routes.
 - Plain logs (no colour codes) when `serve` is not writing to a terminal.
 - More agent skills: research notes, decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
