@@ -4,7 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-10
+
+Admin commands to view and find documents and read the audit log, locally and through JSON admin API routes that the 0.5.0 admin web interface will build on.
+
 ### Added
+
+- Short options for the frequent flags, with one meaning each: `-p` project, `-t` type, `-s` status, `-d` document, `-k` key, `-F` filter, `-n` limit, `-P` part, `-j` JSON.
 
 - **`joedocs list -p PROJECT`** lists a project's live documents as a table (`ID`, `TYPE`, `STATUS`, `REV`, `FILES`, `UPDATED`, `TITLE`), filtered with `-t/--type` and `-s/--status`, ordered with `--sort` (`updated-desc`, `updated-asc`, `created-desc`, `created-asc`, `title`), and paged with `--start` and `-n/--limit` (a last line says how to get the next page). `-j/--json` prints the `list_documents` result instead. It also runs remotely, through the new route `GET /admin/v1/documents`, which returns that JSON.
 - **`joedocs search [QUERY...]`** finds documents and their files by text and front matter in every project, or one (`-p`): `-t/--type`, `-s/--status`, `-F/--filter KEY=VALUE` (repeatable), `--filters JSON` (the operators of `search_documents`) and `-d/--document ID`. It prints each hit with its snippet, pages with `--start` and `-n/--limit`, and `-j/--json` prints the `search_documents` result. Remotely it uses the new route `POST /admin/v1/search`.
@@ -145,7 +151,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/joelee/joedocs-mcp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/joelee/joedocs-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/joelee/joedocs-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/joelee/joedocs-mcp/compare/v0.2.0...v0.3.0
