@@ -2,11 +2,12 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use toml::Value;
 
 use crate::auth::Grant;
 use crate::config::{CliValue, LogLevel};
+use crate::db::Sort;
 
 /// Command-line arguments.
 #[derive(Debug, Parser)]
@@ -140,7 +141,7 @@ pub enum Command {
         file: Option<PathBuf>,
         /// Print this file of a multi-file document (its path in the folder,
         /// e.g. backlog/item-1) instead of the main file.
-        #[arg(long, value_name = "FILE")]
+        #[arg(short = 'P', long, value_name = "FILE")]
         part: Option<String>,
         /// Write the whole multi-file document (every file, paths relative
         /// to its folder) to this `.tgz` file, replacing it.
@@ -151,6 +152,226 @@ pub enum Command {
         )]
         archive: Option<PathBuf>,
     },
+    /// List a project's documents (metadata only), one page at a time.
+    List(ListArgs),
+    /// Search documents by text and front matter, in every project or one.
+    Search(SearchArgs),
+    /// List a document's revisions, newest first.
+    History(HistoryArgs),
+    /// Show what changed in a document between two revisions.
+    Diff(DiffArgs),
+    /// Read the audit log (every MCP write and admin API call), newest first.
+    Audit(AuditArgs),
+}
+
+/// Order of `joedocs list`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum SortArg {
+    /// Most recently updated first.
+    #[default]
+    UpdatedDesc,
+    /// Least recently updated first.
+    UpdatedAsc,
+    /// Newest first.
+    CreatedDesc,
+    /// Oldest first.
+    CreatedAsc,
+    /// By title, A to Z.
+    Title,
+}
+
+impl SortArg {
+    const ALL: [Self; 5] = [
+        Self::UpdatedDesc,
+        Self::UpdatedAsc,
+        Self::CreatedDesc,
+        Self::CreatedAsc,
+        Self::Title,
+    ];
+
+    /// The store's order.
+    #[must_use]
+    pub fn sort(self) -> Sort {
+        match self {
+            Self::UpdatedDesc => Sort::UpdatedDesc,
+            Self::UpdatedAsc => Sort::UpdatedAsc,
+            Self::CreatedDesc => Sort::CreatedDesc,
+            Self::CreatedAsc => Sort::CreatedAsc,
+            Self::Title => Sort::Title,
+        }
+    }
+
+    /// The name the admin API and `list_documents` use, e.g. `updated_desc`.
+    #[must_use]
+    pub fn api_name(self) -> &'static str {
+        match self {
+            Self::UpdatedDesc => "updated_desc",
+            Self::UpdatedAsc => "updated_asc",
+            Self::CreatedDesc => "created_desc",
+            Self::CreatedAsc => "created_asc",
+            Self::Title => "title",
+        }
+    }
+
+    /// The order with this API name.
+    #[must_use]
+    pub fn from_api_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.api_name() == name)
+    }
+}
+
+/// Arguments of `joedocs list`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct ListArgs {
+    /// Project name.
+    #[arg(short = 'p', long)]
+    pub project: String,
+    /// Only this document type.
+    #[arg(short = 't', long = "type", value_name = "TYPE")]
+    pub doc_type: Option<String>,
+    /// Only this status.
+    #[arg(short = 's', long)]
+    pub status: Option<String>,
+    /// Order.
+    #[arg(long, value_enum, default_value_t = SortArg::UpdatedDesc)]
+    pub sort: SortArg,
+    /// 1-based position of the first document (see the paging line).
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub start: u64,
+    /// Most documents to show (1 to 1000).
+    #[arg(short = 'n', long, default_value_t = DEFAULT_LIST_LIMIT, value_name = "N")]
+    pub limit: u64,
+    /// Print JSON (as the admin API returns it) instead of a table.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
+/// `joedocs list --limit` when none is given, as `list_documents`.
+pub const DEFAULT_LIST_LIMIT: u64 = 200;
+
+/// Arguments of `joedocs search`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct SearchArgs {
+    /// Words to find, in the search syntax (all must match; "a phrase",
+    /// -word, word*, a OR b); leave out to search by front matter only.
+    ///
+    /// Put options first, and `--` before words that start with `-`:
+    /// `joedocs search -p NAME -- cache -redis`.
+    #[arg(value_name = "QUERY")]
+    pub query: Vec<String>,
+    /// Only this project (default: every project).
+    #[arg(short = 'p', long)]
+    pub project: Option<String>,
+    /// Only this document type.
+    #[arg(short = 't', long = "type", value_name = "TYPE")]
+    pub doc_type: Option<String>,
+    /// Only this status (short for `--filter status=STATUS`).
+    #[arg(short = 's', long)]
+    pub status: Option<String>,
+    /// A front matter key that must equal this text (repeatable).
+    #[arg(short = 'F', long = "filter", value_name = "KEY=VALUE")]
+    pub filter: Vec<String>,
+    /// Front matter conditions as a JSON object, with the operators of
+    /// `search_documents`, e.g. `{"severity": {"in": ["major"]}}`.
+    #[arg(long, value_name = "JSON")]
+    pub filters: Option<String>,
+    /// Only this document's files (its main file included).
+    #[arg(short = 'd', long, value_name = "DOCUMENT_ID")]
+    pub document: Option<String>,
+    /// 1-based position of the first result (see the paging line).
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub start: u64,
+    /// Most results to show (1 to 200).
+    #[arg(short = 'n', long, default_value_t = DEFAULT_SEARCH_LIMIT, value_name = "N")]
+    pub limit: u64,
+    /// Print JSON (as the admin API returns it) instead of a table.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
+/// `joedocs search --limit` when none is given, as `search_documents`.
+pub const DEFAULT_SEARCH_LIMIT: u64 = 20;
+
+/// Arguments of `joedocs history`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct HistoryArgs {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// Only the revisions that changed this file of a multi-file document
+    /// (its path in the folder), following its renames.
+    #[arg(short = 'P', long, value_name = "FILE")]
+    pub part: Option<String>,
+    /// 1-based position of the first revision (see the paging line).
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub start: u64,
+    /// Most revisions to show (1 to 1000).
+    #[arg(short = 'n', long, default_value_t = DEFAULT_HISTORY_LIMIT, value_name = "N")]
+    pub limit: u64,
+    /// Print JSON (as the admin API returns it) instead of a table.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
+/// `joedocs history --limit` when none is given, as `get_document_history`.
+pub const DEFAULT_HISTORY_LIMIT: u64 = 50;
+
+/// Arguments of `joedocs audit`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct AuditArgs {
+    /// Only entries at or after this UTC date (2026-11-10) or time
+    /// (2026-11-10T14:00:00Z).
+    #[arg(long, value_name = "TIME")]
+    pub since: Option<String>,
+    /// Only entries before this UTC date or time.
+    #[arg(long, value_name = "TIME")]
+    pub until: Option<String>,
+    /// Only this API key or admin token name.
+    #[arg(short = 'k', long, value_name = "NAME")]
+    pub key: Option<String>,
+    /// Only this tool, e.g. `update_document`; ending in `*`, every tool
+    /// that starts with the rest, e.g. `admin:*`.
+    #[arg(long, value_name = "TOOL")]
+    pub tool: Option<String>,
+    /// Only calls about this document.
+    #[arg(short = 'd', long, value_name = "DOCUMENT_ID")]
+    pub document: Option<String>,
+    /// Only this outcome: `ok` or an error code such as `conflict`.
+    #[arg(long, value_name = "OUTCOME")]
+    pub outcome: Option<String>,
+    /// 1-based position of the first entry (see the paging line).
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub start: u64,
+    /// Most entries to show (1 to 1000).
+    #[arg(short = 'n', long, default_value_t = DEFAULT_AUDIT_LIMIT, value_name = "N")]
+    pub limit: u64,
+    /// Print JSON (as the admin API returns it) instead of a table.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
+/// `joedocs audit --limit` when none is given.
+pub const DEFAULT_AUDIT_LIMIT: u64 = 50;
+
+/// Arguments of `joedocs diff`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct DiffArgs {
+    /// Document ID, e.g. JD-42.
+    pub document_id: String,
+    /// The older revision.
+    #[arg(long, value_name = "N")]
+    pub from: u64,
+    /// The newer revision (default: the latest).
+    #[arg(long, value_name = "N")]
+    pub to: Option<u64>,
+    /// Unchanged lines around each change (0 to 100).
+    #[arg(long, default_value_t = 3, value_name = "N")]
+    pub context: u32,
+    /// Only this file of a multi-file document (its path at `--to`).
+    #[arg(short = 'P', long, value_name = "FILE")]
+    pub part: Option<String>,
+    /// Print JSON (as the admin API returns it) instead of the diff.
+    #[arg(short = 'j', long)]
+    pub json: bool,
 }
 
 impl Command {
@@ -206,6 +427,9 @@ impl Command {
                 command: KeyCommand::Grant { .. },
             } => "key grant",
             Self::Key {
+                command: KeyCommand::Ungrant { .. },
+            } => "key ungrant",
+            Self::Key {
                 command: KeyCommand::Rotate { .. },
             } => "key rotate",
             Self::Key {
@@ -227,6 +451,11 @@ impl Command {
             Self::Backup { restore: false, .. } => "backup",
             Self::Backup { restore: true, .. } => "backup --restore",
             Self::Get { .. } => "get",
+            Self::List(_) => "list",
+            Self::Search(_) => "search",
+            Self::History(_) => "history",
+            Self::Diff(_) => "diff",
+            Self::Audit(_) => "audit",
         }
     }
 }
@@ -318,8 +547,11 @@ pub enum ArchiveCommand {
     /// List archived documents, most recently archived first.
     List {
         /// Only this project.
-        #[arg(long)]
+        #[arg(short = 'p', long)]
         project: Option<String>,
+        /// Only this document type.
+        #[arg(short = 't', long = "type", value_name = "TYPE")]
+        doc_type: Option<String>,
     },
     /// Bring an archived document back as it was before it was archived.
     Restore {
@@ -348,6 +580,15 @@ pub enum KeyCommand {
         /// Grants, e.g. `joedocs:write`.
         #[arg(required = true, value_name = "PROJECT:PERMISSION")]
         grants: Vec<Grant>,
+    },
+    /// Remove a key's grants on these projects (all or nothing); the key
+    /// stays active, even with no grants left.
+    Ungrant {
+        /// Key name.
+        name: String,
+        /// Projects to remove the key's grants on.
+        #[arg(required = true, value_name = "PROJECT")]
+        projects: Vec<String>,
     },
     /// Print a new token for a key; the old token stops working at once.
     /// The key keeps its name and grants.
@@ -460,6 +701,14 @@ mod tests {
         let err = Cli::try_parse_from(["app", "key", "grant", "laptop", "a:admin"]).unwrap_err();
         assert!(err.to_string().contains("read or write"), "{err}");
         assert!(Cli::try_parse_from(["app", "key", "grant", "laptop"]).is_err());
+        assert!(Cli::try_parse_from(["app", "key", "ungrant", "laptop"]).is_err());
+        let cli = Cli::try_parse_from(["app", "key", "ungrant", "laptop", "a", "b"]).unwrap();
+        assert_eq!(cli.command.name(), "key ungrant");
+        assert!(matches!(
+            &cli.command,
+            Command::Key { command: KeyCommand::Ungrant { name, projects } }
+                if name == "laptop" && projects == &["a", "b"]
+        ));
         let cli = Cli::try_parse_from(["app", "project", "add", "p", "--key", "P"]).unwrap();
         assert_eq!(
             cli.command,
@@ -519,6 +768,179 @@ mod tests {
         ])
         .unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn short_options_parse_as_their_long_forms() {
+        let parse = |args: &[&str]| {
+            let mut all = vec!["app"];
+            all.extend_from_slice(args);
+            Cli::try_parse_from(all).map(|cli| cli.command)
+        };
+        let pairs: [(&[&str], &[&str]); 7] = [
+            (
+                &[
+                    "list", "-p", "a", "-t", "plans", "-s", "draft", "-n", "5", "-j",
+                ],
+                &[
+                    "list",
+                    "--project",
+                    "a",
+                    "--type",
+                    "plans",
+                    "--status",
+                    "draft",
+                    "--limit",
+                    "5",
+                    "--json",
+                ],
+            ),
+            (
+                &["archive", "list", "-p", "a", "-t", "notes"],
+                &["archive", "list", "--project", "a", "--type", "notes"],
+            ),
+            (
+                &["get", "JD-1", "-P", "items/a"],
+                &["get", "JD-1", "--part", "items/a"],
+            ),
+            (
+                &[
+                    "search", "a", "b", "-p", "x", "-t", "plans", "-s", "draft", "-F", "k=v", "-d",
+                    "JD-1", "-n", "3", "-j",
+                ],
+                &[
+                    "search",
+                    "a",
+                    "b",
+                    "--project",
+                    "x",
+                    "--type",
+                    "plans",
+                    "--status",
+                    "draft",
+                    "--filter",
+                    "k=v",
+                    "--document",
+                    "JD-1",
+                    "--limit",
+                    "3",
+                    "--json",
+                ],
+            ),
+            (
+                &["history", "JD-1", "-P", "a", "-n", "2", "-j"],
+                &["history", "JD-1", "--part", "a", "--limit", "2", "--json"],
+            ),
+            (
+                &["diff", "JD-1", "--from", "1", "-P", "a", "-j"],
+                &["diff", "JD-1", "--from", "1", "--part", "a", "--json"],
+            ),
+            (
+                &["audit", "-k", "ci", "-d", "JD-1", "-n", "4", "-j"],
+                &[
+                    "audit",
+                    "--key",
+                    "ci",
+                    "--document",
+                    "JD-1",
+                    "--limit",
+                    "4",
+                    "--json",
+                ],
+            ),
+        ];
+        for (short, long) in pairs {
+            assert_eq!(parse(short).unwrap(), parse(long).unwrap(), "{short:?}");
+        }
+    }
+
+    #[test]
+    fn the_browse_commands_have_their_defaults() {
+        let parse = |args: &[&str]| {
+            let mut all = vec!["app"];
+            all.extend_from_slice(args);
+            Cli::try_parse_from(all).map(|cli| cli.command)
+        };
+        let Command::List(args) = parse(&["list", "-p", "a"]).unwrap() else {
+            panic!("not list");
+        };
+        assert_eq!(
+            (args.sort, args.start, args.limit, args.json),
+            (SortArg::UpdatedDesc, 1, DEFAULT_LIST_LIMIT, false)
+        );
+        assert_eq!(
+            parse(&["list"]).unwrap_err().kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(Command::List(args).name(), "list");
+        let Command::Search(args) = parse(&["search"]).unwrap() else {
+            panic!("not search");
+        };
+        assert_eq!(
+            (args.query.len(), args.start, args.limit, args.json),
+            (0, 1, DEFAULT_SEARCH_LIMIT, false)
+        );
+        assert_eq!(Command::Search(args).name(), "search");
+        let Command::History(args) = parse(&["history", "JD-1"]).unwrap() else {
+            panic!("not history");
+        };
+        assert_eq!((args.start, args.limit), (1, DEFAULT_HISTORY_LIMIT));
+        assert_eq!(Command::History(args).name(), "history");
+        let Command::Diff(args) = parse(&["diff", "JD-1", "--from", "2"]).unwrap() else {
+            panic!("not diff");
+        };
+        assert_eq!((args.from, args.to, args.context), (2, None, 3));
+        assert_eq!(Command::Diff(args).name(), "diff");
+        assert!(parse(&["diff", "JD-1"]).is_err(), "--from is required");
+        let Command::Audit(args) = parse(&["audit"]).unwrap() else {
+            panic!("not audit");
+        };
+        assert_eq!((args.start, args.limit), (1, DEFAULT_AUDIT_LIMIT));
+        assert_eq!(Command::Audit(args).name(), "audit");
+    }
+
+    #[test]
+    fn search_terms_that_start_with_a_hyphen_follow_two_dashes() {
+        let search = |args: &[&str]| {
+            let mut all = vec!["app", "search"];
+            all.extend_from_slice(args);
+            match Cli::try_parse_from(all).map(|cli| cli.command) {
+                Ok(Command::Search(args)) => Ok(args),
+                Ok(other) => panic!("{other:?}"),
+                Err(e) => Err(e.kind()),
+            }
+        };
+        assert_eq!(search(&["--", "-redis"]).unwrap().query, ["-redis"]);
+        let args = search(&["-p", "x", "-n", "3", "--", "cache", "-redis"]).unwrap();
+        assert_eq!(args.project.as_deref(), Some("x"));
+        assert_eq!(args.limit, 3);
+        assert_eq!(args.query, ["cache", "-redis"]);
+        assert_eq!(
+            search(&["-redis"]).unwrap_err(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+        assert_eq!(
+            search(&["cache", "-redis"]).unwrap_err(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("search")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("-- cache -redis"), "{help}");
+    }
+
+    #[test]
+    fn sort_names_round_trip() {
+        for sort in SortArg::ALL {
+            assert_eq!(SortArg::from_api_name(sort.api_name()), Some(sort));
+            let name = sort.to_possible_value().unwrap();
+            assert_eq!(name.get_name().replace('-', "_"), sort.api_name());
+        }
+        assert_eq!(SortArg::from_api_name("newest"), None);
+        assert_eq!(SortArg::Title.sort(), Sort::Title);
     }
 
     #[test]

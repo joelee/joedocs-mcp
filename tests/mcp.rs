@@ -1200,6 +1200,131 @@ async fn http_requests_need_a_valid_key_host_and_origin() {
     server.stop().await.unwrap();
 }
 
+/// `joedocs <args>` on the server's store, returning its standard output.
+fn admin_output(root: &Path, args: &[&str]) -> TestResult<String> {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_joedocs"));
+    cmd.env_clear()
+        .env("HOME", root)
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("JOEDOCS__STORAGE__HOME", root.join("vault"))
+        .env("JOEDOCS__STORAGE__STATE_DIR", root.join("state"))
+        .current_dir(root);
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
+    let output = cmd.args(args).output()?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
+    }
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+#[tokio::test]
+async fn admin_json_matches_the_mcp_results() -> TestResult<()> {
+    let server = start().await?;
+    let client = server.client(&server.writer).await?;
+    for (title, doc_type, multifile) in [
+        ("One", "plans", false),
+        ("Two", "notes", true),
+        ("Three", "plans", false),
+    ] {
+        ok(
+            &client,
+            "new_document",
+            json!({"project": "joedocs", "title": title, "type": doc_type,
+                   "content": "body", "multifile": multifile}),
+        )
+        .await?;
+    }
+    ok(
+        &client,
+        "new_document_file",
+        json!({"document_id": "JD-2", "file": "pages/one", "content": "one"}),
+    )
+    .await?;
+    for (tool, args, cli) in [
+        (
+            "list_documents",
+            json!({"project": "joedocs"}),
+            vec!["list", "-p", "joedocs", "-j"],
+        ),
+        (
+            "search_documents",
+            json!({"project": "joedocs", "query": "body"}),
+            vec!["search", "body", "-p", "joedocs", "-j"],
+        ),
+        (
+            "search_documents",
+            json!({"project": "joedocs", "type": "plans", "filters": {"status": "draft"}, "limit": 1}),
+            vec![
+                "search", "-p", "joedocs", "-t", "plans", "-s", "draft", "-n", "1", "-j",
+            ],
+        ),
+        (
+            "get_document_history",
+            json!({"document_id": "JD-1"}),
+            vec!["history", "JD-1", "-j"],
+        ),
+        (
+            "diff_document",
+            json!({"document_id": "JD-2", "from": 1}),
+            vec!["diff", "JD-2", "--from", "1", "-j"],
+        ),
+        (
+            "list_documents",
+            json!({"project": "joedocs", "type": "plans", "sort": "title", "limit": 1}),
+            vec![
+                "list", "-p", "joedocs", "-t", "plans", "--sort", "title", "-n", "1", "-j",
+            ],
+        ),
+    ] {
+        let mcp = ok(&client, tool, args).await?;
+        let admin: Value = serde_json::from_str(&admin_output(&server.root, &cli)?)?;
+        assert_eq!(admin, mcp, "{cli:?}");
+    }
+    // `joedocs audit` shows the MCP writes, newest first.
+    let audit: Value = serde_json::from_str(&admin_output(
+        &server.root,
+        &["audit", "-k", "laptop", "--tool", "new_*", "-j"],
+    )?)?;
+    let rows: Vec<(String, String)> = audit["items"]
+        .as_array()
+        .ok_or("no items")?
+        .iter()
+        .map(|row| {
+            (
+                row["tool"].as_str().unwrap_or("").to_owned(),
+                row["document_id"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("new_document_file".to_owned(), "JD-2".to_owned()),
+            ("new_document".to_owned(), "JD-3".to_owned()),
+            ("new_document".to_owned(), "JD-2".to_owned()),
+            ("new_document".to_owned(), "JD-1".to_owned()),
+        ]
+    );
+    client.cancel().await?;
+    server.stop().await
+}
+
+#[tokio::test]
+async fn an_ungranted_project_is_refused_on_the_next_call() -> TestResult<()> {
+    let server = start().await?;
+    let reader = server.client(&server.reader).await?;
+    ok(&reader, "list_documents", json!({"project": "joedocs"})).await?;
+    let printed = admin_output(&server.root, &["key", "ungrant", "viewer", "joedocs"])?;
+    assert_eq!(printed, "API key viewer grants: none\n");
+    // With no grant on it, the project is hidden, as for any other key.
+    let denied = error(&reader, "list_documents", json!({"project": "joedocs"})).await?;
+    assert_eq!(denied["code"], "not_found", "{denied}");
+    reader.cancel().await?;
+    server.stop().await
+}
+
 #[test]
 fn the_serve_command_runs_until_sigterm() {
     use std::io::{BufRead as _, BufReader};

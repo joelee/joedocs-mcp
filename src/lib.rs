@@ -16,6 +16,7 @@ pub mod agents;
 pub mod app_id;
 pub mod auth;
 pub mod backup;
+pub mod browse;
 pub mod cli;
 pub mod client;
 pub mod clock;
@@ -269,26 +270,52 @@ pub fn execute(
             status::render(&report, out)?;
         }
         Command::Login { .. } | Command::Logout => {}
-        Command::Get {
-            document_id,
-            version,
-            content_only,
-            front_matter_only,
-            file,
-            part: file_part,
-            archive,
-        } => {
-            let request = GetRequest {
-                id: document_id,
-                version: *version,
-                part: admin::Part::new(*content_only, *front_matter_only),
-                file_part: file_part.as_deref(),
-                archive: archive.as_deref(),
-            };
-            local_get(&open_store(loaded, ctx)?, &request, file.as_deref(), out)?;
+        command @ Command::Get { .. } => {
+            if let Some((request, file)) = GetRequest::of(command) {
+                local_get(&open_store(loaded, ctx)?, &request, file, out)?;
+            }
         }
+        command @ (Command::List(_)
+        | Command::Search(_)
+        | Command::History(_)
+        | Command::Diff(_)
+        | Command::Audit(_)) => local_browse(command, loaded, ctx, out)?,
     }
     Ok(())
+}
+
+/// The commands that view and find documents, on the local store.
+fn local_browse(
+    command: &Command,
+    loaded: &Loaded,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let store = open_store(loaded, ctx)?;
+    match command {
+        Command::List(args) => {
+            let reply = browse::list(&store, args)?;
+            browse::print(&reply, args.json, browse::render_list, out)
+        }
+        Command::Search(args) => {
+            let spec = browse::SearchSpec::from_args(args)?;
+            let reply = browse::search(&store, &spec)?;
+            browse::print(&reply, args.json, browse::render_search, out)
+        }
+        Command::History(args) => {
+            let reply = browse::history(&store, args)?;
+            browse::print(&reply, args.json, browse::render_history, out)
+        }
+        Command::Diff(args) => {
+            let reply = browse::diff(&store, args)?;
+            browse::print(&reply, args.json, browse::render_diff, out)
+        }
+        Command::Audit(args) => {
+            let reply = browse::audit(&store, args)?;
+            browse::print(&reply, args.json, browse::render_audit, out)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Runs `cli` against the admin API of `client.server`, or returns `None`
@@ -468,6 +495,57 @@ fn remote_text(
     }
 }
 
+/// `joedocs key` through the admin API.
+fn remote_key(
+    remote: &client::Remote<'_>,
+    command: &KeyCommand,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    use reqwest::Method;
+    use serde_json::json;
+    let grants =
+        |grants: &[auth::Grant]| grants.iter().map(ToString::to_string).collect::<Vec<_>>();
+    match command {
+        KeyCommand::List => remote_text(remote, &Method::GET, "keys", None, out),
+        KeyCommand::Create { name, grants: g } => {
+            let body = json!({"name": name, "grants": grants(g)});
+            remote_text(remote, &Method::POST, "keys", Some(&body), out)
+        }
+        KeyCommand::Grant { name, grants: g } => {
+            let body = json!({"grants": grants(g)});
+            remote_text(
+                remote,
+                &Method::POST,
+                &format!("keys/{name}/grants"),
+                Some(&body),
+                out,
+            )
+        }
+        KeyCommand::Ungrant { name, projects } => {
+            let body = json!({"projects": projects});
+            let path = format!("keys/{}/ungrant", percent_encode(name));
+            remote_text(remote, &Method::POST, &path, Some(&body), out).map_err(|e| match e {
+                Error::Client(error) => newer_route(error, remote.server(), "key ungrant").into(),
+                other => other,
+            })
+        }
+        KeyCommand::Rotate { name } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("keys/{name}/rotate"),
+            None,
+            out,
+        ),
+        KeyCommand::Revoke { name } => remote_text(
+            remote,
+            &Method::POST,
+            &format!("keys/{name}/revoke"),
+            None,
+            out,
+        ),
+    }
+}
+
 /// The admin commands that run remotely and print what they print locally.
 fn remote_admin(
     remote: &client::Remote<'_>,
@@ -476,8 +554,6 @@ fn remote_admin(
 ) -> Result<(), Error> {
     use reqwest::Method;
     use serde_json::json;
-    let grants =
-        |grants: &[auth::Grant]| grants.iter().map(ToString::to_string).collect::<Vec<_>>();
     match command {
         Command::Project {
             command: ProjectCommand::List,
@@ -488,51 +564,17 @@ fn remote_admin(
             let body = json!({"name": name, "key": key, "title": title});
             remote_text(remote, &Method::POST, "projects", Some(&body), out)
         }
-        Command::Key {
-            command: KeyCommand::List,
-        } => remote_text(remote, &Method::GET, "keys", None, out),
-        Command::Key {
-            command: KeyCommand::Create { name, grants: g },
-        } => {
-            let body = json!({"name": name, "grants": grants(g)});
-            remote_text(remote, &Method::POST, "keys", Some(&body), out)
-        }
-        Command::Key {
-            command: KeyCommand::Grant { name, grants: g },
-        } => {
-            let body = json!({"grants": grants(g)});
-            remote_text(
-                remote,
-                &Method::POST,
-                &format!("keys/{name}/grants"),
-                Some(&body),
-                out,
-            )
-        }
-        Command::Key {
-            command: KeyCommand::Rotate { name },
-        } => remote_text(
-            remote,
-            &Method::POST,
-            &format!("keys/{name}/rotate"),
-            None,
-            out,
-        ),
-        Command::Key {
-            command: KeyCommand::Revoke { name },
-        } => remote_text(
-            remote,
-            &Method::POST,
-            &format!("keys/{name}/revoke"),
-            None,
-            out,
-        ),
+        Command::Key { command } => remote_key(remote, command, out),
         Command::Archive {
-            command: ArchiveCommand::List { project },
+            command: ArchiveCommand::List { project, doc_type },
         } => {
-            let path = project
-                .as_ref()
-                .map_or_else(|| "archive".to_owned(), |p| format!("archive?project={p}"));
+            let path = with_query(
+                "archive",
+                &[
+                    ("project", project.as_deref()),
+                    ("type", doc_type.as_deref()),
+                ],
+            );
             remote_text(remote, &Method::GET, &path, None, out)
         }
         Command::Archive {
@@ -547,27 +589,173 @@ fn remote_admin(
         Command::Document { command } => remote_document(remote, command, out),
         Command::Check => remote_text(remote, &Method::GET, "check", None, out),
         Command::Reindex => remote_text(remote, &Method::POST, "reindex", None, out),
-        Command::Get {
-            document_id,
-            version,
-            content_only,
-            front_matter_only,
-            file,
-            part: file_part,
-            archive,
-        } => {
-            let request = GetRequest {
-                id: document_id,
-                version: *version,
-                part: admin::Part::new(*content_only, *front_matter_only),
-                file_part: file_part.as_deref(),
-                archive: archive.as_deref(),
-            };
-            remote_get(remote, &request, file.as_deref(), out)
-        }
+        command @ Command::Get { .. } => match GetRequest::of(command) {
+            Some((request, file)) => remote_get(remote, &request, file, out),
+            None => Ok(()),
+        },
         Command::Backup { file, .. } => remote_backup(remote, file, out),
+        Command::List(args) => remote_list(remote, args, out),
+        Command::Search(args) => {
+            let spec = browse::SearchSpec::from_args(args)?;
+            let body =
+                serde_json::to_value(&spec).map_err(|e| Error::Output(io::Error::other(e)))?;
+            let reply = remote_page(remote, "search", Some(&body), "search", browse::is_page)?;
+            browse::print(&reply, args.json, browse::render_search, out)
+        }
+        Command::History(args) => remote_history(remote, args, out),
+        Command::Diff(args) => remote_diff(remote, args, out),
+        Command::Audit(args) => remote_audit(remote, args, out),
         // Handled by `run_remote`, or refused by `remote` before it.
         _ => Ok(()),
+    }
+}
+
+/// `path?name=value&...` with each value percent-encoded; `None` values are
+/// left out.
+fn with_query(path: &str, pairs: &[(&str, Option<&str>)]) -> String {
+    let query: Vec<String> = pairs
+        .iter()
+        .filter_map(|(name, value)| value.map(|v| format!("{name}={}", percent_encode(v))))
+        .collect();
+    if query.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{}", query.join("&"))
+    }
+}
+
+/// `joedocs list` through the admin API.
+fn remote_list(
+    remote: &client::Remote<'_>,
+    args: &cli::ListArgs,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let (start, limit) = (args.start.to_string(), args.limit.to_string());
+    let path = with_query(
+        "documents",
+        &[
+            ("project", Some(&args.project)),
+            ("type", args.doc_type.as_deref()),
+            ("status", args.status.as_deref()),
+            ("sort", Some(args.sort.api_name())),
+            ("start", Some(&start)),
+            ("limit", Some(&limit)),
+        ],
+    );
+    let reply = remote_page(remote, &path, None, "list", browse::is_page)?;
+    browse::print(&reply, args.json, browse::render_list, out)
+}
+
+/// `joedocs history` through the admin API.
+fn remote_history(
+    remote: &client::Remote<'_>,
+    args: &cli::HistoryArgs,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let (start, limit) = (args.start.to_string(), args.limit.to_string());
+    let path = with_query(
+        &format!("documents/{}/history", percent_encode(&args.document_id)),
+        &[
+            ("file", args.part.as_deref()),
+            ("start", Some(&start)),
+            ("limit", Some(&limit)),
+        ],
+    );
+    let reply = remote_page(remote, &path, None, "history", browse::is_history)?;
+    browse::print(&reply, args.json, browse::render_history, out)
+}
+
+/// `joedocs diff` through the admin API.
+fn remote_diff(
+    remote: &client::Remote<'_>,
+    args: &cli::DiffArgs,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let from = args.from.to_string();
+    let to = args.to.map(|to| to.to_string());
+    let context = args.context.to_string();
+    let path = with_query(
+        &format!("documents/{}/diff", percent_encode(&args.document_id)),
+        &[
+            ("from", Some(&from)),
+            ("to", to.as_deref()),
+            ("context", Some(&context)),
+            ("file", args.part.as_deref()),
+        ],
+    );
+    let reply = remote_page(remote, &path, None, "diff", browse::is_diff)?;
+    browse::print(&reply, args.json, browse::render_diff, out)
+}
+
+/// `joedocs audit` through the admin API.
+fn remote_audit(
+    remote: &client::Remote<'_>,
+    args: &cli::AuditArgs,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let (start, limit) = (args.start.to_string(), args.limit.to_string());
+    let path = with_query(
+        "audit",
+        &[
+            ("since", args.since.as_deref()),
+            ("until", args.until.as_deref()),
+            ("key", args.key.as_deref()),
+            ("tool", args.tool.as_deref()),
+            ("document", args.document.as_deref()),
+            ("outcome", args.outcome.as_deref()),
+            ("start", Some(&start)),
+            ("limit", Some(&limit)),
+        ],
+    );
+    let reply = remote_page(remote, &path, None, "audit", browse::is_page)?;
+    browse::print(&reply, args.json, browse::render_audit, out)
+}
+
+/// Calls one of the routes added in 0.4.2 and checks the reply with
+/// `expected`. A server without the route (an older `JoeDocs`) gets a
+/// message that says to upgrade it.
+fn remote_page(
+    remote: &client::Remote<'_>,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    command: &str,
+    expected: fn(&serde_json::Value) -> bool,
+) -> Result<serde_json::Value, Error> {
+    let what = format!("`{command}` reply");
+    let method = if body.is_some() {
+        reqwest::Method::POST
+    } else {
+        reqwest::Method::GET
+    };
+    let reply = remote
+        .call(&method, path, body)
+        .map_err(|e| newer_route(e, remote.server(), command))?;
+    let page: serde_json::Value = remote.parse(&reply, &what)?;
+    if !expected(&page) {
+        return Err(client::Error::Protocol(format!(
+            "{} sent something that is not a JoeDocs {what}; is client.server the JoeDocs server?",
+            remote.server()
+        ))
+        .into());
+    }
+    Ok(page)
+}
+
+/// The message for a route the server does not have.
+fn newer_route(error: client::Error, server: &str, command: &str) -> client::Error {
+    match error {
+        client::Error::Remote { code, message }
+            if code == "not_found" && message == "no such admin API route" =>
+        {
+            client::Error::Remote {
+                code,
+                message: format!(
+                    "{server} has no admin API route for `joedocs {command}`; it may run an older JoeDocs, so upgrade it to {} or later",
+                    env!("CARGO_PKG_VERSION")
+                ),
+            }
+        }
+        other => other,
     }
 }
 
@@ -605,6 +793,33 @@ struct GetRequest<'a> {
     part: admin::Part,
     file_part: Option<&'a str>,
     archive: Option<&'a std::path::Path>,
+}
+
+impl<'a> GetRequest<'a> {
+    /// The request of a `get` command and its `-f` file; `None` for any
+    /// other command.
+    fn of(command: &'a Command) -> Option<(Self, Option<&'a std::path::Path>)> {
+        let Command::Get {
+            document_id,
+            version,
+            content_only,
+            front_matter_only,
+            file,
+            part: file_part,
+            archive,
+        } = command
+        else {
+            return None;
+        };
+        let request = Self {
+            id: document_id,
+            version: *version,
+            part: admin::Part::new(*content_only, *front_matter_only),
+            file_part: file_part.as_deref(),
+            archive: archive.as_deref(),
+        };
+        Some((request, file.as_deref()))
+    }
 }
 
 fn remote_get(

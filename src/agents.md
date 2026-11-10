@@ -27,6 +27,9 @@ These only read:
 - `joedocs config show` and `joedocs config paths`.
 - `joedocs project list`, `joedocs key list`, `joedocs archive list`.
 - `joedocs get DOCUMENT_ID`: print a document.
+- `joedocs list -p PROJECT` and `joedocs search [QUERY]`: list a project's documents, or find documents by text and front matter.
+- `joedocs history DOCUMENT_ID` and `joedocs diff DOCUMENT_ID --from N`: a document's revisions and what changed between two of them.
+- `joedocs audit`: the audit log of MCP writes and admin API calls (filter with `--since`, `-k`, `--tool`, `-d`).
 - `joedocs backup FILE.tgz`: a consistent backup, safe while the service runs. The file holds key hashes, so keep it private.
 - Service logs: `journalctl --user -u joedocs` (user unit), `journalctl -u joedocs` (system unit), or `brew services info joedocs` on macOS.
 
@@ -37,7 +40,7 @@ These change the store or what clients can do. Explain what you intend and why, 
 - `joedocs reindex` (rebuilds the index from the history; safe, but takes the write lock).
 - `joedocs archive restore DOCUMENT_ID`.
 - `joedocs document convert`, `document move-file` and `document restore-file` (multi-file documents).
-- `joedocs project add`, `joedocs key create`, `key grant`, `key rotate` and `key revoke`. A rotated or revoked key stops working at once, on every machine that uses it.
+- `joedocs project add`, `joedocs key create`, `key grant`, `key ungrant`, `key rotate` and `key revoke`. A rotated or revoked key stops working at once, on every machine that uses it, and an ungranted project is out of reach on the key's next request.
 - `joedocs backup --restore`, which needs empty target directories and a stopped service.
 - `joedocs admin-token create`, `list` and `revoke`, and turning the remote admin API on or off.
 - Upgrading, restarting or stopping the service, and `joedocs systemd install` or `remove`.

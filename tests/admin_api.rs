@@ -521,3 +521,357 @@ async fn document_routes_are_audited_by_operation() -> TestResult<()> {
     );
     server.stop().await
 }
+
+#[tokio::test]
+async fn the_documents_list_route_returns_json_and_is_audited() -> TestResult<()> {
+    let server = start(true).await?;
+    let no_session = server
+        .send(
+            "GET",
+            "/admin/v1/documents?project=p",
+            &server.auth(None),
+            "",
+        )
+        .await?;
+    assert_eq!(no_session.status, 401, "{:?}", no_session.json);
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let added = server
+        .send(
+            "POST",
+            "/admin/v1/projects",
+            &auth,
+            r#"{"name":"p","key":"P"}"#,
+        )
+        .await?;
+    assert_eq!(added.status, 200, "{:?}", added.json);
+    let listed = server
+        .send(
+            "GET",
+            "/admin/v1/documents?project=p&sort=title&limit=5",
+            &auth,
+            "",
+        )
+        .await?;
+    assert_eq!(listed.status, 200, "{:?}", listed.json);
+    assert!(listed.head.contains("application/json"), "{}", listed.head);
+    assert_eq!(
+        listed.json,
+        serde_json::json!({"items": [], "total": 0, "next_start": null})
+    );
+    for (path, needle) in [
+        ("/admin/v1/documents", "`project` is required"),
+        (
+            "/admin/v1/documents?project=p&limit=many",
+            "`limit` must be a number",
+        ),
+        (
+            "/admin/v1/documents?project=p&sort=newest",
+            "`sort` cannot be",
+        ),
+        ("/admin/v1/documents?project=p&type=nope", "is not one of"),
+    ] {
+        let bad = server.send("GET", path, &auth, "").await?;
+        assert_eq!(bad.status, 400, "{path}: {:?}", bad.json);
+        assert_eq!(bad.json["error"]["code"], "invalid_argument");
+        assert!(
+            bad.json["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains(needle),
+            "{path}: {:?}",
+            bad.json
+        );
+    }
+    let unknown = server
+        .send("GET", "/admin/v1/documents?project=nope", &auth, "")
+        .await?;
+    assert_eq!(unknown.status, 404);
+    let audit = server.audit()?;
+    let listing: Vec<&str> = audit
+        .iter()
+        .filter(|(tool, _)| tool == "admin:documents.list")
+        .map(|(_, outcome)| outcome.as_str())
+        .collect();
+    assert_eq!(
+        listing,
+        [
+            "no_session",
+            "ok",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "not_found"
+        ]
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_search_route_takes_a_json_body_and_is_audited() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let added = server
+        .send(
+            "POST",
+            "/admin/v1/projects",
+            &auth,
+            r#"{"name":"p","key":"P"}"#,
+        )
+        .await?;
+    assert_eq!(added.status, 200, "{:?}", added.json);
+    for body in ["", r#"{"query":"nothing","project":"*","limit":5}"#] {
+        let found = server.send("POST", "/admin/v1/search", &auth, body).await?;
+        assert_eq!(found.status, 200, "{body}: {:?}", found.json);
+        assert_eq!(
+            found.json,
+            serde_json::json!({"items": [], "total": 0, "next_start": null})
+        );
+    }
+    for (body, needle) in [
+        (r#"{"nope":1}"#, "unknown field"),
+        (r#"{"filters":{"k":{"near":1}}}"#, "invalid filters"),
+        ("[1", "invalid JSON"),
+        (r#"{"limit":"many"}"#, "invalid search"),
+    ] {
+        let bad = server.send("POST", "/admin/v1/search", &auth, body).await?;
+        assert_eq!(bad.status, 400, "{body}: {:?}", bad.json);
+        assert!(
+            bad.json["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains(needle),
+            "{body}: {:?}",
+            bad.json
+        );
+    }
+    let audit = server.audit()?;
+    let outcomes: Vec<&str> = audit
+        .iter()
+        .filter(|(tool, _)| tool == "admin:documents.search")
+        .map(|(_, outcome)| outcome.as_str())
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            "ok",
+            "ok",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument"
+        ]
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn history_and_diff_routes_check_their_arguments_and_are_audited() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    for (path, status, needle) in [
+        ("/admin/v1/documents/JD-1/history", 404, "does not exist"),
+        (
+            "/admin/v1/documents/JD-1/history?limit=x",
+            400,
+            "`limit` must be a number",
+        ),
+        ("/admin/v1/documents/JD-1/diff", 400, "`from` is required"),
+        (
+            "/admin/v1/documents/JD-1/diff?from=1&context=99999999999",
+            400,
+            "`context` cannot be",
+        ),
+        (
+            "/admin/v1/documents/JD-1/diff?from=1",
+            404,
+            "does not exist",
+        ),
+    ] {
+        let reply = server.send("GET", path, &auth, "").await?;
+        assert_eq!(reply.status, status, "{path}: {:?}", reply.json);
+        assert!(
+            reply.json["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains(needle),
+            "{path}: {:?}",
+            reply.json
+        );
+    }
+    let audit = server.audit()?;
+    assert_eq!(
+        audit[audit.len() - 5..],
+        [
+            ("admin:documents.history".to_owned(), "not_found".to_owned()),
+            (
+                "admin:documents.history".to_owned(),
+                "invalid_argument".to_owned()
+            ),
+            (
+                "admin:documents.diff".to_owned(),
+                "invalid_argument".to_owned()
+            ),
+            (
+                "admin:documents.diff".to_owned(),
+                "invalid_argument".to_owned()
+            ),
+            ("admin:documents.diff".to_owned(), "not_found".to_owned()),
+        ]
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_audit_route_reads_the_log_and_is_audited() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let read = server
+        .send(
+            "GET",
+            "/admin/v1/audit?tool=admin%3A%2A&key=laptop",
+            &auth,
+            "",
+        )
+        .await?;
+    assert_eq!(read.status, 200, "{:?}", read.json);
+    assert_eq!(read.json["total"], 1);
+    assert_eq!(read.json["items"][0]["tool"], "admin:session.create");
+    assert_eq!(read.json["items"][0]["outcome"], "ok");
+    for path in [
+        "/admin/v1/audit?since=yesterday",
+        "/admin/v1/audit?limit=0",
+        "/admin/v1/audit?start=x",
+    ] {
+        let bad = server.send("GET", path, &auth, "").await?;
+        assert_eq!(bad.status, 400, "{path}: {:?}", bad.json);
+    }
+    let audit = server.audit()?;
+    assert_eq!(
+        audit[audit.len() - 4..],
+        [
+            ("admin:audit.list".to_owned(), "ok".to_owned()),
+            ("admin:audit.list".to_owned(), "invalid_argument".to_owned()),
+            ("admin:audit.list".to_owned(), "invalid_argument".to_owned()),
+            ("admin:audit.list".to_owned(), "invalid_argument".to_owned()),
+        ]
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_ungrant_route_needs_a_list_of_projects() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    for (method, path, body) in [
+        ("POST", "/admin/v1/projects", r#"{"name":"p","key":"P"}"#),
+        (
+            "POST",
+            "/admin/v1/keys",
+            r#"{"name":"ci","grants":["p:read"]}"#,
+        ),
+    ] {
+        let reply = server.send(method, path, &auth, body).await?;
+        assert_eq!(reply.status, 200, "{path}: {:?}", reply.json);
+    }
+    for body in [
+        "",
+        r#"{"projects":[]}"#,
+        r#"{"projects":"p"}"#,
+        r#"{"projects":[1]}"#,
+    ] {
+        let bad = server
+            .send("POST", "/admin/v1/keys/ci/ungrant", &auth, body)
+            .await?;
+        assert_eq!(bad.status, 400, "{body}: {:?}", bad.json);
+    }
+    let done = server
+        .send(
+            "POST",
+            "/admin/v1/keys/ci/ungrant",
+            &auth,
+            r#"{"projects":["p"]}"#,
+        )
+        .await?;
+    assert_eq!(done.status, 200, "{:?}", done.json);
+    assert_eq!(done.json["output"], "API key ci grants: none\n");
+    let again = server
+        .send(
+            "POST",
+            "/admin/v1/keys/ci/ungrant",
+            &auth,
+            r#"{"projects":["p"]}"#,
+        )
+        .await?;
+    assert_eq!(again.status, 400, "{:?}", again.json);
+    let audit = server.audit()?;
+    let outcomes: Vec<&str> = audit
+        .iter()
+        .filter(|(tool, _)| tool == "admin:keys.ungrant")
+        .map(|(_, outcome)| outcome.as_str())
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "invalid_argument",
+            "ok",
+            "invalid_argument"
+        ]
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn empty_query_values_are_values_not_omissions() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let added = server
+        .send(
+            "POST",
+            "/admin/v1/projects",
+            &auth,
+            r#"{"name":"p","key":"P"}"#,
+        )
+        .await?;
+    assert_eq!(added.status, 200, "{:?}", added.json);
+    for (path, status) in [
+        ("/admin/v1/documents?project=p&type=", 400),
+        ("/admin/v1/documents?project=p&status=", 400),
+        ("/admin/v1/documents?project=p&limit=", 400),
+        ("/admin/v1/documents?project=", 404),
+        ("/admin/v1/documents?project=p", 200),
+        ("/admin/v1/archive?type=", 400),
+        ("/admin/v1/archive?project=", 404),
+        ("/admin/v1/audit?document=", 400),
+        ("/admin/v1/audit?start=", 400),
+    ] {
+        let reply = server.send("GET", path, &auth, "").await?;
+        assert_eq!(reply.status, status, "{path}: {:?}", reply.json);
+    }
+    // The log holds entries, but none has an empty key, tool or outcome.
+    for path in [
+        "/admin/v1/audit?key=",
+        "/admin/v1/audit?tool=",
+        "/admin/v1/audit?outcome=",
+    ] {
+        let reply = server.send("GET", path, &auth, "").await?;
+        assert_eq!(reply.status, 200, "{path}: {:?}", reply.json);
+        assert_eq!(reply.json["total"], 0, "{path}: {:?}", reply.json);
+    }
+    let all = server.send("GET", "/admin/v1/audit", &auth, "").await?;
+    assert!(
+        all.json["total"].as_u64().unwrap_or(0) > 0,
+        "{:?}",
+        all.json
+    );
+    server.stop().await
+}

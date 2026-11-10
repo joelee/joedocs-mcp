@@ -172,6 +172,30 @@ fn projects_and_keys_can_be_managed() {
         ));
 }
 
+#[test]
+fn key_ungrant_removes_grants() {
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    cmd(root.path())
+        .args(["key", "create", "laptop", "--grant", "p:write"])
+        .assert()
+        .success();
+    cmd(root.path())
+        .args(["key", "ungrant", "laptop", "p"])
+        .assert()
+        .success()
+        .stdout("API key laptop grants: none\n");
+    cmd(root.path())
+        .args(["key", "ungrant", "laptop", "p"])
+        .assert()
+        .code(65)
+        .stderr("error: invalid project: API key laptop has no grant on p\n");
+    cmd(root.path())
+        .args(["key", "ungrant", "laptop"])
+        .assert()
+        .code(2);
+}
+
 /// Opens the store the binary uses under `root`, through the library.
 fn library_store(root: &Path) -> Result<joedocs::store::Store, joedocs::store::Error> {
     use std::sync::Arc;
@@ -359,6 +383,522 @@ fn archived_documents_are_listed_and_restored_and_check_reports_drift() {
         .stdout(predicate::str::starts_with(
             "The index is behind the history",
         ));
+}
+
+/// A store with project `p` (key `P`): P-1 a `plans` draft, P-2 a
+/// multi-file `notes` document with one other file, P-3 a `notes` document
+/// archived, and P-4 an archived `plans` document.
+fn browse_store(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    cmd(root).arg("init").assert().success();
+    cmd(root)
+        .args(["project", "add", "p", "--key", "P"])
+        .assert()
+        .success();
+    let mut store = library_store(root)?;
+    let actor = Actor::new("laptop", "test");
+    for (title, doc_type, multifile) in [
+        ("Roadmap", "plans", false),
+        ("Notebook", "notes", true),
+        ("Old notes", "notes", false),
+        ("Old plan", "plans", false),
+    ] {
+        store.create(
+            &actor,
+            NewDocument {
+                project: "p".into(),
+                title: title.into(),
+                doc_type: Some(doc_type.into()),
+                content: "body\n".into(),
+                multifile,
+                ..NewDocument::default()
+            },
+        )?;
+    }
+    store.create_file(
+        &actor,
+        &NewFile {
+            document_id: "P-2".into(),
+            file: "pages/one".into(),
+            content: "one\n".into(),
+            ..NewFile::default()
+        },
+    )?;
+    store.archive(&actor, "P-3", "done")?;
+    store.archive(&actor, "P-4", "dropped")?;
+    Ok(())
+}
+
+#[test]
+fn list_prints_a_projects_documents() {
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    cmd(root.path())
+        .args(["list", "-p", "p", "--sort", "title"])
+        .assert()
+        .success()
+        .stdout(
+            "ID   TYPE   STATUS  REV  FILES  UPDATED               TITLE\n\
+             P-2  notes  draft   2    1      2026-10-26T07:33:20Z  Notebook\n\
+             P-1  plans  draft   1    -      2026-10-26T07:33:20Z  Roadmap\n",
+        );
+    cmd(root.path())
+        .args(["list", "--project", "p", "--type", "plans"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Roadmap"))
+        .stdout(predicate::str::contains("Notebook").not());
+    cmd(root.path())
+        .args(["list", "-p", "p", "-s", "review"])
+        .assert()
+        .success()
+        .stdout("No documents.\n");
+    cmd(root.path())
+        .args(["list", "-p", "p", "--sort", "title", "-n", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "Showing 1-1 of 2; next page: --start 2\n",
+        ));
+    cmd(root.path())
+        .args([
+            "list", "-p", "p", "--sort", "title", "--start", "2", "-n", "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Roadmap"))
+        .stdout(predicate::str::contains("Showing").not());
+    cmd(root.path())
+        .args(["list", "-p", "nope"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("project nope does not exist"));
+    for bad in [["--limit", "0"], ["--type", "nope"]] {
+        cmd(root.path())
+            .args(["list", "-p", "p"])
+            .args(bad)
+            .assert()
+            .code(65);
+    }
+    let output = cmd(root.path())
+        .args(["list", "-p", "p", "-t", "notes", "-j"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.ends_with("}\n"), "{text}");
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["next_start"], serde_json::Value::Null);
+    assert_eq!(json["items"][0]["id"], "P-2");
+    assert_eq!(json["items"][0]["type"], "notes");
+    assert_eq!(json["items"][0]["multifile"], true);
+    assert_eq!(json["items"][0]["files"], 1);
+    let long = cmd(root.path())
+        .args(["list", "--project", "p", "--type", "notes", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(long.stdout).unwrap(), text);
+}
+
+#[test]
+fn archive_list_filters_by_type() {
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    let all = cmd(root.path()).args(["archive", "list"]).output().unwrap();
+    let all = String::from_utf8(all.stdout).unwrap();
+    assert!(
+        all.contains("Old notes") && all.contains("Old plan"),
+        "{all}"
+    );
+    cmd(root.path())
+        .args(["archive", "list", "-t", "notes"])
+        .assert()
+        .success()
+        .stdout(
+            "ID   PROJECT  TYPE   TITLE      ARCHIVED              BY      REASON\n\
+             P-3  p        notes  Old notes  2026-10-26T07:33:20Z  laptop  done\n",
+        );
+    cmd(root.path())
+        .args(["archive", "list", "-p", "p", "--type", "plans"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Old plan"))
+        .stdout(predicate::str::contains("Old notes").not());
+    cmd(root.path())
+        .args(["archive", "list", "--type", "nope"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains("\"nope\" is not one of"));
+}
+
+/// `browse_store`, plus project `q` (key `Q`) with Q-1, a `plans` document
+/// about a zebra (front matter `kind: bug`, and an escape sequence in its
+/// body), and a zebra page `pages/zoo` in P-2.
+fn search_store(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    browse_store(root)?;
+    cmd(root)
+        .args(["project", "add", "q", "--key", "Q"])
+        .assert()
+        .success();
+    let mut store = library_store(root)?;
+    let actor = Actor::new("laptop", "test");
+    store.create(
+        &actor,
+        NewDocument {
+            project: "q".into(),
+            title: "Zebra plan".into(),
+            doc_type: Some("plans".into()),
+            content: "a zebra \u{1b}[31m crossing\n".into(),
+            front_matter: [("kind".to_owned(), "bug".into())].into_iter().collect(),
+            ..NewDocument::default()
+        },
+    )?;
+    store.create_file(
+        &actor,
+        &NewFile {
+            document_id: "P-2".into(),
+            file: "pages/zoo".into(),
+            content: "the zebra page\n".into(),
+            ..NewFile::default()
+        },
+    )?;
+    Ok(())
+}
+
+#[test]
+fn search_finds_documents_in_every_project() {
+    let root = TempDir::new().unwrap();
+    search_store(root.path()).unwrap();
+
+    let output = cmd(root.path()).args(["search", "zebra"]).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.starts_with("ID   FILE "), "{text}");
+    assert!(text.contains("Q-1  -  "), "{text}");
+    assert!(text.contains("P-2  pages/zoo"), "{text}");
+    let snippet = text
+        .lines()
+        .find(|line| line.starts_with("    ") && line.contains("crossing"))
+        .unwrap_or_default();
+    assert!(snippet.contains("«zebra»"), "{text}");
+    assert!(snippet.contains("\\u{1b}[31m"), "{text}");
+    assert!(!text.contains('\u{1b}'), "{text}");
+    cmd(root.path())
+        .args(["search", "zebra", "-p", "p"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Q-1").not())
+        .stdout(predicate::str::contains("P-2"));
+    cmd(root.path())
+        .args(["search", "zebra", "-d", "P-2", "-t", "notes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pages/zoo"))
+        .stdout(predicate::str::contains("Q-1").not());
+    // Filters test the matched file's own front matter: the page has no
+    // status.
+    cmd(root.path())
+        .args(["search", "zebra", "-s", "draft"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Q-1"))
+        .stdout(predicate::str::contains("pages/zoo").not());
+    cmd(root.path())
+        .args(["search", "-F", "kind=bug"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Q-1"))
+        .stdout(predicate::str::contains("P-1").not());
+    cmd(root.path())
+        .args([
+            "search",
+            "--filters",
+            r#"{"kind": {"in": ["bug", "chore"]}}"#,
+            "-j",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"id\": \"Q-1\""));
+    cmd(root.path())
+        .args(["search", "--", "zebra", "-crossing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pages/zoo"))
+        .stdout(predicate::str::contains("Q-1").not());
+    cmd(root.path())
+        .args(["search", "nothing-like-this"])
+        .assert()
+        .success()
+        .stdout("No matches.\n");
+    cmd(root.path())
+        .args(["search", "zebra", "-n", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "Showing 1-1 of 2; next page: --start 2\n",
+        ));
+    for (args, needle) in [
+        (vec!["-s", "draft", "-F", "status=done"], "status"),
+        (vec!["-F", "kind"], "--filter"),
+        (vec!["--filters", "[1]"], "--filters"),
+        (vec!["--filters", "{nope"], "--filters"),
+        (vec!["-p", "nope"], "project nope does not exist"),
+    ] {
+        cmd(root.path())
+            .arg("search")
+            .args(args)
+            .assert()
+            .code(65)
+            .stderr(predicate::str::contains(needle));
+    }
+}
+
+/// `browse_store` with P-1 at revision 3: two appends, the second with a
+/// summary holding an escape sequence.
+fn revised_store(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use joedocs::store::Actor;
+    browse_store(root)?;
+    let mut store = library_store(root)?;
+    let actor = Actor::new("laptop", "test");
+    store.append(&actor, "P-1", "second line\n", Some(1), None)?;
+    store.append(
+        &actor,
+        "P-1",
+        "third line\n",
+        Some(2),
+        Some("bad \u{1b}[2J summary"),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn history_lists_revisions_newest_first() {
+    let root = TempDir::new().unwrap();
+    revised_store(root.path()).unwrap();
+
+    let output = cmd(root.path()).args(["history", "P-1"]).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[0].starts_with("REV  TIME                  ACTION  AUTHOR  CLIENT  SUMMARY"),
+        "{text}"
+    );
+    assert!(lines[1].starts_with("3    "), "{text}");
+    assert!(
+        lines[1].contains("append") && lines[1].contains("\\u{1b}[2J"),
+        "{text}"
+    );
+    assert!(
+        lines[3].starts_with("1    ") && lines[3].contains("create"),
+        "{text}"
+    );
+    assert!(!text.contains('\u{1b}'), "{text}");
+    cmd(root.path())
+        .args(["history", "P-1", "-n", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "Showing 1-1 of 3; next page: --start 2\n",
+        ));
+    cmd(root.path())
+        .args(["history", "P-2", "-P", "pages/one"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("create_file"))
+        .stdout(predicate::str::contains("\n1  ").not());
+    let json = cmd(root.path())
+        .args(["history", "P-1", "-j"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["total"], 3);
+    assert_eq!(json["document"]["id"], "P-1");
+    assert_eq!(json["revisions"][2]["action"], "create");
+}
+
+#[test]
+fn diff_shows_what_changed_between_revisions() {
+    let root = TempDir::new().unwrap();
+    revised_store(root.path()).unwrap();
+    cmd(root.path())
+        .args(["diff", "P-1", "--from", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "--- P-1 revision 1\n+++ P-1 revision 3\n",
+        ))
+        .stdout(predicate::str::contains("+second line\n"))
+        .stdout(predicate::str::contains("+third line\n"));
+    cmd(root.path())
+        .args(["diff", "P-1", "--from", "2", "--to", "2"])
+        .assert()
+        .success()
+        .stdout("No changes between revisions 2 and 2.\n");
+    cmd(root.path())
+        .args(["diff", "P-2", "--from", "1", "--context", "0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pages/one"))
+        .stdout(predicate::str::contains("+one"));
+    cmd(root.path())
+        .args(["diff", "P-2", "--from", "2", "-P", "pages/one"])
+        .assert()
+        .success()
+        .stdout("No changes between revisions 2 and 2.\n");
+    let json = cmd(root.path())
+        .args(["diff", "P-1", "--from", "1", "--to", "2", "--json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["changed"], true);
+    assert_eq!(
+        (json["from"].as_u64(), json["to"].as_u64()),
+        (Some(1), Some(2))
+    );
+    for args in [
+        vec!["diff", "P-1", "--from", "9"],
+        vec!["diff", "P-9", "--from", "1"],
+        vec!["history", "P-9"],
+        vec!["history", "P-3"],
+        vec!["diff", "P-1", "--from", "1", "--context", "101"],
+    ] {
+        cmd(root.path()).args(&args).assert().code(65);
+    }
+    cmd(root.path())
+        .args(["diff", "P-1"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--from"));
+}
+
+#[test]
+fn audit_reads_the_audit_log() {
+    use joedocs::store::Actor;
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    cmd(root.path())
+        .arg("audit")
+        .assert()
+        .success()
+        .stdout("No audit entries.\n");
+    let store = library_store(root.path()).unwrap();
+    let laptop = Actor::new("laptop", "claude");
+    store
+        .audit("k1", &laptop, "update_document", Some("P-1"), "conflict")
+        .unwrap();
+    store
+        .audit("k2", &Actor::new("ci", "cli"), "admin:status", None, "ok")
+        .unwrap();
+    drop(store);
+    cmd(root.path()).arg("audit").assert().success().stdout(
+        "TIME                  KEY     CLIENT  TOOL             DOCUMENT  OUTCOME\n\
+             2026-10-26T07:33:20Z  ci      cli     admin:status     -         ok\n\
+             2026-10-26T07:33:20Z  laptop  claude  update_document  P-1       conflict\n",
+    );
+    cmd(root.path())
+        .args([
+            "audit",
+            "-k",
+            "laptop",
+            "-d",
+            "p-1",
+            "--outcome",
+            "conflict",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("update_document"))
+        .stdout(predicate::str::contains("admin:status").not());
+    cmd(root.path())
+        .args([
+            "audit",
+            "--tool",
+            "admin:*",
+            "--since",
+            "2026-10-26",
+            "--until",
+            "2026-10-27",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("admin:status"))
+        .stdout(predicate::str::contains("update_document").not());
+    cmd(root.path())
+        .args(["audit", "--since", "2026-10-27"])
+        .assert()
+        .success()
+        .stdout("No audit entries.\n");
+    cmd(root.path())
+        .args(["audit", "-n", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "Showing 1-1 of 2; next page: --start 2\n",
+        ));
+    let json = cmd(root.path())
+        .args(["audit", "--key", "laptop", "--json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "items": [{
+                "at": "2026-10-26T07:33:20Z", "key_id": "k1", "key_name": "laptop",
+                "client": "claude", "tool": "update_document",
+                "document_id": "P-1", "outcome": "conflict"
+            }],
+            "total": 1,
+            "next_start": null
+        })
+    );
+    for bad in [["--since", "yesterday"], ["--limit", "0"], ["-d", "nope"]] {
+        cmd(root.path()).arg("audit").args(bad).assert().code(65);
+    }
+    // Client names are tidied on the way in, but the table does not rely
+    // on it: a control character in a stored row is printed as an escape.
+    let conn = joedocs::db::open(&root.path().join("state/joedocs.db")).unwrap();
+    conn.execute(
+        "UPDATE audit_log SET outcome = 'x\u{1b}[2Jy' WHERE key_name = 'ci'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    cmd(root.path())
+        .args(["audit", "-k", "ci"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("x\\u{1b}[2Jy"))
+        .stdout(predicate::str::contains("\u{1b}").not());
+}
+
+/// Control characters in stored text are printed as escapes in tables.
+#[test]
+fn list_escapes_control_characters_in_titles() {
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    // Titles cannot hold control characters, so write one into the index
+    // directly: the table must still not pass it through.
+    let conn = joedocs::db::open(&root.path().join("state/joedocs.db")).unwrap();
+    conn.execute(
+        "UPDATE documents SET title = 'Bad\u{1b}[31m\nP-9  x' WHERE seq = 1",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let output = cmd(root.path())
+        .args(["list", "-p", "p", "-t", "plans"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Bad\\u{1b}[31m\\nP-9  x"), "{text}");
+    assert!(!text.contains('\u{1b}'), "{text}");
+    assert_eq!(text.lines().count(), 2, "{text}");
 }
 
 #[test]

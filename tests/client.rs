@@ -16,9 +16,10 @@ use secrecy::ExposeSecret as _;
 use tempfile::TempDir;
 
 /// Fills a store: project `joedocs`, JD-1 at revision 2, JD-2 archived,
-/// and an API key `laptop`.
+/// JD-3 a multi-file `notes` document with the file `notes/a b&c`, and an
+/// API key `laptop`.
 fn seed(store: &mut Store) -> Result<(), Box<dyn std::error::Error>> {
-    use joedocs::store::{Actor, NewDocument};
+    use joedocs::store::{Actor, NewDocument, NewFile};
     let actor = Actor::new("laptop", "test");
     store.add_project("joedocs", "JD", Some("JoeDocs"))?;
     for title in ["Plan", "Old"] {
@@ -34,6 +35,26 @@ fn seed(store: &mut Store) -> Result<(), Box<dyn std::error::Error>> {
     }
     store.append(&actor, "JD-1", "second\n", Some(1), None)?;
     store.archive(&actor, "JD-2", "done")?;
+    store.create(
+        &actor,
+        NewDocument {
+            project: "joedocs".into(),
+            title: "Book".into(),
+            doc_type: Some("notes".into()),
+            content: "contents\n".into(),
+            multifile: true,
+            ..NewDocument::default()
+        },
+    )?;
+    store.create_file(
+        &actor,
+        &NewFile {
+            document_id: "JD-3".into(),
+            file: "notes/a b&c".into(),
+            content: "one\n".into(),
+            ..NewFile::default()
+        },
+    )?;
     store.create_key(
         "laptop",
         &["joedocs:write".parse()?],
@@ -502,21 +523,10 @@ fn same_archive(local: &Local, server: &Server) -> std::io::Result<()> {
     Ok(())
 }
 
-#[test]
-fn remote_commands_print_what_local_commands_print() {
-    let server = Server::start().unwrap();
-    let local = Local::new().unwrap();
-    server
-        .cmd()
-        .args(["login", "--code", &server.code()])
-        .assert()
-        .success();
-    for name in ["out-local.md", "out-remote.md"] {
-        let _ = std::fs::remove_file(server.root.path().join(name));
-    }
-    std::fs::write(server.root.path().join("vault/stray.md"), "x").unwrap();
-    std::fs::write(local.dir.path().join("vault/stray.md"), "x").unwrap();
-    let steps: Vec<Vec<&str>> = vec![
+/// The commands `remote_commands_print_what_local_commands_print` runs both
+/// ways, in order: later steps see what earlier ones changed.
+fn parity_steps() -> Vec<Vec<&'static str>> {
+    let mut steps = vec![
         vec!["project", "list"],
         vec!["project", "add", "other", "--key", "OT", "--title", "Other"],
         vec!["project", "add", "other", "--key", "OT"],
@@ -524,12 +534,64 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["key", "list"],
         vec!["key", "create", "ci", "--grant", "joedocs:read"],
         vec!["key", "grant", "ci", "other:write"],
+        vec!["key", "ungrant", "ci", "other"],
+        vec!["key", "ungrant", "ci", "other"],
+        vec!["key", "ungrant", "ci", "nope"],
+        vec!["key", "ungrant", "nobody", "joedocs"],
+        vec!["key", "grant", "ci", "other:write"],
         vec!["key", "rotate", "ci"],
         vec!["key", "revoke", "ci"],
         vec!["key", "revoke", "nobody"],
         vec!["key", "list"],
         vec!["archive", "list"],
         vec!["archive", "list", "--project", "joedocs"],
+        vec!["archive", "list", "-t", "home"],
+        vec!["archive", "list", "-p", "joedocs", "-t", "notes"],
+        vec!["archive", "list", "--type", "nope"],
+        vec!["list", "-p", "joedocs"],
+        vec!["list", "-p", "joedocs", "--json"],
+        vec!["list", "-p", "joedocs", "-n", "1", "--sort", "title"],
+        vec!["list", "-p", "joedocs", "-s", "draft", "-t", "home", "-j"],
+        vec!["list", "-p", "nope"],
+        vec!["list", "-p", "joedocs", "--limit", "0"],
+        vec!["list", "-p", "joedocs", "-t", "nope"],
+        vec!["search", "first"],
+        vec!["search", "first", "second", "--json"],
+        vec!["search", "-p", "joedocs", "-F", "status=draft", "-n", "1"],
+        vec![
+            "search",
+            "--filters",
+            r#"{"status": {"in": ["draft"]}}"#,
+            "-j",
+        ],
+        vec!["search", "-F", "status"],
+        vec!["search", "-s", "draft", "-F", "status=done"],
+        vec!["search", "-p", "nope"],
+        vec!["search", "-t", "nope"],
+        vec!["search", "\"unclosed"],
+        vec!["search", "--", "first", "-second"],
+        vec!["search", "-p", "joedocs", "--", "-first"],
+        vec!["history", "JD-1"],
+        vec!["history", "JD-1", "-n", "1"],
+        vec!["history", "JD-1", "--json"],
+        vec!["history", "JD-99"],
+        vec!["history", "JD-2"],
+        vec!["history", "JD-3", "-P", "notes/a b&c"],
+        vec!["history", "JD-3", "-P", "nope"],
+        vec!["diff", "JD-1", "--from", "1"],
+        vec!["diff", "JD-1", "--from", "1", "-j"],
+        vec!["diff", "JD-1", "--from", "2", "--to", "2"],
+        vec!["diff", "JD-1", "--from", "9"],
+        vec!["diff", "JD-1", "--from", "1", "--context", "500"],
+        vec!["diff", "JD-3", "--from", "1"],
+        vec!["diff", "JD-3", "--from", "2", "-P", "notes/a b&c", "-j"],
+        // The server's log also holds its own admin API calls, so compare
+        // what excludes them.
+        vec!["audit", "--tool", "update_document"],
+        vec!["audit", "-k", "nobody", "-j"],
+        vec!["audit", "--since", "yesterday"],
+        vec!["audit", "-n", "0"],
+        vec!["audit", "-d", "nope"],
         vec!["get", "JD-1"],
         vec!["get", "JD-1", "--version", "1"],
         vec!["get", "JD-1", "--content-only"],
@@ -551,7 +613,52 @@ fn remote_commands_print_what_local_commands_print() {
         vec!["get", "JD-1", "--part", "x y"],
         vec!["get", "JD-2", "--part", "x"],
         vec!["get", "JD-2", "--archive", "x.tgz"],
+        // The local binary stamps changes with the real clock and the server
+        // with its fixed one, so order by title once documents have changed.
+        vec!["list", "-p", "joedocs", "--sort", "title"],
+        vec!["list", "-p", "joedocs", "-j", "--sort", "title"],
+        vec!["search", "first", "-d", "JD-1"],
     ];
+    steps.extend(empty_value_steps());
+    steps
+}
+
+/// Steps that pass an option as `""`: an empty value is a value, which
+/// reaches the store remotely as it does locally.
+fn empty_value_steps() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["list", "-p", "joedocs", "-t", ""],
+        vec!["list", "-p", "joedocs", "-s", ""],
+        vec!["list", "-p", ""],
+        vec!["history", "JD-1", "-P", ""],
+        vec!["diff", "JD-1", "--from", "1", "-P", ""],
+        vec!["history", "JD-3", "-P", ""],
+        vec!["audit", "-k", ""],
+        vec!["audit", "--tool", ""],
+        vec!["audit", "--outcome", ""],
+        vec!["audit", "-d", ""],
+        vec!["archive", "list", "-t", ""],
+        vec!["archive", "list", "-p", ""],
+        vec!["get", "JD-1", "--part", ""],
+        vec!["get", "JD-3", "--part", ""],
+    ]
+}
+
+#[test]
+fn remote_commands_print_what_local_commands_print() {
+    let server = Server::start().unwrap();
+    let local = Local::new().unwrap();
+    server
+        .cmd()
+        .args(["login", "--code", &server.code()])
+        .assert()
+        .success();
+    for name in ["out-local.md", "out-remote.md"] {
+        let _ = std::fs::remove_file(server.root.path().join(name));
+    }
+    std::fs::write(server.root.path().join("vault/stray.md"), "x").unwrap();
+    std::fs::write(local.dir.path().join("vault/stray.md"), "x").unwrap();
+    let steps = parity_steps();
     for step in &steps {
         let local_run = outcome(local.cmd(), step).unwrap();
         let remote_run = outcome(server.cmd(), step).unwrap();
@@ -650,7 +757,7 @@ fn a_remote_backup_downloads_privately_and_restores() {
         .args(["backup", file.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Backed up 1 document"));
+        .stdout(predicate::str::contains("Backed up 2 documents"));
     assert_eq!(mode(&file), 0o600);
     server
         .cmd()
@@ -889,6 +996,99 @@ fn client_cmd(root: &Path, url: &str) -> Command {
 }
 
 #[test]
+fn remote_audit_lists_the_servers_admin_calls() {
+    let server = Server::start().unwrap();
+    server
+        .cmd()
+        .args(["login", "--code", &server.code()])
+        .assert()
+        .success();
+    server.cmd().args(["project", "list"]).assert().success();
+    let output = server
+        .cmd()
+        .args([
+            "audit",
+            "--tool",
+            "admin:*",
+            "-k",
+            "laptop",
+            "--since",
+            "2020-01-01",
+            "-j",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let tools: Vec<&str> = json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["tool"].as_str())
+        .collect();
+    assert_eq!(tools, ["admin:projects.list", "admin:session.create"]);
+    // The call that read the log is audited after it answers.
+    server
+        .cmd()
+        .args(["audit", "--tool", "admin:audit.list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("admin:audit.list"));
+}
+
+#[test]
+fn an_older_server_without_the_route_says_to_upgrade_it() {
+    let dir = TempDir::new().unwrap();
+    let body = br#"{"error":{"code":"not_found","message":"no such admin API route"}}"#;
+    let reply: &'static [u8] = Box::leak(
+        format!(
+            "HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            String::from_utf8_lossy(body)
+        )
+        .into_bytes()
+        .into_boxed_slice(),
+    );
+    let (url, seen) = fake(vec![Answer::Send(reply)]).unwrap();
+    client_cmd(dir.path(), &url)
+        .args(["list", "-p", "a b", "-t", "x&y"])
+        .assert()
+        .code(65)
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "has no admin API route for `joedocs list`; it may run an older JoeDocs, so upgrade it",
+        ));
+    client_cmd(dir.path(), &url)
+        .args(["key", "ungrant", "ci", "a"])
+        .assert()
+        .code(65)
+        .stderr(predicate::str::contains(
+            "has no admin API route for `joedocs key ungrant`",
+        ));
+    let requests = seen.lock().unwrap().clone();
+    assert!(
+        requests[1].starts_with("POST /admin/v1/keys/ci/ungrant "),
+        "{requests:?}"
+    );
+    assert!(
+        requests[0].starts_with(
+            "GET /admin/v1/documents?project=a%20b&type=x%26y&sort=updated_desc&start=1&limit=200 "
+        ),
+        "{requests:?}"
+    );
+    // Other not-found replies keep their own message.
+    let (url, _) = fake(vec![Answer::Send(
+        b"HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 67\r\n\r\n{\"error\":{\"code\":\"not_found\",\"message\":\"project a does not exist\"}}",
+    )])
+    .unwrap();
+    client_cmd(dir.path(), &url)
+        .args(["list", "-p", "a"])
+        .assert()
+        .code(65)
+        .stderr("error: project a does not exist\n");
+}
+
+#[test]
 fn malformed_success_replies_fail_without_writing() {
     let dir = TempDir::new().unwrap();
     let bodies: [&'static [u8]; 4] = [
@@ -906,6 +1106,12 @@ fn malformed_success_replies_fail_without_writing() {
             vec!["login", "--code", "123456"],
             vec!["status"],
             vec!["get", "JD-1"],
+            vec!["list", "-p", "joedocs"],
+            vec!["list", "-p", "joedocs", "--json"],
+            vec!["search", "x"],
+            vec!["history", "JD-1"],
+            vec!["diff", "JD-1", "--from", "1"],
+            vec!["audit"],
         ] {
             client_cmd(dir.path(), &url)
                 .args(&args)

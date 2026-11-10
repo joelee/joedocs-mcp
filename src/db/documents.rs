@@ -384,12 +384,15 @@ pub fn list_revisions(
 pub fn archived_documents(
     conn: &Connection,
     project_id: Option<i64>,
+    doc_type: Option<&str>,
 ) -> rusqlite::Result<Vec<DocumentRow>> {
     let mut stmt = conn.prepare(&format!(
         "{SELECT} WHERE d.archived_at IS NOT NULL AND (?1 IS NULL OR d.project_id = ?1)
+         AND (?2 IS NULL OR d.type = ?2)
          ORDER BY d.archived_at DESC, d.project_id, d.seq DESC"
     ))?;
-    stmt.query_map([project_id], from_row)?.collect()
+    stmt.query_map(params![project_id, doc_type], from_row)?
+        .collect()
 }
 
 /// One revision of a document.

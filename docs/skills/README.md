@@ -11,7 +11,7 @@ Ready-made [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skil
 | [`joedocs-idea-architect`](joedocs-idea-architect/SKILL.md) | Pressure-tests a raw idea or feature brief: frames the problem, separates facts from assumptions, researches material claims, compares options, and proposes the smallest useful experiment. Revises the idea on feedback, and records your decision to accept, park or reject it. | `ideas` |
 | [`joedocs-planner`](joedocs-planner/SKILL.md) | Turns an accepted idea, an open review, an open issue or a request into a traceable, step-by-step delivery plan for a builder. A plan for a version includes the open issues targeted at it, and offers the untargeted ones. Lists ideas, reviews and issues that have no plan yet, revises drafts, and records approval. | `plans`; `target_version` on issues you pick |
 | [`joedocs-builder`](joedocs-builder/SKILL.md) | Executes one approved plan on its own feature branch: one verified, committed step at a time, pausing for your review after each (or straight through if you say so), with evidence in the plan's work log. | the plan's work log; commits in the repository |
-| [`joedocs-code-review`](joedocs-code-review/SKILL.md) | Reviews a pull request, branch, commit or the working tree, against the plan when there is one, and records evidence-backed findings with calibrated severities and a verdict. Re-reviews link to the earlier review. | `reviews` |
+| [`joedocs-code-review`](joedocs-code-review/SKILL.md) | Reviews a pull request, branch, commit or the working tree, against the plan when there is one, and records evidence-backed findings with calibrated severities and a verdict. A re-review of the same change updates that review in place, round by round, marking each earlier finding resolved or still open. | `reviews` |
 | [`joedocs-issue-log`](joedocs-issue-log/SKILL.md) | Files bugs, regressions and incidents with structured front matter (kind, severity, the version found in, the version to fix in), appends dated investigation notes, moves them through their statuses, closes the issues a release fixed, and lists what is open. | `issues` |
 
 None of the skills except the builder changes the repository, and the builder never pushes, merges or tags.
@@ -32,7 +32,7 @@ A typical run in Claude Code:
 1. `/joedocs-idea-architect Rate limiting for the public API` publishes idea `JD-12` as a draft. Answer its questions; it revises. When you are happy, say *"accept JD-12"*.
 2. `/joedocs-planner plan JD-12` publishes plan `JD-31` as a draft. Read it (in Obsidian, or ask for it), ask for changes, then say *"approve JD-31"*.
 3. `/joedocs-builder build JD-31` creates `feature/jd-31-rate-limiting-for-the-public-api`, implements `STEP-01`, stages it and stops. Inspect it with `git diff --cached`, then say *"continue"* to commit it and start the next step, or *"run all remaining steps"*.
-4. `/joedocs-code-review` on the branch publishes review `JD-40` against the plan's acceptance criteria. Fix what it finds (or plan the fixes with the planner), then ask for a re-review.
+4. `/joedocs-code-review` on the branch publishes review `JD-40` against the plan's acceptance criteria. Fix what it finds (or plan the fixes with the planner), then ask for a re-review, which updates `JD-40` in place.
 
 Each step is a separate request, and each skill hands off with the next action rather than calling the next skill itself.
 
@@ -70,7 +70,7 @@ The skills share these conventions, so their documents work together:
 | --- | --- | --- |
 | `ideas` | `joedocs-idea-architect` | `draft` → `review` (revised) → `approved` (accepted), or `rejected`. Parked ideas are `parked` if you add that status to `documents.statuses`, otherwise `rejected` with `decision: parked`. |
 | `plans` | `joedocs-planner`, and the builder in the work log | `draft` → `approved` → `done` (set by you after review), or `superseded` or `rejected`. Progress is in `implementation_status`: `not-started`, `in-progress`, `blocked`, `completed`. |
-| `reviews` | `joedocs-code-review` | `review` while findings are open, `done` with none, `superseded` after a re-review. |
+| `reviews` | `joedocs-code-review` | `review` while findings are open, `done` with none. Re-reviews of the same change update the review in place as rounds (`review_round`, sections `Re-review R2`, findings `R2-MED-01`); a re-review published as a new document marks the earlier one `superseded`. |
 | `issues` | `joedocs-issue-log` | `draft` (open) → `review` (being investigated or fixed) → `done` (fixed, with `resolution: fixed` and `fixed_in`), or `rejected` (`wont-fix`, `cannot-reproduce`) or `superseded` (a duplicate, with `duplicate_of`). Each issue records `kind`, `severity`, `repository`, `found_in` and `reported_by`, and optionally `target_version`. |
 
 - **IDs and citations.** The JoeDocs ID is the document's ID: an idea `JD-12`, a plan `JD-31`, a review `JD-40`. Items inside a document are numbered locally (`REQ-01`, `STEP-02`, `AC-03`, `MAJ-01`, `R2-MED-01`) and cited from outside with the document ID, as `JD-31 STEP-02`. A specific revision is cited as `JD-12 r3`. Documents also link each other with Obsidian wiki links to their titles.

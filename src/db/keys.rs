@@ -161,6 +161,19 @@ pub fn set_grant(
     Ok(())
 }
 
+/// Removes a key's grant on a project; returns how many rows went (0 when
+/// it had none there).
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn remove_grant(conn: &Connection, key_id: &str, project_id: i64) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM grants WHERE api_key_id = ?1 AND project_id = ?2",
+        params![key_id, project_id],
+    )
+}
+
 /// Replaces a key's secret hash, so only a token with the new secret
 /// authenticates.
 ///

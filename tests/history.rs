@@ -346,16 +346,16 @@ fn archived_documents_are_listed_and_restored() {
     fx.clock.advance(60);
     fx.store.archive(&actor(), "IN-1", "moved").unwrap();
 
-    let all = fx.store.archived(None).unwrap();
+    let all = fx.store.archived(None, None).unwrap();
     let ids: Vec<&str> = all.iter().map(|a| a.document.id.as_str()).collect();
     assert_eq!(ids, ["IN-1", "JD-1"]);
     assert_eq!(
         (all[1].reason.as_str(), all[1].archived_by.as_str()),
         ("superseded", "laptop")
     );
-    assert_eq!(fx.store.archived(Some("joedocs")).unwrap().len(), 1);
+    assert_eq!(fx.store.archived(Some("joedocs"), None).unwrap().len(), 1);
     assert!(matches!(
-        fx.store.archived(Some("nope")),
+        fx.store.archived(Some("nope"), None),
         Err(Error::ProjectNotFound(_))
     ));
 
@@ -379,7 +379,7 @@ fn archived_documents_are_listed_and_restored() {
     assert_eq!(restored.front_matter["updated_by"], "admin");
     assert_eq!(restored.front_matter["owner"], "joel");
     assert_eq!(body(&fx, "JD-1").unwrap(), "# Plan\n\nStep one.\n");
-    assert_eq!(fx.store.archived(None).unwrap().len(), 1);
+    assert_eq!(fx.store.archived(None, None).unwrap().len(), 1);
     // The archive revision has no content to read or diff.
     assert_eq!(invalid(fx.store.get("JD-1", Some(2))).0, "version");
     assert_eq!(invalid(fx.store.diff("JD-1", 2, None, 3)).0, "from");
@@ -393,7 +393,7 @@ fn archived_documents_are_listed_and_restored() {
     let before = fx.store.history("JD-1", 1, 10).unwrap();
     fx.store.reindex().unwrap();
     assert_eq!(fx.store.history("JD-1", 1, 10).unwrap(), before);
-    assert_eq!(fx.store.archived(None).unwrap().len(), 1);
+    assert_eq!(fx.store.archived(None, None).unwrap().len(), 1);
 }
 
 #[test]

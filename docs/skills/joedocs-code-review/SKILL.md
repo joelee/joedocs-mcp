@@ -6,7 +6,8 @@ description: >-
   tree, after implementation work or before a merge, and for re-reviews. Reads
   the diff and the surrounding code, records only evidence-backed findings with
   calibrated severities, and publishes one review document (type "reviews")
-  per review. Never changes the repository.
+  per change; a re-review of the same change updates that document in place,
+  round by round. Never changes the repository.
 argument-hint: "[PR number or URL, commit, range, branch, or nothing for the current state; optional plan ID]"
 allowed-tools: >-
   Read, Grep, Glob, WebSearch, WebFetch,
@@ -23,7 +24,8 @@ allowed-tools: >-
   mcp__joedocs__list_projects, mcp__joedocs__list_documents,
   mcp__joedocs__search_documents, mcp__joedocs__get_document,
   mcp__joedocs__get_document_history, mcp__joedocs__diff_document,
-  mcp__joedocs__new_document, mcp__joedocs__change_document_front_matter
+  mcp__joedocs__new_document, mcp__joedocs__update_document,
+  mcp__joedocs__change_document_front_matter
 ---
 
 # JoeDocs Code Review
@@ -52,7 +54,9 @@ tools and adjust `allowed-tools`.
    reliability failures, performance regressions, compatibility breaks, missing
    tests, and material maintainability or style issues.
 5. Record only actionable, evidence-backed findings.
-6. Publish one new review document in JoeDocs.
+6. Publish the review in JoeDocs: a new review document for a new change, or,
+   for a re-review of the same change, an update of the earlier review in
+   place (see Re-reviews).
 7. Return a short verdict and the document ID.
 
 ## Boundaries
@@ -67,11 +71,11 @@ tools and adjust `allowed-tools`.
 - Use git with `--no-ext-diff` and `--no-textconv`, so repository-defined diff
   drivers and text conversions never run. No output redirection, command
   substitution, or pipes into state-changing commands.
-- **JoeDocs writes:** create one new review document (type `reviews`) per
-  review. The only change you may make to an existing document is marking an
-  earlier review you are re-reviewing as superseded (see Re-reviews). Never
-  change plans, ideas or other documents; never archive, rename, move or
-  restore.
+- **JoeDocs writes:** create one review document (type `reviews`) per
+  change, and update that same document for its re-reviews (see Re-reviews).
+  The only other change you may make to an existing review is marking it
+  superseded when its re-review is published as a new document. Never change
+  plans, ideas or other documents; never archive, rename, move or restore.
 - Never read `.env` files, private keys, credentials or tokens. If a secret
   appears in an allowed diff or file, do not reproduce it: give its type and
   location, redact the value, and recommend rotation. JoeDocs keeps every
@@ -305,7 +309,8 @@ counts are flat keys and a key that does not apply is left out.
 ```yaml
 tags: [code-review]
 review_kind: initial            # initial | re-review
-previous_review: JD-33          # re-reviews only
+review_round: 1                 # 1 for the first review; raised by each in-place re-review
+previous_review: JD-33          # re-reviews published as a new document only
 verdict: approve                # approve | approve-with-comments | request-changes | incomplete
 review_complete: true
 review_mode: pull-request       # pull-request | branch | commit | range | working-tree | repository
@@ -330,7 +335,7 @@ issues_low: 0
 issues_info: 0
 blocking_issues: 0              # critical + major
 actionable_issues: 0            # critical + major + medium + low
-categories: [security, tests]   # themes with findings; leave out when none
+categories: [security, tests]   # themes with findings in any round; leave out when none
 web_research_used: false
 confidence: high                # high | medium | low
 reviewer_model: <model id>      # leave out when unknown
@@ -441,7 +446,9 @@ shows zero.
 
 ## Hand-off
 
-For a re-review: every earlier finding with its disposition.
+For a re-review published as a new document: every earlier finding with its
+disposition. In place, the disposition lines and the `Re-review R<n>`
+sections carry it; say here which round is the latest.
 
 ## Confidence
 
@@ -471,16 +478,87 @@ re-review needs.
 
 When an earlier review is given or clearly related:
 
-1. Read it with `get_document`.
+1. Read it with `get_document`, and note its revision.
 2. Review the current target independently; code changing near a finding does
    not mean it is fixed.
-3. Re-test each earlier finding against the evidence.
-4. Publish a **new** review with `review_kind: re-review` and
-   `previous_review: <ID>`. New findings get new IDs; refer to old ones as
-   `JD-33 MAJ-01`.
-5. In Hand-off, classify every earlier finding as `resolved`, `still-open`,
-   `partially-resolved`, `not-in-scope` or `superseded`, with evidence.
-6. Then mark the earlier review with `change_document_front_matter`
+3. Re-test each earlier finding against the evidence, and classify it as
+   `resolved`, `still-open`, `partially-resolved`, `not-in-scope` or
+   `superseded`, with evidence.
+4. Choose where the re-review goes:
+   - **In place (the default)** when it covers the same change: the same pull
+     request, or a branch whose head contains the reviewed head (fix commits on
+     top, or a follow-up branch built from it; check with
+     `git merge-base --is-ancestor <reviewed head> <new head>`), and the earlier
+     review's status is `review` or `done`.
+   - **As a new document** when the user asks for one; when the target is a
+     different change (another pull request, or a branch that no longer
+     contains the reviewed head, for example after a rebase); or when the
+     earlier review is `superseded`.
+
+### In place
+
+Write the whole re-review in **one** `update_document` call, with
+`expected_revision` set to the revision you read and
+`summary: "Re-review R<n>: <verdict>"`. The first review is round 1, so the
+first re-review is R2.
+
+- **Keep every earlier finding** where it is, with its ID and text unchanged.
+  Put its disposition directly under its heading:
+
+  ```markdown
+  > [!success] R2: resolved in `3db11ef`
+  > One line of evidence: what changed and which test proves it.
+  ```
+
+  Use `[!success]` for `resolved`, `[!warning]` for `still-open` and
+  `partially-resolved` (saying what remains), and `[!note]` for
+  `not-in-scope` and `superseded`. Never delete or rewrite an earlier finding:
+  the history keeps every revision, but a reader in Obsidian should see what was
+  found and what became of it without opening them.
+- **New findings** get the round in their ID, such as `R2-MED-01` (cited from
+  outside as `JD-40 R2-MED-01`), under the matching severity heading.
+- **Update the header to the latest round:** the verdict callout, Review target
+  (head, scope), Executive summary, Issue summary, Open questions, Recommended
+  next actions, Hand-off and Confidence. The Issue summary counts the findings
+  that are open now: new ones, plus earlier ones that are `still-open` or
+  `partially-resolved`. Review coverage describes the latest round.
+- **Append a section** at the end of the body, after any earlier rounds, which
+  stay as written:
+
+  ```markdown
+  ## Re-review R2 - 2026-11-10T16:40:00Z
+
+  | Field | Value |
+  |---|---|
+  | Head | `<full hash>` (was `<previous head>`) |
+  | Scope | `merge-base(main, HEAD)..HEAD` |
+  | Verdict | `approve` (was `approve-with-comments`) |
+
+  | Finding | Disposition | Evidence |
+  |---|---|---|
+  | MED-01 - <title> | resolved | `3db11ef`: ...; test `...` |
+
+  What was re-checked, any new findings by ID, and the checks not performed.
+  ```
+
+  Get the time with `date -u +%Y-%m-%dT%H:%M:%SZ`; never estimate it.
+- **Front matter, in the same call:** `review_kind: re-review`,
+  `review_round: <n>`, `verdict`, `review_complete`, `confidence`, the target
+  keys (`head_commit` or `commit`, `scope`, `review_mode`, `files_*`,
+  `diff_*`), the open counts (`issues_*`, `blocking_issues`,
+  `actionable_issues`), any new themes in `categories`, and `status`:
+  `review` while any finding is open (or the round is `incomplete`), `done`
+  when none is. Do not set `previous_review`: it names another document.
+  Keeping the counts accurate is what lets `joedocs-planner` find open
+  reviews.
+
+### As a new document
+
+1. Publish a **new** review with `review_kind: re-review`,
+   `review_round: 1` and `previous_review: <ID>`. New findings get new IDs;
+   refer to old ones as `JD-33 MAJ-01`.
+2. In Hand-off, list every earlier finding with its disposition and evidence.
+3. Then mark the earlier review with `change_document_front_matter`
    (`expected_revision` set to the revision you read):
    `set: {"status": "superseded", "superseded_by": "<new ID>"}`. Its body
    stays as written. If it already has exactly these values, JoeDocs refuses
@@ -489,7 +567,8 @@ When an earlier review is given or clearly related:
 ## Quality check before publishing
 
 The target, base, head and dirty-state scope are explicit; the full relevant
-diff was read or the limits are stated; findings rest on reviewed evidence, not
+diff was read or the limits are stated; for an in-place re-review, every
+earlier finding is still in the body with a disposition for this round; findings rest on reviewed evidence, not
 preference; each has a scenario, impact, recommendation and verification;
 duplicates are merged; severity matches impact; front matter counts equal the
 body; the verdict follows the rules; no secrets or needless proprietary detail;
@@ -506,6 +585,17 @@ Issues: Critical 0 | Major 0 | Medium 0 | Low 0
 Blocking findings: none | <IDs and short titles>
 Limitations: none | <one sentence>
 Next: <e.g. fix MAJ-01, then ask for a re-review; or ask joedocs-planner to plan JD-40>
+```
+
+Updated in place:
+
+```text
+Review updated: JD-40 "Review - <description>", round R2 (revision <n>)
+Verdict: approve | approve-with-comments | request-changes | incomplete
+Earlier findings: MED-01 resolved, LOW-01 still-open
+New findings: none | <IDs and short titles>
+Open: Critical 0 | Major 0 | Medium 0 | Low 1
+Next: <e.g. merge; or fix LOW-01, then ask for a re-review>
 ```
 
 Not published:

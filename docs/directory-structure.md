@@ -50,13 +50,14 @@
 │   ├── agents.rs           joedocs agents: the maintenance guide filled in with this installation's facts
 │   ├── agents.md           The guide's template (shipped in the crate)
 │   ├── backup.rs           joedocs backup: archive format, writing, safe restore
+│   ├── browse.rs           joedocs list, search, history, diff and audit: store requests, the admin API's JSON replies, tables
 │   ├── client.rs           Client of a server's admin API: login, sessions, prompts, remote calls
 │   ├── status.rs           joedocs status: StatusReport, the /health probe, unit state, sizes
 │   ├── totp.rs             TOTP (RFC 6238), base32, otpauth URIs
 │   ├── auth.rs             API key format, hashing, grants, RandomSource
 │   ├── clock.rs            Clock trait, SystemClock, FixedClock
 │   ├── db/
-│   │   ├── mod.rs          Connection setup, migrations, history head, index format
+│   │   ├── mod.rs          Connection setup, migrations, history head, index format, audit log
 │   │   ├── projects.rs     Project queries
 │   │   ├── keys.rs         API key and grant queries
 │   │   ├── admin.rs        Admin token and session queries
@@ -93,6 +94,7 @@
 │       ├── revisions.rs    History pages and diffs
 │       ├── admin_tokens.rs Admin tokens, TOTP logins, lockout, sessions
 │       ├── archive.rs      Archive list and restore
+│       ├── audit.rs        Reading the audit log (joedocs audit)
 │       ├── backup.rs       The consistent snapshot behind joedocs backup
 │       ├── summary.rs      Counts and state for joedocs status
 │       ├── check.rs        Drift report for joedocs check

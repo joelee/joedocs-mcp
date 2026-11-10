@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-10
+
+Admin commands to view and find documents and read the audit log, locally and through JSON admin API routes that the 0.5.0 admin web interface will build on.
+
+### Added
+
+- Short options for the frequent flags, with one meaning each: `-p` project, `-t` type, `-s` status, `-d` document, `-k` key, `-F` filter, `-n` limit, `-P` part, `-j` JSON.
+
+- **`joedocs list -p PROJECT`** lists a project's live documents as a table (`ID`, `TYPE`, `STATUS`, `REV`, `FILES`, `UPDATED`, `TITLE`), filtered with `-t/--type` and `-s/--status`, ordered with `--sort` (`updated-desc`, `updated-asc`, `created-desc`, `created-asc`, `title`), and paged with `--start` and `-n/--limit` (a last line says how to get the next page). `-j/--json` prints the `list_documents` result instead. It also runs remotely, through the new route `GET /admin/v1/documents`, which returns that JSON.
+- **`joedocs search [QUERY...]`** finds documents and their files by text and front matter in every project, or one (`-p`): `-t/--type`, `-s/--status`, `-F/--filter KEY=VALUE` (repeatable), `--filters JSON` (the operators of `search_documents`) and `-d/--document ID`. Words that start with `-` (exclusions) follow `--`, after the options: `joedocs search -p joedocs -- cache -redis`. It prints each hit with its snippet, pages with `--start` and `-n/--limit`, and `-j/--json` prints the `search_documents` result. Remotely it uses the new route `POST /admin/v1/search`.
+- **`joedocs history ID`** lists a document's revisions (`REV`, `TIME`, `ACTION`, `AUTHOR`, `CLIENT`, `SUMMARY`), newest first and paged, or with `-P/--part FILE` one file's; **`joedocs diff ID --from N [--to M]`** prints the unified diff between two revisions, with `--context` and `-P/--part FILE`. Both take `-j/--json` (the `get_document_history` and `diff_document` results) and run remotely through `GET /admin/v1/documents/{id}/history` and `.../diff`.
+- **`joedocs audit`** reads the audit log, newest first (`TIME`, `KEY`, `CLIENT`, `TOOL`, `DOCUMENT`, `OUTCOME`), filtered by `--since` and `--until` (UTC dates or times), `-k/--key`, `--tool` (a trailing `*` matches a prefix, e.g. `admin:*`), `-d/--document` and `--outcome`, paged, with `-j/--json`. Remotely it uses the new route `GET /admin/v1/audit`.
+- **`joedocs key ungrant NAME PROJECT...`** removes a key's grants on those projects, all or nothing; the key's next request no longer reaches them. Remotely it uses the new route `POST /admin/v1/keys/{name}/ungrant`.
+- **`joedocs archive list -t/--type TYPE`** lists only archived documents of that type; `-p` is now short for `--project`. Remotely, `GET /admin/v1/archive` takes `type`.
+- `joedocs get -P` is short for `--part`.
+- Tables of the new commands print control characters in stored text as escapes (`\n`, `\u{1b}`), so text written through MCP cannot change the terminal.
+- A command whose admin API route the server does not have says the server may run an older JoeDocs and should be upgraded.
+
+### Changed
+
+- **The `joedocs-code-review` skill re-reviews in place.** A re-review of the same change (the same pull request, or a branch built on the reviewed head) updates the earlier review document as a new round instead of publishing another document. Each earlier finding keeps its text and gains a disposition (`resolved`, `still-open`, ...); new findings are numbered `R2-MED-01`; a `Re-review R2` section records the round; the verdict, open counts and status follow the latest round (`review_round` counts them). A different change, or a request for one, still gets a new review that supersedes the earlier one.
+
+### Fixed
+
+- `joedocs get --part ""` in client mode reports the missing file, as it does on the server, instead of printing the whole document. More generally, the admin API no longer drops an option given as an empty value, so remote runs refuse or match it as local runs do.
+
 ## [0.4.1] - 2026-11-10
 
 An issue log for agents, release plans that pick up their issues, and a search fix.
@@ -133,7 +159,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/joelee/joedocs-mcp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/joelee/joedocs-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/joelee/joedocs-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/joelee/joedocs-mcp/compare/v0.2.0...v0.3.0

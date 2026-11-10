@@ -837,6 +837,60 @@ fn tokens_authenticate_until_revoked() {
 }
 
 #[test]
+fn grants_are_removed_all_or_nothing() {
+    let mut fx = fixture();
+    fx.store.add_project("alpha", "AL", None).unwrap();
+    fx.store.add_project("beta", "BE", None).unwrap();
+    let grants = [
+        "joedocs:write".parse().unwrap(),
+        "alpha:read".parse().unwrap(),
+    ];
+    fx.store
+        .create_key("laptop", &grants, &CountingRandom(7))
+        .unwrap();
+    let names = |key: &KeyRow| {
+        key.grants
+            .iter()
+            .map(|g| g.project.clone())
+            .collect::<Vec<_>>()
+    };
+    let key = fx.store.ungrant("laptop", &["alpha".to_owned()]).unwrap();
+    assert_eq!(names(&key), ["joedocs"]);
+    let refusals = [
+        (vec!["alpha"], "API key laptop has no grant on alpha"),
+        (vec!["beta"], "API key laptop has no grant on beta"),
+        (vec!["nope"], "project nope does not exist"),
+        (vec!["joedocs", "nope"], "project nope does not exist"),
+        (
+            vec!["joedocs", "alpha"],
+            "API key laptop has no grant on alpha",
+        ),
+    ];
+    for (projects, message) in refusals {
+        let projects: Vec<String> = projects.into_iter().map(str::to_owned).collect();
+        let err = fx.store.ungrant("laptop", &projects).unwrap_err();
+        assert!(err.to_string().contains(message), "{projects:?}: {err}");
+        assert!(err.is_user_error());
+    }
+    let left = fx.store.keys().unwrap();
+    assert_eq!(names(&left[0]), ["joedocs"], "refusals change nothing");
+    assert!(fx.store.ungrant("laptop", &[]).is_err());
+    assert!(matches!(
+        fx.store.ungrant("nobody", &["joedocs".to_owned()]),
+        Err(Error::KeyNotFound(_))
+    ));
+    let key = fx.store.ungrant("laptop", &["joedocs".to_owned()]).unwrap();
+    assert!(key.grants.is_empty(), "a key may be left with no grants");
+    assert!(key.revoked_at.is_none());
+    fx.store.revoke("laptop").unwrap();
+    let err = fx
+        .store
+        .ungrant("laptop", &["joedocs".to_owned()])
+        .unwrap_err();
+    assert!(err.to_string().contains("is revoked"), "{err}");
+}
+
+#[test]
 fn rotating_a_key_replaces_its_token_but_keeps_its_id_and_grants() {
     let mut fx = fixture();
     let grants = ["joedocs:write".parse().unwrap()];
