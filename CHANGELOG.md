@@ -22,6 +22,10 @@ Admin commands to view and find documents and read the audit log, locally and th
 - Tables of the new commands print control characters in stored text as escapes (`\n`, `\u{1b}`), so text written through MCP cannot change the terminal.
 - A command whose admin API route the server does not have says the server may run an older JoeDocs and should be upgraded.
 
+### Changed
+
+- **The `joedocs-code-review` skill re-reviews in place.** A re-review of the same change (the same pull request, or a branch built on the reviewed head) updates the earlier review document as a new round instead of publishing another document. Each earlier finding keeps its text and gains a disposition (`resolved`, `still-open`, ...); new findings are numbered `R2-MED-01`; a `Re-review R2` section records the round; the verdict, open counts and status follow the latest round (`review_round` counts them). A different change, or a request for one, still gets a new review that supersedes the earlier one.
+
 ### Fixed
 
 - `joedocs get --part ""` in client mode reports the missing file, as it does on the server, instead of printing the whole document. More generally, the admin API no longer drops an option given as an empty value, so remote runs refuse or match it as local runs do.
