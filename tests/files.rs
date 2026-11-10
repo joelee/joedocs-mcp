@@ -2208,3 +2208,40 @@ fn folders_of_one_document_never_differ_only_in_case() {
     assert_eq!(renamed.file.as_deref(), Some("backlog/Item-1"));
     assert_rebuilds_identically(root, &mut store).unwrap();
 }
+
+#[test]
+fn search_hits_carry_the_file_count() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    roadmap_with_files(&mut store).unwrap();
+    let request = joedocs::store::SearchRequest {
+        projects: vec!["joedocs".into()],
+        doc_type: None,
+        query: "roadmap OR item OR plan".into(),
+        filters: serde_json::Map::new(),
+        start: 1,
+        limit: 20,
+        document_id: None,
+    };
+    let results = store.search(&request).unwrap();
+    let seen = |id: &str, file: bool| {
+        results
+            .items
+            .iter()
+            .any(|hit| hit.document.id == id && hit.file.is_some() == file)
+    };
+    // The main file, one of its files, and a single-file document all match.
+    assert!(seen("JD-1", false) && seen("JD-1", true) && seen("JD-2", false));
+    for hit in &results.items {
+        let expected = if hit.document.id == "JD-1" {
+            (true, 2)
+        } else {
+            (false, 0)
+        };
+        assert_eq!(
+            (hit.document.multifile, hit.document.files),
+            expected,
+            "{hit:?}"
+        );
+    }
+}

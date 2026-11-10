@@ -143,14 +143,36 @@ Administration is not an MCP tool, so a leaked client key cannot create keys or 
 flowchart LR
     I["joedocs-idea-architect<br/>ideas: JD-12"] -- "you accept it" --> P
     R["joedocs-code-review<br/>reviews: JD-40"] -- "open findings" --> P
+    L["joedocs-issue-log<br/>issues: JD-21"] -- "open issues" --> P
     P["joedocs-planner<br/>plans: JD-31"] -- "you approve it" --> B
     B["joedocs-builder<br/>feature/jd-31-..."] -- "steps committed" --> R
 ```
 
 - **joedocs-idea-architect** pressure-tests a raw idea and records it for you to accept, park or reject.
-- **joedocs-planner** turns an accepted idea, an open review or a request into a traceable, step-by-step delivery plan.
+- **joedocs-planner** turns an accepted idea, an open review, an open issue or a request into a traceable, step-by-step delivery plan; a plan for a version picks up the issues targeted at it.
 - **joedocs-builder** executes an approved plan one reviewed, committed step at a time, logging evidence in the plan.
 - **joedocs-code-review** reviews the result against the plan and records findings that feed the next plan.
+- **joedocs-issue-log** files bugs and incidents with their severity and the versions they were found in and are to be fixed in, keeps their investigation notes, and closes them when a release fixes them.
+
+## Roadmap
+
+Planned:
+
+- Plain logs (no colour codes) when `serve` is not writing to a terminal.
+- More agent skills: research notes, decision records, a session journal and a gardener.
+- An optional `git push` of the history to a private remote after each commit.
+- Removing a single grant from a key.
+- Dropping the template's example secret `JOEDOCS_API_TOKEN`, which the server does not use.
+
+Further out:
+
+- A document graph agents can query, for example "what depends on JD-12" (an idea to explore first).
+- Rewriting `[[links]]` to a renamed document in the same project.
+- Approval provenance: server-stamped status changes, and optionally a grant needed to approve.
+- Prebuilt binaries for Linux and macOS on GitHub Releases, and a homebrew-core formula.
+- From the design plan's "Later" list: per-type templates, documents as MCP resources, backlinks, embedding search, attachments, secret scanning on write.
+
+The detailed backlog is kept in JoeDocs itself, as a multi-file document; what has shipped is in the [changelog](https://github.com/joelee/joedocs-mcp/blob/main/CHANGELOG.md).
 
 ## Documentation
 
@@ -160,7 +182,7 @@ flowchart LR
 - [Configuration](https://github.com/joelee/joedocs-mcp/blob/main/docs/configuration.md): every key, its default and its environment override
 - [Skills](https://github.com/joelee/joedocs-mcp/blob/main/docs/skills/README.md): agent skills built on JoeDocs
 - [Architecture](https://github.com/joelee/joedocs-mcp/blob/main/docs/architecture.md) and [design plan](https://github.com/joelee/joedocs-mcp/blob/main/docs/plan.md)
-- [Developer guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/developer-guide.md), [directory structure](https://github.com/joelee/joedocs-mcp/blob/main/docs/directory-structure.md) and [backlog](https://github.com/joelee/joedocs-mcp/blob/main/docs/backlog.md)
+- [Developer guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/developer-guide.md) and [directory structure](https://github.com/joelee/joedocs-mcp/blob/main/docs/directory-structure.md)
 - [Changelog](https://github.com/joelee/joedocs-mcp/blob/main/CHANGELOG.md)
 
 ## Development

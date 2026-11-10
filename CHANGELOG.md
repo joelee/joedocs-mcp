@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-10
+
+An issue log for agents, release plans that pick up their issues, and a search fix.
+
+### Fixed
+
+- `search_documents` hits on a multi-file document report its real `files` count, as `get_document` and `list_documents` do; they said `0` (issue JD-21).
+
+### Added
+
+- **The `joedocs-issue-log` skill** (`docs/skills/joedocs-issue-log`) files bugs, regressions and incidents as `issues` documents. Required front matter: `status`, `kind`, `severity`, `repository`, `found_in` and `reported_by`; optional keys include `target_version`, `fixed_in` and `resolution`. It uses the server's statuses (`draft` and `review` are open, `done` is fixed, `rejected` is not fixed, `superseded` is a duplicate), appends dated investigation notes, closes the issues a release fixed, and lists what is open.
+- **`joedocs-planner` plans from issues.** A plan for a version (`target_version`) includes the open issues targeted at it, then lists the open issues with no version and asks which to include, setting `target_version` only on those you pick. Plans record their issues in `source_issues`, and unplanned queries cover issues.
+
+### Changed
+
+- The backlog moved from `docs/backlog.md` into JoeDocs, as a multi-file `notes` document with one file per item; the README has a Roadmap section with the planned and future headlines.
+
 ## [0.4.0] - 2026-11-09
 
 Multi-file documents: a document can be a folder of Markdown files under one ID and one revision number, such as a roadmap with a backlog of items, each file with its own front matter and searchable on its own. And `joedocs login` sets up the server for you.
@@ -116,7 +133,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/joelee/joedocs-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/joelee/joedocs-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/joelee/joedocs-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/joelee/joedocs-mcp/compare/v0.1.2...v0.2.0

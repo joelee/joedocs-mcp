@@ -99,6 +99,12 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.4.0 to 0.4.1
+
+- **No migration**, and no configuration change: install the new version and restart, as in steps 2 and 3. Going back to 0.4.0 needs no restore.
+- **Fixed:** `search_documents` hits on multi-file documents carry their real `files` count.
+- **Skills:** `joedocs-planner` changed and `joedocs-issue-log` is new. If you copied the skills into `~/.claude/skills`, copy them again (`cp -r docs/skills/joedocs-* ~/.claude/skills/`); if you linked them to a checkout, link the new one too.
+
 ### 0.3.x to 0.4.0
 
 - **Database migration 5** adds multi-file documents. 0.3.x cannot open the database afterwards, so take a backup in step 1 first: `JOEDOCS backup ~/joedocs-before-0.4.0.tgz` works while the service runs.

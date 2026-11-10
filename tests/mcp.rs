@@ -406,6 +406,16 @@ async fn multi_file_documents_round_trip() {
     );
     assert_eq!(plain["document"].get("files"), None);
     assert_eq!(plain.get("files"), None);
+    let found = ok(
+        &viewer,
+        "search_documents",
+        json!({"project": "joedocs", "query": "plain"}),
+    )
+    .await
+    .unwrap();
+    let hit = &found["items"][0];
+    assert_eq!(hit["id"], single["document_id"], "{found}");
+    assert_eq!((hit.get("multifile"), hit.get("files")), (None, None));
 
     client.cancel().await.unwrap();
     viewer.cancel().await.unwrap();
@@ -806,6 +816,23 @@ async fn multi_file_reads(viewer: &Client) -> TestResult<()> {
     let listed = ok(viewer, "list_documents", json!({"project": "joedocs"})).await?;
     assert_eq!(listed["items"][0]["multifile"], true);
     assert_eq!(listed["items"][0]["files"], 1);
+
+    // Search hits, on the main file and on a file, carry the same count.
+    let found = ok(
+        viewer,
+        "search_documents",
+        json!({"project": "joedocs", "query": "roadmap OR item", "document_id": "JD-1"}),
+    )
+    .await?;
+    let hits = found["items"].as_array().ok_or("no items")?;
+    assert_eq!(hits.len(), 2, "{found}");
+    for hit in hits {
+        assert_eq!(
+            (&hit["multifile"], &hit["files"]),
+            (&json!(true), &json!(1)),
+            "{hit}"
+        );
+    }
     Ok(())
 }
 
