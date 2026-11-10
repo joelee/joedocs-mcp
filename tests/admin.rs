@@ -746,6 +746,107 @@ fn diff_shows_what_changed_between_revisions() {
         .stderr(predicate::str::contains("--from"));
 }
 
+#[test]
+fn audit_reads_the_audit_log() {
+    use joedocs::store::Actor;
+    let root = TempDir::new().unwrap();
+    browse_store(root.path()).unwrap();
+    cmd(root.path())
+        .arg("audit")
+        .assert()
+        .success()
+        .stdout("No audit entries.\n");
+    let store = library_store(root.path()).unwrap();
+    let laptop = Actor::new("laptop", "claude");
+    store
+        .audit("k1", &laptop, "update_document", Some("P-1"), "conflict")
+        .unwrap();
+    store
+        .audit("k2", &Actor::new("ci", "cli"), "admin:status", None, "ok")
+        .unwrap();
+    drop(store);
+    cmd(root.path()).arg("audit").assert().success().stdout(
+        "TIME                  KEY     CLIENT  TOOL             DOCUMENT  OUTCOME\n\
+             2026-10-26T07:33:20Z  ci      cli     admin:status     -         ok\n\
+             2026-10-26T07:33:20Z  laptop  claude  update_document  P-1       conflict\n",
+    );
+    cmd(root.path())
+        .args([
+            "audit",
+            "-k",
+            "laptop",
+            "-d",
+            "p-1",
+            "--outcome",
+            "conflict",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("update_document"))
+        .stdout(predicate::str::contains("admin:status").not());
+    cmd(root.path())
+        .args([
+            "audit",
+            "--tool",
+            "admin:*",
+            "--since",
+            "2026-10-26",
+            "--until",
+            "2026-10-27",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("admin:status"))
+        .stdout(predicate::str::contains("update_document").not());
+    cmd(root.path())
+        .args(["audit", "--since", "2026-10-27"])
+        .assert()
+        .success()
+        .stdout("No audit entries.\n");
+    cmd(root.path())
+        .args(["audit", "-n", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "Showing 1-1 of 2; next page: --start 2\n",
+        ));
+    let json = cmd(root.path())
+        .args(["audit", "--key", "laptop", "--json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "items": [{
+                "at": "2026-10-26T07:33:20Z", "key_id": "k1", "key_name": "laptop",
+                "client": "claude", "tool": "update_document",
+                "document_id": "P-1", "outcome": "conflict"
+            }],
+            "total": 1,
+            "next_start": null
+        })
+    );
+    for bad in [["--since", "yesterday"], ["--limit", "0"], ["-d", "nope"]] {
+        cmd(root.path()).arg("audit").args(bad).assert().code(65);
+    }
+    // Client names are tidied on the way in, but the table does not rely
+    // on it: a control character in a stored row is printed as an escape.
+    let conn = joedocs::db::open(&root.path().join("state/joedocs.db")).unwrap();
+    conn.execute(
+        "UPDATE audit_log SET outcome = 'x\u{1b}[2Jy' WHERE key_name = 'ci'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    cmd(root.path())
+        .args(["audit", "-k", "ci"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("x\\u{1b}[2Jy"))
+        .stdout(predicate::str::contains("\u{1b}").not());
+}
+
 /// Control characters in stored text are printed as escapes in tables.
 #[test]
 fn list_escapes_control_characters_in_titles() {

@@ -159,6 +159,109 @@ pub fn insert_audit(conn: &Connection, entry: &AuditEntry<'_>) -> rusqlite::Resu
     Ok(())
 }
 
+/// Conditions of an audit log read; `None` means any.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditQuery<'a> {
+    /// Only entries at or after this time (`YYYY-MM-DDTHH:MM:SSZ`).
+    pub since: Option<&'a str>,
+    /// Only entries before this time.
+    pub until: Option<&'a str>,
+    /// Only this key name.
+    pub key_name: Option<&'a str>,
+    /// Only this tool.
+    pub tool: Option<&'a str>,
+    /// Only tools that start with this text (matched exactly, case
+    /// included).
+    pub tool_prefix: Option<&'a str>,
+    /// Only this document.
+    pub document_id: Option<&'a str>,
+    /// Only this outcome (`ok` or an error code).
+    pub outcome: Option<&'a str>,
+    /// Entries to skip.
+    pub offset: u64,
+    /// Most entries to return.
+    pub limit: u64,
+}
+
+/// One stored audit entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditRow {
+    /// Time of the call.
+    pub at: String,
+    /// API key or admin token ID.
+    pub api_key_id: String,
+    /// Key or token name.
+    pub key_name: String,
+    /// Client name.
+    pub client: String,
+    /// Tool name, `admin:<operation>` for the admin API.
+    pub tool: String,
+    /// Document the call targeted, if any.
+    pub document_id: Option<String>,
+    /// `ok` or an error code.
+    pub outcome: String,
+}
+
+/// A page of audit entries, newest first, and how many match.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn list_audit(
+    conn: &Connection,
+    query: &AuditQuery<'_>,
+) -> rusqlite::Result<(Vec<AuditRow>, u64)> {
+    let filter = "WHERE (?1 IS NULL OR at >= ?1) AND (?2 IS NULL OR at < ?2)
+        AND (?3 IS NULL OR key_name = ?3) AND (?4 IS NULL OR tool = ?4)
+        AND (?5 IS NULL OR substr(tool, 1, length(?5)) = ?5)
+        AND (?6 IS NULL OR document_id = ?6) AND (?7 IS NULL OR outcome = ?7)";
+    let conditions = params![
+        query.since,
+        query.until,
+        query.key_name,
+        query.tool,
+        query.tool_prefix,
+        query.document_id,
+        query.outcome,
+    ];
+    let total = conn.query_row(
+        &format!("SELECT count(*) FROM audit_log {filter}"),
+        conditions,
+        |row| row.get(0),
+    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT at, api_key_id, key_name, client, tool, document_id, outcome
+         FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?8 OFFSET ?9"
+    ))?;
+    let rows = stmt
+        .query_map(
+            params![
+                query.since,
+                query.until,
+                query.key_name,
+                query.tool,
+                query.tool_prefix,
+                query.document_id,
+                query.outcome,
+                query.limit,
+                query.offset,
+            ],
+            |row| {
+                Ok(AuditRow {
+                    at: row.get(0)?,
+                    api_key_id: row.get(1)?,
+                    key_name: row.get(2)?,
+                    client: row.get(3)?,
+                    tool: row.get(4)?,
+                    document_id: row.get(5)?,
+                    outcome: row.get(6)?,
+                })
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((rows, total))
+}
+
 /// Meta key holding the history commit the index was last updated to.
 const HISTORY_HEAD: &str = "history_head";
 
@@ -337,6 +440,124 @@ mod tests {
             .query_row("SELECT outcome FROM audit_log", [], |row| row.get(0))
             .unwrap();
         assert_eq!(outcome, "conflict");
+    }
+
+    /// An in-memory database with five audit entries over three days.
+    fn audit_fixture() -> Connection {
+        let conn = open_in_memory().unwrap();
+        for (at, key, tool, doc, outcome) in [
+            (
+                "2026-11-09T10:00:00Z",
+                "laptop",
+                "new_document",
+                Some("JD-1"),
+                "ok",
+            ),
+            (
+                "2026-11-10T00:00:00Z",
+                "laptop",
+                "update_document",
+                Some("JD-1"),
+                "conflict",
+            ),
+            ("2026-11-10T09:00:00Z", "admin", "admin:status", None, "ok"),
+            ("2026-11-10T12:00:00Z", "ci", "admin:x", None, "ok"),
+            (
+                "2026-11-11T00:00:00Z",
+                "laptop",
+                "adm_n:y",
+                Some("JD-2"),
+                "ok",
+            ),
+        ] {
+            let entry = AuditEntry {
+                at,
+                api_key_id: "id",
+                key_name: key,
+                client: "c",
+                tool,
+                document_id: doc,
+                outcome,
+            };
+            insert_audit(&conn, &entry).unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn audit_entries_are_read_newest_first_with_filters() {
+        let conn = audit_fixture();
+        let read = |query: &AuditQuery<'_>| {
+            let (rows, total) = list_audit(&conn, query).unwrap();
+            (rows.into_iter().map(|r| r.tool).collect::<Vec<_>>(), total)
+        };
+        let all = AuditQuery {
+            limit: 10,
+            ..AuditQuery::default()
+        };
+        assert_eq!(
+            read(&all),
+            (
+                vec![
+                    "adm_n:y".into(),
+                    "admin:x".into(),
+                    "admin:status".into(),
+                    "update_document".into(),
+                    "new_document".into()
+                ],
+                5
+            )
+        );
+        let day = AuditQuery {
+            since: Some("2026-11-10T00:00:00Z"),
+            until: Some("2026-11-11T00:00:00Z"),
+            ..all.clone()
+        };
+        assert_eq!(read(&day).1, 3, "since is inclusive, until exclusive");
+        let prefix = AuditQuery {
+            tool_prefix: Some("admin:"),
+            ..all.clone()
+        };
+        assert_eq!(read(&prefix).0, ["admin:x", "admin:status"]);
+        let literal = AuditQuery {
+            tool_prefix: Some("adm_n:"),
+            ..all.clone()
+        };
+        assert_eq!(read(&literal).0, ["adm_n:y"], "`_` is literal");
+        let percent = AuditQuery {
+            tool_prefix: Some("%"),
+            ..all.clone()
+        };
+        assert_eq!(read(&percent).1, 0, "`%` is literal");
+        let upper = AuditQuery {
+            tool_prefix: Some("ADMIN:"),
+            ..all.clone()
+        };
+        assert_eq!(read(&upper).1, 0, "prefixes match case");
+        let exact = AuditQuery {
+            tool: Some("admin:status"),
+            key_name: Some("admin"),
+            outcome: Some("ok"),
+            ..all.clone()
+        };
+        assert_eq!(read(&exact).0, ["admin:status"]);
+        let by_document = AuditQuery {
+            document_id: Some("JD-1"),
+            ..all.clone()
+        };
+        assert_eq!(read(&by_document).0, ["update_document", "new_document"]);
+        let page = AuditQuery {
+            offset: 1,
+            limit: 2,
+            ..all
+        };
+        assert_eq!(
+            read(&page),
+            (vec!["admin:x".into(), "admin:status".into()], 5)
+        );
+        let (rows, _) = list_audit(&conn, &by_document).unwrap();
+        assert_eq!(rows[0].document_id.as_deref(), Some("JD-1"));
+        assert_eq!(rows[0].key_name, "laptop");
     }
 
     #[test]

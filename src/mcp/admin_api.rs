@@ -409,6 +409,7 @@ enum Route {
     Search,
     History(String),
     Diff(String),
+    Audit,
     Document(String),
     DocumentConvert(String),
     FileMove(String),
@@ -441,6 +442,7 @@ impl Route {
             ["reindex"] if post => Self::Reindex,
             ["documents"] if get => Self::DocumentsList,
             ["search"] if post => Self::Search,
+            ["audit"] if get => Self::Audit,
             ["documents", id] if get => Self::Document((*id).to_owned()),
             ["documents", id, "history"] if get => Self::History(percent_decode(id)),
             ["documents", id, "diff"] if get => Self::Diff(percent_decode(id)),
@@ -473,6 +475,7 @@ impl Route {
             Self::Search => "admin:documents.search",
             Self::History(_) => "admin:documents.history",
             Self::Diff(_) => "admin:documents.diff",
+            Self::Audit => "admin:audit.list",
             Self::Document(_) => "admin:documents.get",
             Self::DocumentConvert(_) => "admin:document.convert",
             Self::FileMove(_) => "admin:document.move_file",
@@ -518,6 +521,7 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         Route::Search => search(state, call, body).await,
         Route::History(id) => history(state, call, id, uri).await,
         Route::Diff(id) => diff(state, call, id, uri).await,
+        Route::Audit => audit(state, call, uri).await,
         Route::Document(id) => document(state, call, id, uri).await,
         Route::DocumentConvert(id) => document_command(state, call, id, body, "convert").await,
         Route::FileMove(id) => document_command(state, call, id, body, "move").await,
@@ -843,6 +847,26 @@ async fn diff(state: Arc<ApiState>, call: Call, id: String, uri: axum::http::Uri
             json: false,
         };
         let reply = crate::browse::diff(store, &args).map_err(|e| from_crate(&e))?;
+        Ok(axum::Json(reply).into_response())
+    })
+    .await
+}
+
+/// `GET /admin/v1/audit`: a page of the audit log, newest first.
+async fn audit(state: Arc<ApiState>, call: Call, uri: axum::http::Uri) -> Response {
+    authorized(state, call, move |store, _, _| {
+        let args = crate::cli::AuditArgs {
+            since: decoded(&uri, "since"),
+            until: decoded(&uri, "until"),
+            key: decoded(&uri, "key"),
+            tool: decoded(&uri, "tool"),
+            document: decoded(&uri, "document"),
+            outcome: decoded(&uri, "outcome"),
+            start: number(&uri, "start")?.unwrap_or(1),
+            limit: number(&uri, "limit")?.unwrap_or(crate::cli::DEFAULT_AUDIT_LIMIT),
+            json: false,
+        };
+        let reply = crate::browse::audit(store, &args).map_err(|e| from_crate(&e))?;
         Ok(axum::Json(reply).into_response())
     })
     .await

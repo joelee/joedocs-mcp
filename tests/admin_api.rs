@@ -724,3 +724,41 @@ async fn history_and_diff_routes_check_their_arguments_and_are_audited() -> Test
     );
     server.stop().await
 }
+
+#[tokio::test]
+async fn the_audit_route_reads_the_log_and_is_audited() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let read = server
+        .send(
+            "GET",
+            "/admin/v1/audit?tool=admin%3A%2A&key=laptop",
+            &auth,
+            "",
+        )
+        .await?;
+    assert_eq!(read.status, 200, "{:?}", read.json);
+    assert_eq!(read.json["total"], 1);
+    assert_eq!(read.json["items"][0]["tool"], "admin:session.create");
+    assert_eq!(read.json["items"][0]["outcome"], "ok");
+    for path in [
+        "/admin/v1/audit?since=yesterday",
+        "/admin/v1/audit?limit=0",
+        "/admin/v1/audit?start=x",
+    ] {
+        let bad = server.send("GET", path, &auth, "").await?;
+        assert_eq!(bad.status, 400, "{path}: {:?}", bad.json);
+    }
+    let audit = server.audit()?;
+    assert_eq!(
+        audit[audit.len() - 4..],
+        [
+            ("admin:audit.list".to_owned(), "ok".to_owned()),
+            ("admin:audit.list".to_owned(), "invalid_argument".to_owned()),
+            ("admin:audit.list".to_owned(), "invalid_argument".to_owned()),
+            ("admin:audit.list".to_owned(), "invalid_argument".to_owned()),
+        ]
+    );
+    server.stop().await
+}

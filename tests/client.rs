@@ -578,6 +578,13 @@ fn parity_steps() -> Vec<Vec<&'static str>> {
         vec!["diff", "JD-1", "--from", "1", "--context", "500"],
         vec!["diff", "JD-3", "--from", "1"],
         vec!["diff", "JD-3", "--from", "2", "-P", "notes/a b&c", "-j"],
+        // The server's log also holds its own admin API calls, so compare
+        // what excludes them.
+        vec!["audit", "--tool", "update_document"],
+        vec!["audit", "-k", "nobody", "-j"],
+        vec!["audit", "--since", "yesterday"],
+        vec!["audit", "-n", "0"],
+        vec!["audit", "-d", "nope"],
         vec!["get", "JD-1"],
         vec!["get", "JD-1", "--version", "1"],
         vec!["get", "JD-1", "--content-only"],
@@ -959,6 +966,47 @@ fn client_cmd(root: &Path, url: &str) -> Command {
 }
 
 #[test]
+fn remote_audit_lists_the_servers_admin_calls() {
+    let server = Server::start().unwrap();
+    server
+        .cmd()
+        .args(["login", "--code", &server.code()])
+        .assert()
+        .success();
+    server.cmd().args(["project", "list"]).assert().success();
+    let output = server
+        .cmd()
+        .args([
+            "audit",
+            "--tool",
+            "admin:*",
+            "-k",
+            "laptop",
+            "--since",
+            "2020-01-01",
+            "-j",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let tools: Vec<&str> = json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["tool"].as_str())
+        .collect();
+    assert_eq!(tools, ["admin:projects.list", "admin:session.create"]);
+    // The call that read the log is audited after it answers.
+    server
+        .cmd()
+        .args(["audit", "--tool", "admin:audit.list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("admin:audit.list"));
+}
+
+#[test]
 fn an_older_server_without_the_route_says_to_upgrade_it() {
     let dir = TempDir::new().unwrap();
     let body = br#"{"error":{"code":"not_found","message":"no such admin API route"}}"#;
@@ -1022,6 +1070,7 @@ fn malformed_success_replies_fail_without_writing() {
             vec!["search", "x"],
             vec!["history", "JD-1"],
             vec!["diff", "JD-1", "--from", "1"],
+            vec!["audit"],
         ] {
             client_cmd(dir.path(), &url)
                 .args(&args)

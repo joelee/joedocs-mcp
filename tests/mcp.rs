@@ -1282,6 +1282,31 @@ async fn admin_json_matches_the_mcp_results() -> TestResult<()> {
         let admin: Value = serde_json::from_str(&admin_output(&server.root, &cli)?)?;
         assert_eq!(admin, mcp, "{cli:?}");
     }
+    // `joedocs audit` shows the MCP writes, newest first.
+    let audit: Value = serde_json::from_str(&admin_output(
+        &server.root,
+        &["audit", "-k", "laptop", "--tool", "new_*", "-j"],
+    )?)?;
+    let rows: Vec<(String, String)> = audit["items"]
+        .as_array()
+        .ok_or("no items")?
+        .iter()
+        .map(|row| {
+            (
+                row["tool"].as_str().unwrap_or("").to_owned(),
+                row["document_id"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("new_document_file".to_owned(), "JD-2".to_owned()),
+            ("new_document".to_owned(), "JD-3".to_owned()),
+            ("new_document".to_owned(), "JD-2".to_owned()),
+            ("new_document".to_owned(), "JD-1".to_owned()),
+        ]
+    );
     client.cancel().await?;
     server.stop().await
 }

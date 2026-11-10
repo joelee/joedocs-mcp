@@ -278,7 +278,8 @@ pub fn execute(
         command @ (Command::List(_)
         | Command::Search(_)
         | Command::History(_)
-        | Command::Diff(_)) => local_browse(command, loaded, ctx, out)?,
+        | Command::Diff(_)
+        | Command::Audit(_)) => local_browse(command, loaded, ctx, out)?,
     }
     Ok(())
 }
@@ -308,6 +309,10 @@ fn local_browse(
         Command::Diff(args) => {
             let reply = browse::diff(&store, args)?;
             browse::print(&reply, args.json, browse::render_diff, out)
+        }
+        Command::Audit(args) => {
+            let reply = browse::audit(&store, args)?;
+            browse::print(&reply, args.json, browse::render_audit, out)
         }
         _ => Ok(()),
     }
@@ -588,6 +593,7 @@ fn remote_admin(
         }
         Command::History(args) => remote_history(remote, args, out),
         Command::Diff(args) => remote_diff(remote, args, out),
+        Command::Audit(args) => remote_audit(remote, args, out),
         // Handled by `run_remote`, or refused by `remote` before it.
         _ => Ok(()),
     }
@@ -668,6 +674,30 @@ fn remote_diff(
     );
     let reply = remote_page(remote, &path, None, "diff", browse::is_diff)?;
     browse::print(&reply, args.json, browse::render_diff, out)
+}
+
+/// `joedocs audit` through the admin API.
+fn remote_audit(
+    remote: &client::Remote<'_>,
+    args: &cli::AuditArgs,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let (start, limit) = (args.start.to_string(), args.limit.to_string());
+    let path = with_query(
+        "audit",
+        &[
+            ("since", args.since.as_deref()),
+            ("until", args.until.as_deref()),
+            ("key", args.key.as_deref()),
+            ("tool", args.tool.as_deref()),
+            ("document", args.document.as_deref()),
+            ("outcome", args.outcome.as_deref()),
+            ("start", Some(&start)),
+            ("limit", Some(&limit)),
+        ],
+    );
+    let reply = remote_page(remote, &path, None, "audit", browse::is_page)?;
+    browse::print(&reply, args.json, browse::render_audit, out)
 }
 
 /// Calls one of the routes added in 0.4.2 and checks the reply with

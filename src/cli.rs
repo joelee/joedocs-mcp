@@ -160,6 +160,8 @@ pub enum Command {
     History(HistoryArgs),
     /// Show what changed in a document between two revisions.
     Diff(DiffArgs),
+    /// Read the audit log (every MCP write and admin API call), newest first.
+    Audit(AuditArgs),
 }
 
 /// Order of `joedocs list`.
@@ -310,6 +312,43 @@ pub struct HistoryArgs {
 /// `joedocs history --limit` when none is given, as `get_document_history`.
 pub const DEFAULT_HISTORY_LIMIT: u64 = 50;
 
+/// Arguments of `joedocs audit`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct AuditArgs {
+    /// Only entries at or after this UTC date (2026-11-10) or time
+    /// (2026-11-10T14:00:00Z).
+    #[arg(long, value_name = "TIME")]
+    pub since: Option<String>,
+    /// Only entries before this UTC date or time.
+    #[arg(long, value_name = "TIME")]
+    pub until: Option<String>,
+    /// Only this API key or admin token name.
+    #[arg(short = 'k', long, value_name = "NAME")]
+    pub key: Option<String>,
+    /// Only this tool, e.g. `update_document`; ending in `*`, every tool
+    /// that starts with the rest, e.g. `admin:*`.
+    #[arg(long, value_name = "TOOL")]
+    pub tool: Option<String>,
+    /// Only calls about this document.
+    #[arg(short = 'd', long, value_name = "DOCUMENT_ID")]
+    pub document: Option<String>,
+    /// Only this outcome: `ok` or an error code such as `conflict`.
+    #[arg(long, value_name = "OUTCOME")]
+    pub outcome: Option<String>,
+    /// 1-based position of the first entry (see the paging line).
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    pub start: u64,
+    /// Most entries to show (1 to 1000).
+    #[arg(short = 'n', long, default_value_t = DEFAULT_AUDIT_LIMIT, value_name = "N")]
+    pub limit: u64,
+    /// Print JSON (as the admin API returns it) instead of a table.
+    #[arg(short = 'j', long)]
+    pub json: bool,
+}
+
+/// `joedocs audit --limit` when none is given.
+pub const DEFAULT_AUDIT_LIMIT: u64 = 50;
+
 /// Arguments of `joedocs diff`.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct DiffArgs {
@@ -410,6 +449,7 @@ impl Command {
             Self::Search(_) => "search",
             Self::History(_) => "history",
             Self::Diff(_) => "diff",
+            Self::Audit(_) => "audit",
         }
     }
 }
@@ -714,7 +754,7 @@ mod tests {
             all.extend_from_slice(args);
             Cli::try_parse_from(all).map(|cli| cli.command)
         };
-        let pairs: [(&[&str], &[&str]); 6] = [
+        let pairs: [(&[&str], &[&str]); 7] = [
             (
                 &[
                     "list", "-p", "a", "-t", "plans", "-s", "draft", "-n", "5", "-j",
@@ -772,10 +812,32 @@ mod tests {
                 &["diff", "JD-1", "--from", "1", "-P", "a", "-j"],
                 &["diff", "JD-1", "--from", "1", "--part", "a", "--json"],
             ),
+            (
+                &["audit", "-k", "ci", "-d", "JD-1", "-n", "4", "-j"],
+                &[
+                    "audit",
+                    "--key",
+                    "ci",
+                    "--document",
+                    "JD-1",
+                    "--limit",
+                    "4",
+                    "--json",
+                ],
+            ),
         ];
         for (short, long) in pairs {
             assert_eq!(parse(short).unwrap(), parse(long).unwrap(), "{short:?}");
         }
+    }
+
+    #[test]
+    fn the_browse_commands_have_their_defaults() {
+        let parse = |args: &[&str]| {
+            let mut all = vec!["app"];
+            all.extend_from_slice(args);
+            Cli::try_parse_from(all).map(|cli| cli.command)
+        };
         let Command::List(args) = parse(&["list", "-p", "a"]).unwrap() else {
             panic!("not list");
         };
@@ -807,6 +869,11 @@ mod tests {
         assert_eq!((args.from, args.to, args.context), (2, None, 3));
         assert_eq!(Command::Diff(args).name(), "diff");
         assert!(parse(&["diff", "JD-1"]).is_err(), "--from is required");
+        let Command::Audit(args) = parse(&["audit"]).unwrap() else {
+            panic!("not audit");
+        };
+        assert_eq!((args.start, args.limit), (1, DEFAULT_AUDIT_LIMIT));
+        assert_eq!(Command::Audit(args).name(), "audit");
     }
 
     #[test]

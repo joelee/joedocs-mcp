@@ -21,6 +21,7 @@
 mod admin_files;
 mod admin_tokens;
 mod archive;
+mod audit;
 mod backup;
 mod check;
 mod documents;
@@ -47,6 +48,7 @@ pub use admin_tokens::{
     AdminRefusal, CreatedAdminToken, LOCK_SECONDS, MAX_FAILED_LOGINS, OpenedSession,
 };
 pub use archive::ArchivedInfo;
+pub use audit::{AuditPage, AuditRequest, MAX_AUDIT_LIMIT};
 pub use backup::Snapshot;
 pub use check::CheckReport;
 pub use documents::{

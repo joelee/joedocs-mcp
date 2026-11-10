@@ -1,5 +1,5 @@
 //! The admin commands that view and find documents (`list`, `search`,
-//! `history`, `diff`): from their
+//! `history`, `diff`) and read the audit log (`audit`): from their
 //! arguments to store requests, the JSON replies the admin API sends, and
 //! the tables the command line prints.
 //!
@@ -14,12 +14,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::Error;
-use crate::cli::{DEFAULT_SEARCH_LIMIT, DiffArgs, HistoryArgs, ListArgs, SearchArgs};
+use crate::cli::{AuditArgs, DEFAULT_SEARCH_LIMIT, DiffArgs, HistoryArgs, ListArgs, SearchArgs};
 use crate::mcp::tools::{
     DiffOut, DocumentOut, HistoryOut, ListDocumentsOut, RevisionOut, SearchDocumentsOut,
     SearchHitOut,
 };
-use crate::store::{self, ListRequest, SearchRequest, Store};
+use crate::store::{self, AuditRequest, ListRequest, SearchRequest, Store};
 
 /// `joedocs list`: one page of a project's live documents, as the
 /// `list_documents` result.
@@ -209,6 +209,63 @@ pub fn diff(store: &Store, args: &DiffArgs) -> Result<Value, Error> {
     })
 }
 
+/// One audit entry in an `audit` reply.
+#[derive(Debug, Serialize)]
+struct AuditEntryOut {
+    at: String,
+    key_id: String,
+    key_name: String,
+    client: String,
+    tool: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    document_id: Option<String>,
+    outcome: String,
+}
+
+/// A page of audit entries: `{"items", "total", "next_start"}`.
+#[derive(Debug, Serialize)]
+struct AuditOut {
+    items: Vec<AuditEntryOut>,
+    total: u64,
+    next_start: Option<u64>,
+}
+
+/// `joedocs audit`: one page of the audit log, newest first.
+///
+/// # Errors
+///
+/// Returns [`Error::Store`] for a bad time, document ID, start or limit,
+/// and database errors.
+pub fn audit(store: &Store, args: &AuditArgs) -> Result<Value, Error> {
+    let page = store.audit_entries(&AuditRequest {
+        since: args.since.clone(),
+        until: args.until.clone(),
+        key: args.key.clone(),
+        tool: args.tool.clone(),
+        document: args.document.clone(),
+        outcome: args.outcome.clone(),
+        start: args.start,
+        limit: args.limit,
+    })?;
+    to_json(&AuditOut {
+        items: page
+            .items
+            .into_iter()
+            .map(|row| AuditEntryOut {
+                at: row.at,
+                key_id: row.api_key_id,
+                key_name: row.key_name,
+                client: row.client,
+                tool: row.tool,
+                document_id: row.document_id,
+                outcome: row.outcome,
+            })
+            .collect(),
+        total: page.total,
+        next_start: page.next_start,
+    })
+}
+
 fn to_json(reply: &impl serde::Serialize) -> Result<Value, Error> {
     serde_json::to_value(reply).map_err(|e| Error::Output(std::io::Error::other(e)))
 }
@@ -388,6 +445,42 @@ pub fn render_diff(reply: &Value, out: &mut dyn Write) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// Writes an `audit` reply as a table, then the paging line; or
+/// `No audit entries.`
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails.
+pub fn render_audit(reply: &Value, out: &mut dyn Write) -> Result<(), Error> {
+    let items = items(reply);
+    if items.is_empty() {
+        writeln!(out, "No audit entries.")?;
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|entry| {
+            let document = entry["document_id"]
+                .as_str()
+                .map_or_else(|| "-".to_owned(), escape);
+            vec![
+                text(entry, "at"),
+                text(entry, "key_name"),
+                text(entry, "client"),
+                text(entry, "tool"),
+                document,
+                text(entry, "outcome"),
+            ]
+        })
+        .collect();
+    crate::admin::write_table(
+        out,
+        &["TIME", "KEY", "CLIENT", "TOOL", "DOCUMENT", "OUTCOME"],
+        &rows,
+    )?;
+    write_paging(reply, items.len(), out)
 }
 
 fn items(reply: &Value) -> &[Value] {
