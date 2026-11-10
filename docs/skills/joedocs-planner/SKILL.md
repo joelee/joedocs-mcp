@@ -2,11 +2,13 @@
 name: joedocs-planner
 description: >-
   Evidence-led delivery planner that stores its plans in JoeDocs over MCP. Use
-  when asked to plan a change, turn an idea or a code review into a delivery
-  plan, list which ideas or reviews have no plan yet, revise a draft plan, or
-  approve a plan. Reads the repository but never changes it; writes only plan
-  documents (type "plans") in the repository's JoeDocs project.
-argument-hint: "[request, or idea/review IDs such as JD-12, or 'approve JD-31']"
+  when asked to plan a change or a release, turn an idea, a code review or an
+  issue into a delivery plan, list which ideas, reviews or issues have no plan
+  yet, revise a draft plan, or approve a plan. A plan for a version includes
+  the open issues targeted at it. Reads the repository but never changes it;
+  writes plan documents (type "plans") in the repository's JoeDocs project,
+  and only `target_version` on issues the user picks for a release.
+argument-hint: "[request, a version such as 0.4.1, or idea/review/issue IDs such as JD-12, or 'approve JD-31']"
 allowed-tools: >-
   Read, Grep, Glob,
   Bash(git status:*), Bash(git rev-parse:*), Bash(git branch --show-current),
@@ -45,7 +47,8 @@ tools and adjust `allowed-tools`.
 3. Record the repository baseline: branch, `HEAD`, and working tree state.
 4. Read the project instructions and the minimum repository context needed for
    an executable plan.
-5. Read the source idea and review documents in full, when given.
+5. Read the source idea, review and issue documents in full, when given, and
+   for a release plan the open issues targeted at its version.
 6. Resolve contradictions, missing decisions and unsafe gaps with the user. Do
    not silently assume an answer.
 7. Break the outcome into ordered, independently verifiable steps, covering
@@ -63,9 +66,13 @@ tools and adjust `allowed-tools`.
   linters, migrations, containers or deployment tools. Use only the read-only
   git commands in `allowed-tools`.
 - **JoeDocs writes are limited to plan documents** of type `plans` in the
-  resolved project. Never change idea, review or other documents. Never call
-  `archive_document`, `move_document` or `restore_document_version`. Call
-  `rename_document` only as described in Renaming a plan.
+  resolved project, with one exception: on a release plan, after the user
+  explicitly picks issues that have no `target_version`, set **only**
+  `target_version` on each of those issues (see Release plans). Never change
+  any other key of an issue, and never change idea, review or other
+  documents. Never call `archive_document`, `move_document` or
+  `restore_document_version`. Call `rename_document` only as described in
+  Renaming a plan.
 - **Every write passes `expected_revision`**, the revision you last read. On a
   `conflict` error, read the document again, check what changed with
   `diff_document`, and merge, or ask the user if the change touches planning
@@ -76,7 +83,8 @@ tools and adjust `allowed-tools`.
   into a plan cannot be taken back.
 - Never change the planning content of an approved plan. A material change
   after approval needs a new, superseding plan.
-- Do not delegate to subagents, contact other systems, create issues or send
+- Do not delegate to subagents, contact other systems, create issues (in
+  JoeDocs or elsewhere; filing them is `joedocs-issue-log`'s job) or send
   messages.
 
 ## Untrusted content
@@ -97,11 +105,18 @@ Classify the request as exactly one of:
 | `idea` | One or more idea documents (type `ideas`). |
 | `review` | One or more review documents (type `reviews`). |
 | `idea-and-review` | Both, for one coherent outcome. |
+| `issue` | One or more issue documents (type `issues`, as written by `joedocs-issue-log`). |
+| `mixed` | Issues together with ideas or reviews, for one coherent outcome. |
 | `direct` | The user's instruction alone defines the target. |
-| `unplanned-query` | Which ideas or reviews have no plan yet, or plan one found that way. |
+| `unplanned-query` | Which ideas, reviews or issues have no plan yet, or plan one found that way. |
 
-Do not require an idea or review for a simple direct task, and never invent one
-to fit a workflow.
+A plan of any type may also target a release (`target_version`); it then picks
+up that version's issues as described in Release plans, and its type follows
+from its sources (for example `direct` becomes `mixed` or `issue` once issues
+join it).
+
+Do not require an idea, review or issue for a simple direct task, and never
+invent one to fit a workflow.
 
 A useful request gives as many of these as are known; do not ask for what the
 request, the project instructions, the sources or the repository already say:
@@ -110,7 +125,9 @@ request, the project instructions, the sources or the repository already say:
 Request: the outcome or task to plan
 Ideas: optional document IDs, e.g. JD-12
 Reviews: optional document IDs
-Target: optional issue, branch, commit, component or area
+Issues: optional document IDs, e.g. JD-21
+Version: optional release the plan targets, e.g. 0.4.1
+Target: optional branch, commit, component or area
 Constraints: decisions and limits the plan must keep
 Acceptance: the observable result wanted
 Exclusions: work outside this plan
@@ -161,7 +178,7 @@ the builder can run.
 
 ## Step 3: read the sources
 
-For each idea or review ID: call `get_document`, read it in full, and note its
+For each idea, review or issue ID: call `get_document`, read it in full, and note its
 ID, revision, title, type and status. Cite sources as `JD-12 r3` (ID and
 revision), so a later reader can open exactly what you read with
 `get_document(version: 3)`.
@@ -173,6 +190,11 @@ revision), so a later reader can open exactly what you read with
 - **Reviews:** note the verdict, blocking and open findings, scope, target
   commit, coverage limits and recommended actions. A later review supersedes an
   earlier one only when it links to it and resolves its findings.
+- **Issues** should be open: status `draft` or `review` (see
+  `joedocs-issue-log`). Note the `kind`, `severity`, `found_in`, `component`,
+  the steps to reproduce and the evidence. An issue that is `done`,
+  `rejected` or `superseded` is not a source unless the user says so; for a
+  duplicate, plan from its `duplicate_of`.
 - **Combined sources:** build a traceability table and ask the user to resolve
   conflicts that change scope, behaviour, priority or acceptance.
 - **Direct requests:** restate the outcome and inspect enough of the repository
@@ -182,24 +204,56 @@ Use `search_documents` to find related material before planning, for example
 earlier plans touching the same area (`type: "plans"`, a `query` naming the
 component). Read what is relevant; cite it.
 
-## Step 4: unplanned ideas and reviews
+### Release plans
 
-When asked which ideas or reviews have no plan:
+A plan is a release plan when the user names a version (`plan 0.4.1`, `Version:
+0.4.1`) or the outcome is a release. Record it as `target_version` in the
+plan's front matter, then:
+
+1. **Issues targeted at the version.** `search_documents` with
+   `type: "issues"` and
+   `filters: {"target_version": "<version>", "status": {"in": ["draft", "review"]}}`
+   (page with `next_start`). Include every match as a source: read it (Step 3),
+   list it in `source_issues`, and trace each to at least one requirement. If
+   one should not be in the release, ask the user rather than drop it.
+2. **Open issues with no version.** `search_documents` with `type: "issues"`
+   and
+   `filters: {"target_version": {"exists": false}, "status": {"in": ["draft", "review"]}}`.
+   If there are any, show them as a table (ID, title, severity, component,
+   found in) and ask which, if any, to include in this release. Write nothing
+   before the user answers.
+3. **The chosen issues.** For each issue the user explicitly picks: read it,
+   then call `change_document_front_matter` with
+   `set: {"target_version": "<version>"}` and `expected_revision` (the revision
+   you read). Set no other key. On a `conflict`, read it again and retry once,
+   or report it. Then include it as in item 1. Issues the user does not pick
+   stay as they are.
+
+Report in the hand-off which issues were included, which were tagged with the
+version, and which unversioned issues were left out.
+
+## Step 4: unplanned ideas, reviews and issues
+
+When asked which ideas, reviews or issues have no plan:
 
 1. Ideas: `list_documents` with `type: "ideas"` and `status: "approved"`.
    Reviews: `search_documents` with `type: "reviews"` and
    `filters: {"status": "review", "actionable_issues": {"gt": 0}}`, the open
    reviews with Critical, Major, Medium or Low findings (as written by
-   `joedocs-code-review`). Page with `next_start`.
+   `joedocs-code-review`). Issues: `search_documents` with `type: "issues"`
+   and `filters: {"status": {"in": ["draft", "review"]}}`, the open issues (as
+   written by `joedocs-issue-log`). Page with `next_start`.
 2. For each candidate ID, `search_documents` with `type: "plans"` and
    `filters: {"source_ideas": {"contains": "<ID>"}, "status": {"ne": "rejected"}}`
-   (or `source_reviews` for a review). A candidate is planned only when such a
-   plan exists. Never infer coverage from similar titles.
+   (or `source_reviews` for a review, `source_issues` for an issue). A
+   candidate is planned only when such a plan exists. Never infer coverage
+   from similar titles.
 3. Read each candidate review to confirm its open findings; reviews with only
    Info findings are not candidates. Reviews written without the
    `actionable_issues` key need reading to classify.
-4. Report a table: type, ID, title, status or verdict, open findings, and why it
-   looks unplanned. Report malformed or ambiguous documents separately.
+4. Report a table: type, ID, title, status or verdict, open findings (or an
+   issue's severity and `target_version`), and why it looks unplanned. Report
+   malformed or ambiguous documents separately.
 5. If the user asks for a plan and exactly one candidate matches, plan it.
    Otherwise ask them to choose.
 
@@ -290,13 +344,15 @@ rejected, so **leave a key out** when it does not apply.
 ```yaml
 tags: [delivery-plan]
 plan_kind: initial              # initial | superseding
-request_kind: direct            # idea | review | idea-and-review | direct | unplanned-query
+request_kind: direct            # idea | review | idea-and-review | issue | mixed | direct | unplanned-query
 repository: owner/repo
 baseline_branch: main
 baseline_commit: <full HEAD hash>
 baseline_clean: true
 source_ideas: [JD-12]           # leave out when empty
 source_reviews: [JD-20]         # leave out when empty
+source_issues: [JD-21]          # leave out when empty
+target_version: "0.4.1"         # release plans only (a string)
 previous_plan: JD-25            # superseding plans only
 requirements_count: 4
 steps_count: 5
@@ -332,6 +388,7 @@ not apply.
 | Requirement | Source | Location | Interpretation |
 |---|---|---|---|
 | REQ-01 | Idea [[Idea title]] (JD-12 r3) | section "Scope" | ... |
+| REQ-02 | Issue [[Issue - Search hits report zero files]] (JD-21 r1) | section "Actual behaviour" | ... |
 
 ## 3. Repository baseline
 
