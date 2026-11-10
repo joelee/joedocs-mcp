@@ -828,3 +828,50 @@ async fn the_ungrant_route_needs_a_list_of_projects() -> TestResult<()> {
     );
     server.stop().await
 }
+
+#[tokio::test]
+async fn empty_query_values_are_values_not_omissions() -> TestResult<()> {
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let auth = server.auth(Some(&session));
+    let added = server
+        .send(
+            "POST",
+            "/admin/v1/projects",
+            &auth,
+            r#"{"name":"p","key":"P"}"#,
+        )
+        .await?;
+    assert_eq!(added.status, 200, "{:?}", added.json);
+    for (path, status) in [
+        ("/admin/v1/documents?project=p&type=", 400),
+        ("/admin/v1/documents?project=p&status=", 400),
+        ("/admin/v1/documents?project=p&limit=", 400),
+        ("/admin/v1/documents?project=", 404),
+        ("/admin/v1/documents?project=p", 200),
+        ("/admin/v1/archive?type=", 400),
+        ("/admin/v1/archive?project=", 404),
+        ("/admin/v1/audit?document=", 400),
+        ("/admin/v1/audit?start=", 400),
+    ] {
+        let reply = server.send("GET", path, &auth, "").await?;
+        assert_eq!(reply.status, status, "{path}: {:?}", reply.json);
+    }
+    // The log holds entries, but none has an empty key, tool or outcome.
+    for path in [
+        "/admin/v1/audit?key=",
+        "/admin/v1/audit?tool=",
+        "/admin/v1/audit?outcome=",
+    ] {
+        let reply = server.send("GET", path, &auth, "").await?;
+        assert_eq!(reply.status, 200, "{path}: {:?}", reply.json);
+        assert_eq!(reply.json["total"], 0, "{path}: {:?}", reply.json);
+    }
+    let all = server.send("GET", "/admin/v1/audit", &auth, "").await?;
+    assert!(
+        all.json["total"].as_u64().unwrap_or(0) > 0,
+        "{:?}",
+        all.json
+    );
+    server.stop().await
+}

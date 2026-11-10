@@ -740,6 +740,10 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// A raw query parameter from `uri`, where an empty value counts as absent:
+/// kept for `version` and `archive` on `GET /admin/v1/documents/{id}`, whose
+/// empty value has meant "not given" since 0.4.0. Everything else uses
+/// [`present`].
 fn query(uri: &axum::http::Uri, name: &str) -> Option<String> {
     uri.query()?.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=')?;
@@ -747,9 +751,20 @@ fn query(uri: &axum::http::Uri, name: &str) -> Option<String> {
     })
 }
 
-/// A query parameter from `uri`, percent-decoded.
+/// The raw value of query parameter `name` when it is present, even empty
+/// (`name=`): an empty value is a value, which the store refuses or matches
+/// as it does locally. A pair without `=` counts as absent.
+fn present(uri: &axum::http::Uri, name: &str) -> Option<String> {
+    uri.query()?.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name).then(|| value.to_owned())
+    })
+}
+
+/// A query parameter from `uri`, percent-decoded; present but empty is
+/// `Some("")`.
 fn decoded(uri: &axum::http::Uri, name: &str) -> Option<String> {
-    query(uri, name).map(|value| percent_decode(&value))
+    present(uri, name).map(|value| percent_decode(&value))
 }
 
 /// A number query parameter, or `invalid_argument`.
@@ -1059,7 +1074,7 @@ async fn document(state: Arc<ApiState>, call: Call, id: String, uri: axum::http:
             );
             return Ok(response);
         }
-        if let Some(part) = query(&uri, "part") {
+        if let Some(part) = present(&uri, "part") {
             let part = percent_decode(&part);
             let markdown =
                 crate::admin::fetch_file(store, &id, &part, version).map_err(|e| from_crate(&e))?;

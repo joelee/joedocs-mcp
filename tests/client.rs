@@ -526,7 +526,7 @@ fn same_archive(local: &Local, server: &Server) -> std::io::Result<()> {
 /// The commands `remote_commands_print_what_local_commands_print` runs both
 /// ways, in order: later steps see what earlier ones changed.
 fn parity_steps() -> Vec<Vec<&'static str>> {
-    vec![
+    let mut steps = vec![
         vec!["project", "list"],
         vec!["project", "add", "other", "--key", "OT", "--title", "Other"],
         vec!["project", "add", "other", "--key", "OT"],
@@ -616,6 +616,29 @@ fn parity_steps() -> Vec<Vec<&'static str>> {
         vec!["list", "-p", "joedocs", "--sort", "title"],
         vec!["list", "-p", "joedocs", "-j", "--sort", "title"],
         vec!["search", "first", "-d", "JD-1"],
+    ];
+    steps.extend(empty_value_steps());
+    steps
+}
+
+/// Steps that pass an option as `""`: an empty value is a value, which
+/// reaches the store remotely as it does locally.
+fn empty_value_steps() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["list", "-p", "joedocs", "-t", ""],
+        vec!["list", "-p", "joedocs", "-s", ""],
+        vec!["list", "-p", ""],
+        vec!["history", "JD-1", "-P", ""],
+        vec!["diff", "JD-1", "--from", "1", "-P", ""],
+        vec!["history", "JD-3", "-P", ""],
+        vec!["audit", "-k", ""],
+        vec!["audit", "--tool", ""],
+        vec!["audit", "--outcome", ""],
+        vec!["audit", "-d", ""],
+        vec!["archive", "list", "-t", ""],
+        vec!["archive", "list", "-p", ""],
+        vec!["get", "JD-1", "--part", ""],
+        vec!["get", "JD-3", "--part", ""],
     ]
 }
 
