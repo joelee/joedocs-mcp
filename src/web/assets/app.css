@@ -274,6 +274,14 @@ pre.token { background: var(--surface); white-space: pre-wrap; overflow-wrap: an
 .actions-menu summary::-webkit-details-marker { display: none; }
 .actions-menu .menu { position: absolute; z-index: 5; margin-top: var(--space-1); display: grid; gap: var(--space-2); min-width: 14rem; padding: var(--space-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
 
+/* Maintenance */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); margin-bottom: var(--space-4); }
+.panel h2 { margin-top: 0; }
+.report { margin-top: var(--space-3); }
+.report h3.ok { color: var(--ok); }
+.report h3.bad { color: var(--bad); }
+pre.report-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Audit */
 .quick-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
 .quick-filters a { padding: var(--space-1) var(--space-3); border: 1px solid var(--border); border-radius: 999px; background: var(--surface); text-decoration: none; font-size: var(--text-sm); }

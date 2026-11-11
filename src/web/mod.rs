@@ -40,6 +40,10 @@
 //! | `POST /admin/documents/{id}/convert` | `admin:document.convert` |
 //! | `POST /admin/documents/{id}/move-file` | `admin:document.move_file` |
 //! | `POST /admin/documents/{id}/restore-file` | `admin:document.restore_file` |
+//! | `GET /admin/maintenance` | `admin:web.maintenance_page` |
+//! | `POST /admin/maintenance/check` | `admin:check` |
+//! | `POST /admin/maintenance/reindex` | `admin:reindex` |
+//! | `POST /admin/maintenance/backup` | `admin:backup` |
 //! | any other path under `/admin/` | `admin:web.unknown` |
 //!
 //! Only `/admin/` is a stable entry point; other page paths, the HTML and
@@ -162,6 +166,10 @@ pub(crate) enum Route {
     DocumentConvert(String),
     FileMove(String),
     FileRestore(String),
+    Maintenance,
+    Check,
+    Reindex,
+    Backup,
     Unknown,
 }
 
@@ -203,6 +211,10 @@ impl Route {
             ("/admin/keys", _) if post => Self::KeysCreate,
             ("/admin/audit", _) if get => Self::Audit,
             ("/admin/archive", _) if get => Self::ArchiveList,
+            ("/admin/maintenance", _) if get => Self::Maintenance,
+            ("/admin/maintenance/check", _) if post => Self::Check,
+            ("/admin/maintenance/reindex", _) if post => Self::Reindex,
+            ("/admin/maintenance/backup", _) if post => Self::Backup,
             (_, ["archive", id, "restore"]) if post && !id.is_empty() => {
                 Self::ArchiveRestore(percent_decode(id))
             }
@@ -256,6 +268,10 @@ impl Route {
             Self::DocumentConvert(_) => "admin:document.convert",
             Self::FileMove(_) => "admin:document.move_file",
             Self::FileRestore(_) => "admin:document.restore_file",
+            Self::Maintenance => "admin:web.maintenance_page",
+            Self::Check => "admin:check",
+            Self::Reindex => "admin:reindex",
+            Self::Backup => "admin:backup",
             Self::Unknown => "admin:web.unknown",
         }
     }
@@ -402,6 +418,28 @@ impl WebError {
         Self::new(status, code, message)
     }
 
+    /// The refusal for a failed command: a store error as its own, a
+    /// backup the user can fix as invalid, anything else as internal.
+    pub(crate) fn from_crate(error: &crate::Error) -> Self {
+        match error {
+            crate::Error::Store(error) => Self::from_store(error),
+            crate::Error::Archived(id) => Self::from_store(&store::Error::Archived(id.clone())),
+            crate::Error::Backup(inner) if inner.is_user_error() => Self::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                error.to_string(),
+            ),
+            other => {
+                tracing::error!(error = %other, "web interface command failed");
+                Self::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    "internal error",
+                )
+            }
+        }
+    }
+
     /// Shows `page` instead of the error page.
     pub(crate) fn with_page(mut self, page: Response) -> Self {
         self.page = Some(Box::new(page));
@@ -503,6 +541,9 @@ async fn run(
     checked: Result<(), WebError>,
 ) -> Response {
     let csp = state.csp.clone();
+    if matches!(route, Route::Backup) && checked.is_ok() {
+        return secured(backup(state, request).await, &csp);
+    }
     let task = tokio::task::spawn_blocking(move || {
         let Ok(mut store) = state.shared.store().lock() else {
             return WebError::new(
@@ -538,6 +579,49 @@ async fn run(
     secured(response, &csp)
 }
 
+/// `POST /admin/maintenance/backup`: the admin API's backup download
+/// (`backup_download`), so the archive is compressed without holding the
+/// store and other requests are answered meanwhile; saved as a file.
+async fn backup(state: Arc<WebState>, request: WebRequest) -> Response {
+    let operation = Route::Backup.operation();
+    let task = tokio::task::spawn_blocking(move || {
+        crate::mcp::backup_download(
+            &state.shared,
+            |store| {
+                signed_in(store, &state, &request)
+                    .map(|session| session.admin)
+                    .map_err(|refusal| {
+                        let (who, refused) = *refusal;
+                        write_audit(store, who.as_ref(), operation, refused.code);
+                        Box::new(refused.into_response())
+                    })
+            },
+            |error| {
+                let refused = WebError::from_crate(error);
+                (refused.code, refused.into_response())
+            },
+            |store, admin, outcome| write_audit(store, Some(admin), operation, outcome),
+            || {},
+        )
+    });
+    let mut response = task.await.unwrap_or_else(|error| {
+        tracing::error!(%error, "web interface backup task failed");
+        WebError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "internal error",
+        )
+        .into_response()
+    });
+    if response.status() == StatusCode::OK {
+        response.headers_mut().insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment; filename=\"joedocs-backup.tgz\""),
+        );
+    }
+    response
+}
+
 /// Checks the session and, for a `POST`, the same-origin rule and the CSRF
 /// token, then runs the page. Returns who made the request, when known.
 fn handle(
@@ -549,33 +633,46 @@ fn handle(
     match route.access() {
         Access::Public => (None, pages::public(state, route, request)),
         Access::Login => pages::login::submit(store, state, request),
-        Access::Session => {
-            let session = match open_session(store, request) {
-                Ok(session) => session,
-                Err(refused) => return (None, Err(refused)),
-            };
-            let who = Some(session.admin.clone());
-            if request.method == Method::POST {
-                if !session::same_origin(&request.headers, &state.allowed_origins) {
-                    return (
-                        who,
-                        Err(WebError::forbidden(
-                            "this form was not sent from this site; reload the page and try again",
-                        )),
-                    );
-                }
-                if !session::csrf_matches(&session.token, request.form("csrf")) {
-                    return (
-                        who,
-                        Err(WebError::forbidden(
-                            "this form has expired; reload the page and try again",
-                        )),
-                    );
-                }
+        Access::Session => match signed_in(store, state, request) {
+            Ok(session) => (
+                Some(session.admin.clone()),
+                pages::page(store, state, route, request, &session),
+            ),
+            Err(refusal) => {
+                let (who, refused) = *refusal;
+                (who, Err(refused))
             }
-            (who, pages::page(store, state, route, request, &session))
+        },
+    }
+}
+
+/// The session of a request for a signed-in page and, for a `POST`, the
+/// same-origin rule and the CSRF token. A refusal says who asked, when
+/// the session was valid.
+fn signed_in(
+    store: &Store,
+    state: &WebState,
+    request: &WebRequest,
+) -> Result<Session, Box<(Option<AdminTokenRow>, WebError)>> {
+    let session = open_session(store, request).map_err(|refused| Box::new((None, refused)))?;
+    if request.method == Method::POST {
+        let who = Some(session.admin.clone());
+        if !session::same_origin(&request.headers, &state.allowed_origins) {
+            return Err(Box::new((
+                who,
+                WebError::forbidden(
+                    "this form was not sent from this site; reload the page and try again",
+                ),
+            )));
+        }
+        if !session::csrf_matches(&session.token, request.form("csrf")) {
+            return Err(Box::new((
+                who,
+                WebError::forbidden("this form has expired; reload the page and try again"),
+            )));
         }
     }
+    Ok(session)
 }
 
 /// The request's web session, or a refusal that sends the browser to the

@@ -8,6 +8,7 @@ mod documents;
 mod history;
 mod keys;
 pub(crate) mod login;
+pub(crate) mod maintenance;
 mod overview;
 mod projects;
 mod search;
@@ -204,6 +205,9 @@ pub(crate) fn page(
         Route::DocumentConvert(id) => document::convert(store, session, id),
         Route::FileMove(id) => document::move_file(store, request, session, id),
         Route::FileRestore(id) => document::restore_file(store, request, session, id),
+        Route::Maintenance => maintenance::page(store, session),
+        Route::Check => maintenance::check(store, session),
+        Route::Reindex => maintenance::reindex(store, session),
         _ => Err(WebError::new(
             StatusCode::NOT_FOUND,
             "not_found",

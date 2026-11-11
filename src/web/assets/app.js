@@ -139,6 +139,25 @@
     }
   };
 
+  // A form marked `data-busy` shows it is working: its button is disabled
+  // and says so until the next page arrives.
+  document.addEventListener("submit", (event) => {
+    const form = event.target instanceof HTMLFormElement ? event.target : null;
+    if (!form || !form.dataset.busy) {
+      return;
+    }
+    const button = form.querySelector("button[type=submit]");
+    if (button) {
+      button.setAttribute("aria-busy", "true");
+      button.textContent = form.dataset.busy;
+      // Disabled after this tick, so the submission itself goes ahead.
+      setTimeout(() => {
+        button.disabled = true;
+      });
+    }
+    announce(form.dataset.busy);
+  });
+
   drawDiagrams(document);
 
   // After htmx swaps a region in, move focus there so keyboard and

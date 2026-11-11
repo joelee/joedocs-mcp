@@ -128,6 +128,25 @@ impl Reply {
     }
 }
 
+/// A `Transfer-Encoding: chunked` body without its chunk framing.
+fn dechunk(mut raw: &[u8]) -> TestResult<Vec<u8>> {
+    let mut body = Vec::new();
+    loop {
+        let line_end = raw
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or("no chunk size")?;
+        let size_text = std::str::from_utf8(&raw[..line_end])?;
+        let size = usize::from_str_radix(size_text.split(';').next().unwrap_or("").trim(), 16)?;
+        raw = &raw[line_end + 2..];
+        if size == 0 {
+            return Ok(body);
+        }
+        body.extend_from_slice(raw.get(..size).ok_or("short chunk")?);
+        raw = raw.get(size + 2..).ok_or("no chunk end")?;
+    }
+}
+
 /// Encodes `pairs` as a form body.
 fn form(pairs: &[(&str, &str)]) -> String {
     let mut out = form_urlencoded::Serializer::new(String::new());
@@ -179,7 +198,13 @@ impl Server {
             .position(|w| w == b"\r\n\r\n")
             .ok_or("no header end")?;
         let head = String::from_utf8_lossy(&raw[..end]).into_owned();
-        let bytes = raw[end + 4..].to_vec();
+        let mut bytes = raw[end + 4..].to_vec();
+        if head
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked")
+        {
+            bytes = dechunk(&bytes)?;
+        }
         let status = head.split(' ').nth(1).ok_or("no status")?.parse()?;
         Ok(Reply {
             status,
@@ -2669,5 +2694,140 @@ async fn restore_file_brings_back_a_file_as_at_a_revision() -> TestResult<()> {
         )
         .await?;
     assert_eq!(bad.status, 400);
+    server.stop().await
+}
+
+// --- STEP-12: maintenance ----------------------------------------------------------
+
+#[tokio::test]
+async fn check_reports_problems_with_the_advice_joedocs_check_prints() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let page = server.get("/admin/maintenance", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    for expected in [
+        "action=\"/admin/maintenance/check\"",
+        "joedocs admin-token create",
+        "joedocs backup --restore",
+        "docs/deployment.md",
+    ] {
+        assert!(page.body.contains(expected), "{expected}: {}", page.body);
+    }
+    let clean = server
+        .post_form("/admin/maintenance/check", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(clean.status, 200, "{}", clean.body);
+    assert!(clean.body.contains("No problems found."), "{}", clean.body);
+    assert!(clean.body.contains("0 problems"), "{}", clean.body);
+
+    let plan = server
+        .dir
+        .path()
+        .join("vault/joedocs/plans/Rollout plan.md");
+    let mut text = std::fs::read_to_string(&plan)?;
+    text.push_str("\nEdited by hand.\n");
+    std::fs::write(&plan, text)?;
+    let drifted = server
+        .post_form("/admin/maintenance/check", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(drifted.status, 200, "{}", drifted.body);
+    for expected in [
+        "1 problem",
+        "Vault files that are missing or differ from the history",
+        "JD-1  joedocs/plans/Rollout plan.md",
+        "restore --source=HEAD",
+    ] {
+        assert!(
+            drifted.body.contains(&escaped(expected)),
+            "{expected}: {}",
+            drifted.body
+        );
+    }
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    assert!(tools.iter().any(|t| t == "admin:check"), "{tools:?}");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn reindex_needs_its_confirmation_and_shows_its_report() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let page = server.get("/admin/maintenance", Some(&cookie)).await?;
+    for expected in [
+        "data-dialog-open=\"reindex-dialog\"",
+        "<dialog id=\"reindex-dialog\"",
+        "action=\"/admin/maintenance/reindex\"",
+        "data-busy=",
+    ] {
+        assert!(page.body.contains(expected), "{expected}: {}", page.body);
+    }
+    let refused = server
+        .post_form("/admin/maintenance/reindex", &cookie, None, &[])
+        .await?;
+    assert_eq!(refused.status, 403);
+    let rebuilt = server
+        .post_form("/admin/maintenance/reindex", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(rebuilt.status, 200, "{}", rebuilt.body);
+    assert!(
+        rebuilt
+            .body
+            .contains("Rebuilt the index from the history: 4 documents (1 archived)"),
+        "{}",
+        rebuilt.body
+    );
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    assert!(tools.iter().any(|t| t == "admin:reindex"), "{tools:?}");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn a_backup_downloads_with_a_readable_manifest() -> TestResult<()> {
+    use std::io::Read as _;
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let page = server.get("/admin/maintenance", Some(&cookie)).await?;
+    assert!(page.body.contains("4 documents"), "{}", page.body);
+    let refused = server
+        .post_form("/admin/maintenance/backup", &cookie, None, &[])
+        .await?;
+    assert_eq!(refused.status, 403);
+    let backup = server
+        .post_form("/admin/maintenance/backup", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(backup.status, 200, "{}", backup.body);
+    assert_eq!(backup.header("content-type"), Some("application/gzip"));
+    assert_eq!(
+        backup.header("content-disposition"),
+        Some("attachment; filename=\"joedocs-backup.tgz\"")
+    );
+    let documents = backup
+        .header("joedocs-documents")
+        .ok_or("no count")?
+        .to_owned();
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(backup.bytes.as_slice()));
+    let mut manifest = None;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if entry.path()?.to_string_lossy() == "manifest.json" {
+            let mut text = String::new();
+            entry.read_to_string(&mut text)?;
+            manifest = Some(serde_json::from_str::<serde_json::Value>(&text)?);
+        }
+    }
+    let manifest = manifest.ok_or("no manifest.json")?;
+    assert_eq!(manifest["documents"].to_string(), documents);
+    let rows = server.audit()?;
+    let backups: Vec<_> = rows
+        .iter()
+        .filter(|(t, _, _)| t == "admin:backup")
+        .collect();
+    assert_eq!(backups.len(), 2, "{rows:?}");
+    assert_eq!(backups[0].2, "forbidden");
+    assert_eq!(backups[1].2, "ok");
+    assert!(backups.iter().all(|(_, client, _)| client == "joedocs-web"));
     server.stop().await
 }

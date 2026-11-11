@@ -616,7 +616,11 @@ pub fn check(store: &Store, out: &mut dyn Write) -> Result<(), Error> {
     }
 }
 
-fn report_check(report: &CheckReport, paths: &Paths, out: &mut dyn Write) -> Result<(), Error> {
+pub(crate) fn report_check(
+    report: &CheckReport,
+    paths: &Paths,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
     if report.index_behind {
         writeln!(
             out,

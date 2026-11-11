@@ -29,7 +29,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 pub use admin_api::{AdminOptions, BODY_LIMIT, SESSION_HEADER};
-pub(crate) use admin_api::{classify, host_allowed, strip_port};
+pub(crate) use admin_api::{backup_download, classify, host_allowed, strip_port};
 pub use auth::Caller;
 pub use errors::ToolError;
 pub use tools::JoeDocsServer;
