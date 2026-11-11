@@ -1481,6 +1481,128 @@ fn sessions_expire_belong_to_their_token_and_end_with_it() {
     ));
 }
 
+// --- Web sessions (JD-32 STEP-02) ---------------------------------------------
+
+#[test]
+fn web_sessions_and_api_sessions_are_kept_apart() {
+    use secrecy::ExposeSecret as _;
+    let mut fx = fixture();
+    let created = fx
+        .store
+        .create_admin_token("laptop", &CountingRandom(40))
+        .unwrap();
+    let code = admin_code(&fx, &created, 0);
+    let web = fx
+        .store
+        .web_login(&created.token, &code, 8, &OsRandom)
+        .unwrap();
+    assert!(web.token.expose_secret().starts_with("jdw_"));
+    let checked = fx.store.web_session(&web.token).unwrap();
+    assert_eq!(checked.admin.name, "laptop");
+    assert_eq!(checked.expires_at, web.expires_at);
+    // A web session does not work as an API session, with or without the
+    // admin token.
+    assert!(matches!(
+        fx.store.admin_session(&created.token, &web.token),
+        Err(Error::AdminRefused(AdminRefusal::NoSession))
+    ));
+    // An API session does not work as a web session.
+    fx.clock.advance(60);
+    let code = admin_code(&fx, &created, 0);
+    let api = fx
+        .store
+        .admin_login(&created.token, &code, 8, &OsRandom)
+        .unwrap();
+    assert!(matches!(
+        fx.store.web_session(&api.token),
+        Err(Error::AdminRefused(AdminRefusal::NoSession))
+    ));
+    // Even with a web prefix, an API session's ID and secret are refused.
+    let disguised =
+        secrecy::SecretString::from(api.token.expose_secret().replacen("jds_", "jdw_", 1));
+    assert!(fx.store.web_session(&disguised).is_err());
+}
+
+#[test]
+fn web_logins_share_the_lockout() {
+    let mut fx = fixture();
+    let created = fx
+        .store
+        .create_admin_token("laptop", &CountingRandom(40))
+        .unwrap();
+    for _ in 0..MAX_FAILED_LOGINS {
+        assert!(matches!(
+            fx.store.web_login(&created.token, "000000", 8, &OsRandom),
+            Err(Error::AdminRefused(AdminRefusal::Unauthorized))
+        ));
+    }
+    let code = admin_code(&fx, &created, 0);
+    assert!(matches!(
+        fx.store.web_login(&created.token, &code, 8, &OsRandom),
+        Err(Error::AdminRefused(AdminRefusal::Locked { .. }))
+    ));
+    assert!(matches!(
+        fx.store.admin_login(&created.token, &code, 8, &OsRandom),
+        Err(Error::AdminRefused(AdminRefusal::Locked { .. }))
+    ));
+}
+
+#[test]
+fn web_sessions_expire_end_and_die_with_their_token() {
+    use secrecy::ExposeSecret as _;
+    let mut fx = fixture();
+    let created = fx
+        .store
+        .create_admin_token("laptop", &CountingRandom(40))
+        .unwrap();
+    let code = admin_code(&fx, &created, 0);
+    let first = fx
+        .store
+        .web_login(&created.token, &code, 1, &OsRandom)
+        .unwrap();
+    fx.clock.advance(3600);
+    assert!(matches!(
+        fx.store.web_session(&first.token),
+        Err(Error::AdminRefused(AdminRefusal::SessionExpired))
+    ));
+
+    fx.clock.advance(60);
+    let code = admin_code(&fx, &created, 0);
+    let second = fx
+        .store
+        .web_login(&created.token, &code, 8, &OsRandom)
+        .unwrap();
+    // A tampered secret is refused.
+    let mut tampered = second.token.expose_secret().to_owned();
+    let last = if tampered.ends_with('0') { "1" } else { "0" };
+    tampered.replace_range(tampered.len() - 1.., last);
+    assert!(matches!(
+        fx.store.web_session(&secrecy::SecretString::from(tampered)),
+        Err(Error::AdminRefused(AdminRefusal::NoSession))
+    ));
+    assert!(matches!(
+        fx.store
+            .web_session(&secrecy::SecretString::from("nonsense".to_owned())),
+        Err(Error::AdminRefused(AdminRefusal::NoSession))
+    ));
+    // Signing out ends it; ending it again, or an unknown one, is refused.
+    assert_eq!(
+        fx.store.end_web_session(&second.token).unwrap().name,
+        "laptop"
+    );
+    assert!(fx.store.web_session(&second.token).is_err());
+    assert!(fx.store.end_web_session(&second.token).is_err());
+
+    fx.clock.advance(60);
+    let code = admin_code(&fx, &created, 0);
+    let third = fx
+        .store
+        .web_login(&created.token, &code, 8, &OsRandom)
+        .unwrap();
+    fx.store.revoke_admin_token("laptop").unwrap();
+    assert!(fx.store.web_session(&third.token).is_err());
+}
+
 // --- State permissions (JD-10 STEP-01) ----------------------------------------
 
 fn mode_of(path: &Path) -> u32 {

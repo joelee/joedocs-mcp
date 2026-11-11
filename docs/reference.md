@@ -292,6 +292,7 @@ Server keys come first in a fixed order, then custom keys in the order they were
 | 3 | `0003_search` | the search index |
 | 4 | `0004_admin` (0.3.0) | admin tokens, with their TOTP secrets, and admin sessions |
 | 5 | `0005_files` (0.4.0) | multi-file documents: the sub-files of each document, the files each revision changed, and sub-file search entries |
+| 6 | `0006_web_sessions` (0.5.0) | a kind on each admin session: `api` (opened by `joedocs login`) or `web` (opened by the web interface); neither is accepted in place of the other |
 
 The index (documents, files, revisions and search) is rebuilt from the history whenever it was built by a build with another index layout: 0.4.0 changes the layout, so its first `serve` runs `reindex` once.
 

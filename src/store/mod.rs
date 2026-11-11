@@ -45,7 +45,7 @@ use std::sync::Arc;
 
 pub use admin_files::MovedFile;
 pub use admin_tokens::{
-    AdminRefusal, CreatedAdminToken, LOCK_SECONDS, MAX_FAILED_LOGINS, OpenedSession,
+    AdminRefusal, CreatedAdminToken, LOCK_SECONDS, MAX_FAILED_LOGINS, OpenedSession, WebSession,
 };
 pub use archive::ArchivedInfo;
 pub use audit::{AuditPage, AuditRequest, MAX_AUDIT_LIMIT};

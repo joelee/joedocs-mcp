@@ -100,6 +100,10 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.4.3 to 0.5.0
+
+- **Migration 6** runs on the first start: admin sessions gain a kind, `api` (from `joedocs login`) or `web` (from the web interface), and every existing session becomes `api`, so `joedocs login` sessions keep working. **Take the backup in step 1 first:** going back to 0.4.3 means restoring it, because 0.4.3 refuses a version 6 database.
+
 ### 0.4.2 to 0.4.3
 
 - **No migration**, and no configuration change: install the new version and restart, as in steps 2 and 3. Going back to 0.4.2 needs no restore.
