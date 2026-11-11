@@ -445,6 +445,58 @@ pub fn last_change_at(conn: &Connection) -> rusqlite::Result<Option<String>> {
     })
 }
 
+/// The live document whose title, or one of whose aliases, is `target`
+/// (ignoring case), for a wiki link. A document in `project` wins, then a
+/// title over an alias, then the oldest.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn find_by_title(
+    conn: &Connection,
+    project: &str,
+    target: &str,
+) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT d.id FROM documents d JOIN projects p ON p.id = d.project_id
+         WHERE d.archived_at IS NULL
+           AND (d.title = ?2 COLLATE NOCASE
+                OR EXISTS (SELECT 1 FROM doc_fields f
+                           WHERE f.document_id = d.id AND f.file_id IS NULL
+                             AND f.key = 'aliases' AND f.value = ?2))
+         ORDER BY p.name = ?1 DESC, d.title = ?2 COLLATE NOCASE DESC, d.project_id, d.seq
+         LIMIT 1",
+        [project, target],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// The live files of `document_id` whose path is `target`, or ends with
+/// `/<target>` (ignoring case), for a wiki link.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn find_files(
+    conn: &Connection,
+    document_id: &str,
+    target: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let escaped = target
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let mut stmt = conn.prepare(
+        "SELECT path FROM document_files
+         WHERE document_id = ?1 AND archived_at IS NULL
+           AND (path = ?2 COLLATE NOCASE OR path LIKE '%/' || ?3 ESCAPE '\\')
+         ORDER BY path",
+    )?;
+    let rows = stmt.query_map([document_id, target, &escaped], |row| row.get(0))?;
+    rows.collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-11
+
+An admin web interface: the server's administrators can browse, search and read documents, and do what the admin commands do, in a browser.
+
+### Added
+
+- The admin web interface under `/admin/`, served by `joedocs serve` when `admin.enabled` and the new `admin.web_ui` are on: an Overview of the server; the document library; a document view that renders Obsidian-style Markdown on the server (callouts, wiki links, tags, highlights, task lists, footnotes, an "On this page" list, Mermaid diagrams drawn by the bundled Pele, PlantUML diagrams from a configured server) with its properties, files, revisions, History, diffs and `.md` and `.tgz` downloads; Search with every filter of `joedocs search`, reloading as you type; Projects; API keys, with a new or rotated token shown once; the Audit log with its filters and quick filters; the Archive; Maintenance (check, reindex, backup download); and `document convert`, `move-file` and `restore-file`. Every change asks for confirmation and is written with the admin token's name and client `joedocs-web`; document content stays read-only in the browser.
+- Signing in with an admin token and a TOTP code opens a web-only session (`jdw_...`) in an `HttpOnly`, `SameSite=Strict` cookie, `__Host-` and `Secure` over HTTPS; plain HTTP is accepted only on `localhost`. Forms need the session's CSRF token and the same origin, pages carry a strict Content-Security-Policy, and every page and form request writes one audit row.
+- The keys `admin.web_ui` (default `false`) and `admin.web_plantuml_url` (default empty; a PlantUML server the admin's browser fetches diagrams from, which then receives their text).
+- `joedocs serve` prints `JoeDocs web interface: http://<bind>/admin/` when it is on; `joedocs status` and `joedocs agents` say whether it is on; the `status` JSON gains `web_ui_enabled`.
+
+### Changed
+
+- The database is version 6 (migration `0006_web_sessions`): admin sessions have a kind, `api` or `web`, and neither is accepted in place of the other. Existing `joedocs login` sessions keep working. Going back to 0.4.3 needs the backup taken before upgrading.
+
 ## [0.4.3] - 2026-11-10
 
 Prebuilt, checksummed and attested binaries on GitHub Releases, plain logs off a terminal, clearer `get -f` errors, and the unused example secret removed.
@@ -180,7 +195,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/joelee/joedocs-mcp/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/joelee/joedocs-mcp/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/joelee/joedocs-mcp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/joelee/joedocs-mcp/compare/v0.4.0...v0.4.1

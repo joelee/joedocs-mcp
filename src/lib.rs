@@ -33,6 +33,7 @@ pub mod status;
 pub mod store;
 pub mod systemd;
 pub mod totp;
+pub mod web;
 
 use std::io::{self, Write};
 use std::sync::Arc;

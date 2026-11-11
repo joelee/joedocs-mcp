@@ -31,6 +31,7 @@ mod files;
 mod folders;
 mod index_file;
 mod journal;
+mod links;
 mod registry;
 mod reindex;
 mod revisions;
@@ -45,7 +46,7 @@ use std::sync::Arc;
 
 pub use admin_files::MovedFile;
 pub use admin_tokens::{
-    AdminRefusal, CreatedAdminToken, LOCK_SECONDS, MAX_FAILED_LOGINS, OpenedSession,
+    AdminRefusal, CreatedAdminToken, LOCK_SECONDS, MAX_FAILED_LOGINS, OpenedSession, WebSession,
 };
 pub use archive::ArchivedInfo;
 pub use audit::{AuditPage, AuditRequest, MAX_AUDIT_LIMIT};

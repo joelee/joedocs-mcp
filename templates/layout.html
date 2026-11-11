@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block body %}
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="shell">
+  <header class="topbar">
+    <a class="brand" href="/admin/">JoeDocs</a>
+    <form class="topbar-search" method="get" action="/admin/search" role="search">
+      <label for="global-search" class="visually-hidden">Search documents</label>
+      <input id="global-search" name="q" type="search" placeholder="Search documents" value="{{ chrome.query }}" autocomplete="off">
+    </form>
+    <button type="button" class="icon-button" data-theme-toggle aria-label="Switch between light and dark themes" title="Light or dark">
+      <svg class="icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg>
+    </button>
+    <details class="session-menu">
+      <summary><span class="visually-hidden">Session: </span>{{ chrome.admin }}</summary>
+      <div class="menu">
+        <p>Signed in as <strong>{{ chrome.admin }}</strong></p>
+        <p class="hint">Session ends {{ chrome.expires_at }}</p>
+        <form method="post" action="/admin/logout">
+          <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+          <button type="submit" class="secondary">Sign out</button>
+        </form>
+      </div>
+    </details>
+  </header>
+  <nav class="sidenav" aria-label="Main">
+    <ul>
+      {% for item in chrome.nav %}
+      <li><a href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+  <main id="main" tabindex="-1">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<div class="visually-hidden" aria-live="polite" id="live-region"></div>
+{% endblock %}

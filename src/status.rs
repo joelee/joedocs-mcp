@@ -39,6 +39,10 @@ pub struct StatusReport {
     pub system_unit: UnitState,
     /// Whether the remote admin API is served (`admin.enabled`).
     pub admin_enabled: bool,
+    /// Whether the admin web interface is served (`admin.web_ui`, with
+    /// `admin.enabled`). Absent from a 0.4.x server's report: off.
+    #[serde(default)]
+    pub web_ui_enabled: bool,
     /// `storage.home`.
     pub vault: DirSize,
     /// `storage.state_dir`.
@@ -104,6 +108,7 @@ pub fn collect(
         loaded.resolved.file.clone(),
         loaded.config().server.bind,
         loaded.config().admin.enabled,
+        loaded.config().admin.enabled && loaded.config().admin.web_ui,
         services,
     )
 }
@@ -119,6 +124,7 @@ pub fn collect_parts(
     config_file: Option<PathBuf>,
     bind: SocketAddr,
     admin_enabled: bool,
+    web_ui_enabled: bool,
     services: &dyn ServiceManager,
 ) -> Result<StatusReport, Error> {
     let paths = store.paths();
@@ -140,6 +146,7 @@ pub fn collect_parts(
         user_unit: unit_state(services, true),
         system_unit: unit_state(services, false),
         admin_enabled,
+        web_ui_enabled,
         vault: dir_size(&paths.home),
         state: dir_size(&paths.state_dir),
         database_bytes,
@@ -330,6 +337,12 @@ pub fn render(report: &StatusReport, out: &mut dyn Write) -> Result<(), Error> {
         "disabled ([admin] enabled = false)"
     };
     let _ = writeln!(text, "  admin API: {admin}");
+    let web = if report.web_ui_enabled {
+        "enabled, under /admin/"
+    } else {
+        "disabled ([admin] web_ui = false)"
+    };
+    let _ = writeln!(text, "  web interface: {web}");
     let _ = writeln!(text, "\nStorage");
     let _ = writeln!(text, "  vault: {}", describe_dir(&report.vault));
     let _ = writeln!(text, "  state: {}", describe_dir(&report.state));
@@ -554,6 +567,7 @@ mod tests {
             },
             system_unit: UnitState::NotInstalled,
             admin_enabled: false,
+            web_ui_enabled: false,
             vault: DirSize {
                 path: "/v".into(),
                 bytes: 2048,
@@ -592,6 +606,7 @@ mod tests {
             "user unit joedocs.service: active, MainPID 12",
             "system unit joedocs.service: not installed",
             "admin API: disabled",
+            "web interface: disabled",
             "vault: /v (2.0 KiB, 2048 bytes, 3 files)",
             "history head: none (no commits yet)",
             "index: behind the history",
@@ -616,5 +631,61 @@ mod tests {
             describe_unit(&UnitState::Unavailable),
             "systemctl not available"
         );
+    }
+
+    #[test]
+    fn the_report_says_whether_the_web_interface_is_on() {
+        let report = StatusReport {
+            version: "9.9.9".into(),
+            host: "box".into(),
+            config_file: None,
+            bind: "127.0.0.1:8750".parse().unwrap(),
+            health: Health::Ok,
+            user_unit: UnitState::Unavailable,
+            system_unit: UnitState::Unavailable,
+            admin_enabled: true,
+            web_ui_enabled: true,
+            vault: DirSize {
+                path: "/v".into(),
+                bytes: 0,
+                files: 0,
+            },
+            state: DirSize {
+                path: "/s".into(),
+                bytes: 0,
+                files: 0,
+            },
+            database_bytes: 0,
+            history: DirSize {
+                path: "/s/history.git".into(),
+                bytes: 0,
+                files: 0,
+            },
+            store: Summary {
+                projects: Vec::new(),
+                keys_active: 0,
+                keys_revoked: 0,
+                admin_tokens_active: 0,
+                admin_tokens_revoked: 0,
+                history_head: None,
+                last_change: None,
+                index_current: true,
+                stale_index_files: Vec::new(),
+            },
+        };
+        let mut out = Vec::new();
+        render(&report, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("  web interface: enabled, under /admin/\n"),
+            "{text}"
+        );
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["web_ui_enabled"], true);
+        // A 0.4.x server sends no such field: it reads as off.
+        let mut older = json;
+        older.as_object_mut().unwrap().remove("web_ui_enabled");
+        let parsed: StatusReport = serde_json::from_value(older).unwrap();
+        assert!(!parsed.web_ui_enabled);
     }
 }

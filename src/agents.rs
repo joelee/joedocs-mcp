@@ -29,6 +29,8 @@ pub struct Facts {
     pub service: String,
     /// Whether the remote admin API is served.
     pub admin: String,
+    /// Whether the admin web interface is served.
+    pub web: String,
 }
 
 impl Facts {
@@ -53,6 +55,11 @@ impl Facts {
                 "enabled (`[admin] enabled = true`): admin commands can also come from other machines, with an admin token and a TOTP code".to_owned()
             } else {
                 "disabled (`[admin] enabled = false`)".to_owned()
+            },
+            web: if loaded.config().admin.enabled && loaded.config().admin.web_ui {
+                "enabled (`[admin] web_ui = true`): admins can sign in at `/admin/` in a browser, with an admin token and a TOTP code".to_owned()
+            } else {
+                "disabled (`[admin] web_ui = false`)".to_owned()
             },
         })
     }
@@ -101,6 +108,7 @@ pub fn render(facts: &Facts) -> String {
         .replace("{{bind}}", &facts.bind)
         .replace("{{service}}", &facts.service)
         .replace("{{admin}}", &facts.admin)
+        .replace("{{web}}", &facts.web)
 }
 
 /// Runs `joedocs agents`.
@@ -126,7 +134,17 @@ mod tests {
             bind: "`127.0.0.1:8750`".into(),
             service: "systemd user unit, active".into(),
             admin: "disabled".into(),
+            web: "disabled".into(),
         }
+    }
+
+    #[test]
+    fn the_guide_says_whether_the_web_interface_is_on() {
+        let text = render(&facts());
+        assert!(
+            text.contains("| Admin web interface | disabled |"),
+            "{text}"
+        );
     }
 
     #[test]

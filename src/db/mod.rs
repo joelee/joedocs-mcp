@@ -16,14 +16,14 @@ mod search;
 use std::path::Path;
 
 pub use admin::{
-    AdminSecrets, AdminTokenRow, SessionRow, admin_secrets, find_admin_token_by_id,
+    AdminSecrets, AdminTokenRow, SessionKind, SessionRow, admin_secrets, find_admin_token_by_id,
     find_admin_token_by_name, find_session, insert_admin_token, insert_session, list_admin_tokens,
     record_failed_login, record_login, revoke_admin_token, revoke_session, touch_session,
 };
 pub use documents::{
-    DocumentRow, ListQuery, RevisionRow, Sort, archived_documents, document_counts, get_document,
-    get_revision, insert_document, insert_revision, last_change_at, list_documents, list_revisions,
-    live_documents, live_documents_in, path_taken, save_document,
+    DocumentRow, ListQuery, RevisionRow, Sort, archived_documents, document_counts, find_by_title,
+    find_files, get_document, get_revision, insert_document, insert_revision, last_change_at,
+    list_documents, list_revisions, live_documents, live_documents_in, path_taken, save_document,
 };
 pub use files::{
     FileChange, FileRow, RevisionFileRow, count_live_files, file_by_id, files_of, find_live_file,
@@ -52,6 +52,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0003_search.sql"),
     include_str!("migrations/0004_admin.sql"),
     include_str!("migrations/0005_files.sql"),
+    include_str!("migrations/0006_web_sessions.sql"),
 ];
 
 /// The schema version this build expects.
@@ -177,6 +178,8 @@ pub struct AuditQuery<'a> {
     pub document_id: Option<&'a str>,
     /// Only this outcome (`ok` or an error code).
     pub outcome: Option<&'a str>,
+    /// Every outcome but this one (`ok` for the refusals).
+    pub outcome_not: Option<&'a str>,
     /// Entries to skip.
     pub offset: u64,
     /// Most entries to return.
@@ -214,7 +217,8 @@ pub fn list_audit(
     let filter = "WHERE (?1 IS NULL OR at >= ?1) AND (?2 IS NULL OR at < ?2)
         AND (?3 IS NULL OR key_name = ?3) AND (?4 IS NULL OR tool = ?4)
         AND (?5 IS NULL OR substr(tool, 1, length(?5)) = ?5)
-        AND (?6 IS NULL OR document_id = ?6) AND (?7 IS NULL OR outcome = ?7)";
+        AND (?6 IS NULL OR document_id = ?6) AND (?7 IS NULL OR outcome = ?7)
+        AND (?8 IS NULL OR outcome <> ?8)";
     let conditions = params![
         query.since,
         query.until,
@@ -223,6 +227,7 @@ pub fn list_audit(
         query.tool_prefix,
         query.document_id,
         query.outcome,
+        query.outcome_not,
     ];
     let total = conn.query_row(
         &format!("SELECT count(*) FROM audit_log {filter}"),
@@ -231,7 +236,7 @@ pub fn list_audit(
     )?;
     let mut stmt = conn.prepare(&format!(
         "SELECT at, api_key_id, key_name, client, tool, document_id, outcome
-         FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?8 OFFSET ?9"
+         FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?9 OFFSET ?10"
     ))?;
     let rows = stmt
         .query_map(
@@ -243,6 +248,7 @@ pub fn list_audit(
                 query.tool_prefix,
                 query.document_id,
                 query.outcome,
+                query.outcome_not,
                 query.limit,
                 query.offset,
             ],
@@ -384,7 +390,7 @@ mod tests {
         let version: usize = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         let row = get_document(&conn, "JD-1").unwrap().unwrap();
         assert_eq!(
             (row.revision, row.main_revision, row.multifile),
@@ -398,6 +404,43 @@ mod tests {
         assert_eq!(fields, ("draft".to_owned(), None));
         assert_eq!(live_files(&conn, "JD-1").unwrap(), []);
         assert!(!index_format_current(&conn).unwrap(), "a reindex follows");
+    }
+
+    #[test]
+    fn a_version_5_database_gains_session_kinds_with_existing_sessions_as_api() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("joedocs.db");
+        let mut conn = Connection::open(&path).unwrap();
+        let tx = conn.transaction().unwrap();
+        for sql in &MIGRATIONS[..5] {
+            tx.execute_batch(sql).unwrap();
+        }
+        tx.pragma_update(None, "user_version", 5).unwrap();
+        tx.execute_batch(
+            "INSERT INTO admin_tokens (id, name, secret_sha256, totp_secret, created_at)
+                 VALUES ('a1', 'laptop', x'00', x'00', 't');
+             INSERT INTO admin_sessions (id, admin_token_id, secret_sha256, created_at, expires_at)
+                 VALUES ('s1', 'a1', x'00', 't', 'u');",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        drop(conn);
+
+        let conn = open(&path).unwrap();
+        let version: usize = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 6);
+        let session = find_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(session.kind, SessionKind::Api);
+        assert!(
+            conn.execute(
+                "UPDATE admin_sessions SET kind = 'other' WHERE id = 's1'",
+                []
+            )
+            .is_err(),
+            "kind is api or web"
+        );
     }
 
     #[test]
@@ -546,6 +589,15 @@ mod tests {
             ..all.clone()
         };
         assert_eq!(read(&by_document).0, ["update_document", "new_document"]);
+        let refused = AuditQuery {
+            outcome_not: Some("ok"),
+            ..all.clone()
+        };
+        assert_eq!(
+            read(&refused).0,
+            ["update_document"],
+            "every outcome but ok"
+        );
         let page = AuditQuery {
             offset: 1,
             limit: 2,

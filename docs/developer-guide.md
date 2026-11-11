@@ -76,6 +76,28 @@ docker compose down              # stops the stack; the data stays in .local/dat
 - To start afresh: `docker compose down && rm -rf .local/data`.
 - After an upgrade, `serve` rebuilds the index from the history if the database is from an older build; `docker compose logs` shows the outcome. To rebuild by hand: `docker compose exec joedocs joedocs reindex`.
 
+## Web interface
+
+The admin web interface lives in `src/web/`, with its Askama templates in `templates/` at the repository root (Askama's default directory; Askama's `config` feature, which would let them live elsewhere, depends on the unmaintained `basic-toml`). The templates and the static files in `src/web/assets/` are compiled into the binary; `Cargo.toml` `include`, the `Dockerfile` and `.dockerignore` list `templates/`. There is no Node or WASM build step.
+
+### Editing pages and styles
+
+- **Templates** in `templates/` are checked and compiled by `cargo build`; a template error is a compile error. Each page module in `src/web/pages/` owns a `#[derive(Template)]` struct for its template. Askama escapes every value; use `|safe` only for HTML the code wrote itself from escaped parts (the Markdown renderer's output, a rendered fragment).
+- **No inline script or style.** The Content-Security-Policy allows no inline script, and no inline style except on pages with a Mermaid diagram. Behaviour goes in `src/web/assets/app.js` as event listeners (never `eval`, `hx-on` or `js:` values); styles go in `app.css`, with colours as the design tokens at its top (`light-dark()` pairs, at least 4.5:1 contrast in both themes). `tests/web.rs` checks every page for one `<h1>`, labelled controls, table headers, image `alt`, and no `style`, `on...` or inline `<script>`.
+- **Dialogs** open with invoker commands (`commandfor` and `command="show-modal"`) and close with a `formmethod="dialog"` button, so they work without JavaScript.
+- **Routes.** A new route is added to `Route` in `src/web/mod.rs` with its audit tool (the matching admin API operation), and to the route table in that module's documentation; a test requests every route in the table and checks its audit row. Every route but the sign-in page needs a session by default.
+- **Static files** are served under `/admin/assets/<hash>/<name>`; the hash changes with the content, so browsers never keep an old copy.
+- **Trying it.** `JOEDOCS__ADMIN__ENABLED=true JOEDOCS__ADMIN__WEB_UI=true cargo run -- serve` with a scratch `JOEDOCS__STORAGE__HOME` and `JOEDOCS__STORAGE__STATE_DIR`, an admin token from `cargo run -- admin-token create dev` on the same store, then `http://127.0.0.1:8750/admin/`.
+
+### Vendored browser files
+
+Third-party browser files sit in `src/web/assets/vendor/`, unmodified, each with its licence text beside it. To update one, download the new version from the npm registry, check the tarball against the registry's `integrity` value, copy the file and its licence, and update this table.
+
+| File | Version | Source | SHA-256 | Licence |
+| --- | --- | --- | --- | --- |
+| `htmx.min.js` | htmx 4.0.1 | `dist/htmx.min.js` from <https://registry.npmjs.org/htmx.org/-/htmx.org-4.0.1.tgz> (integrity `sha512-oF7JgXhDW9UXCy/k1ZYFUQgzu/rm19ORWPSPNL91vPluB2PB9+MV55tyQdH/w7o2EAbTYUG5SDW1R60mdkdqGg==`) | `a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130` | 0BSD, `htmx.LICENSE` |
+| `pele.global.js` | Pele 1.13.0 (Mermaid diagrams) | `dist/pele.global.js` from <https://registry.npmjs.org/pele/-/pele-1.13.0.tgz> (integrity `sha512-Ie8UKY9x00MsuR3jO6AzUwzK2Z6MIV3Tf4EDdITiuk8Uaz8K7g0R082WqsqNaSU8DdgkrRvZThzhit83mi/uiw==`) | `0b0a46c57a5a6971670c09f5ec4066705bd78505f90fd11adf6260325efa0910` | MIT, with the Lucide ISC notice, `pele.LICENSE` |
+
 ## Running as a service
 
 Running JoeDocs as a systemd or `brew services` service, reaching it from other machines, and operating it are in the [deployment guide](deployment.md). When you change `src/systemd.rs`, check the rendered unit with `cargo run -- systemd install --dry-run` (and `--system --run-as USER`).

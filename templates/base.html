@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ title }} - JoeDocs</title>
+<link rel="stylesheet" href="{{ assets.css|safe }}">
+<script src="{{ assets.htmx|safe }}" defer></script>
+{% block scripts %}{% endblock %}
+<script src="{{ assets.js|safe }}" defer></script>
+</head>
+<body>
+{% block body %}{% endblock %}
+</body>
+</html>

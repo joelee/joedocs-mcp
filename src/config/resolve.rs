@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(resolved.config, Config::default());
         assert_eq!(resolved.file, None);
         assert!(resolved.sources.values().all(|s| *s == Source::Default));
-        assert_eq!(resolved.sources.len(), 16);
+        assert_eq!(resolved.sources.len(), 18);
     }
 
     #[test]
@@ -586,6 +586,26 @@ mod tests {
             matches!(err, ConfigError::InvalidOverride { var: ref v, .. } if v == "MY_APP__DOCUMENTS__INDEX_FILE"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn web_interface_keys_have_overrides() {
+        let env = MapEnv::new()
+            .with("MY_APP__ADMIN__ENABLED", "true")
+            .with("MY_APP__ADMIN__WEB_UI", "true")
+            .with(
+                "MY_APP__ADMIN__WEB_PLANTUML_URL",
+                "https://plantuml.example.net/plantuml",
+            );
+        let resolved = resolve_with(&env, &MemFs::new()).unwrap();
+        assert!(resolved.config.admin.web_ui);
+        assert_eq!(
+            resolved.config.admin.web_plantuml_url,
+            "https://plantuml.example.net/plantuml"
+        );
+        let env = MapEnv::new().with("MY_APP__ADMIN__WEB_UI", "true");
+        let err = resolve_with(&env, &MemFs::new()).unwrap_err();
+        assert!(err.to_string().contains("admin.web_ui"), "{err}");
     }
 
     #[test]

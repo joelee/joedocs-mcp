@@ -11,7 +11,7 @@ joedocs [--config PATH] [--log-level LEVEL] [--server URL] <COMMAND>
 | Command | What it does |
 | --- | --- |
 | `init` | Create the vault, the state directory, the database and the history. Safe to rerun. |
-| `serve` | Run the MCP server on `server.bind` until Ctrl-C or SIGTERM. Rebuilds the index first if it is behind the history, and rewrites each project's `INDEX.md`. |
+| `serve` | Run the MCP server on `server.bind` until Ctrl-C or SIGTERM. Rebuilds the index first if it is behind the history, and rewrites each project's `INDEX.md`. It prints the MCP endpoint, then the admin API when `admin.enabled`, then `JoeDocs web interface: http://<bind>/admin/` when `admin.web_ui` is also on. |
 | `project add NAME --key KEY [--title TITLE]` | Register a project. `NAME` is a slug (its folder); `KEY` is 1 to 10 upper-case letters and digits, the prefix of its document IDs (`JD` gives `JD-42`). Neither can change later. |
 | `project list` | List projects. |
 | `key create NAME [--grant PROJECT:PERMISSION]...` | Create an API key and print its token once, alone on the last line. `PERMISSION` is `read` or `write`. `NAME` is recorded as the author of every change made with the key. |
@@ -27,8 +27,8 @@ joedocs [--config PATH] [--log-level LEVEL] [--server URL] <COMMAND>
 | `document restore-file DOCUMENT_ID FILE --version N` | Bring back one file of a multi-file document as it was at document revision `N` (`FILE` is its path then), as one revision (action `restore_file`): its content then, at its path then, whether it has since changed, been renamed or been archived. Refuses a file already as it was, a path another file now holds, and a path where a file the index does not know is. |
 | `backup FILE.tgz` | Write a backup of the vault, the database and the history to `FILE.tgz` (see [Backups](#backups)). Safe while `serve` runs: writes wait for the snapshot, which takes the write lock only while copying. Refuses an existing `FILE`. The file is created with mode `0600` because it holds API key hashes. |
 | `backup --restore [--state-dir PATH] [--content-dir PATH] FILE.tgz` | Restore a backup into a state directory and a vault that are empty or do not exist yet (by default the configured `storage.state_dir` and `storage.home`). Refuses an unknown archive format, a database schema newer than this build, and any entry that is not a regular file or directory under `state/` or `content/` (absolute paths, `..`, links, devices), and a damaged or truncated archive (its gzip checksum or length does not match). Then it opens the restored store, which migrates an older database; if extracting, opening or migrating fails, it removes what it extracted, so the targets are empty (or absent) again and the restore can be retried. Then it runs `check` (a restore whose `check` finds problems keeps its data and exits `1`), and prints the `[storage]` settings to use when it restored elsewhere. Run it with the service stopped. |
-| `agents` | Print an AGENTS.md-style guide for AI agents that maintain this server: what is safe to run, what needs the operator's approval, what never to do, how to upgrade and troubleshoot. It is filled in with this installation's version, config file, vault and state paths, listen address and systemd unit, and never contains a secret. For example, `joedocs agents > AGENTS.md` in the directory an agent works from. |
-| `status` | Show where the service runs and what the store holds, without secrets: the version, host name and config file; `server.bind` and whether `GET /health` answers there; the systemd user and system unit state with its `MainPID`; the vault and state directory with their sizes and file counts, and the database and history sizes; the history head and last change; whether the index and `INDEX.md` files are current; API key counts; and live and archived documents per project. Changes nothing, and works with the service stopped. |
+| `agents` | Print an AGENTS.md-style guide for AI agents that maintain this server: what is safe to run, what needs the operator's approval, what never to do, how to upgrade and troubleshoot. It is filled in with this installation's version, config file, vault and state paths, listen address and systemd unit, and whether the admin web interface is on, and never contains a secret. For example, `joedocs agents > AGENTS.md` in the directory an agent works from. |
+| `status` | Show where the service runs and what the store holds, without secrets: the version, host name and config file; `server.bind` and whether `GET /health` answers there; the systemd user and system unit state with its `MainPID`; the vault and state directory with their sizes and file counts, and the database and history sizes; the history head and last change; whether the index and `INDEX.md` files are current; API key counts; live and archived documents per project; and whether the [admin web interface](#admin-web-interface) is on (`web_ui_enabled` in the JSON of `GET /admin/v1/status`). Changes nothing, and works with the service stopped. |
 | `admin-token create NAME` | Create an admin token for the remote admin API, with a new TOTP secret. Prints the secret in base32 (type it into Google Authenticator or another TOTP app) and the `otpauth://totp/JoeDocs:NAME?...` URI (pipe it to `qrencode -t ansiutf8` for a QR code), then the token alone on the last line, `jda_<12 hex id>_<64 hex secret>`. Both are shown once. Run it on the server only: no remote call can create, list or revoke admin tokens. |
 | `admin-token list` | List admin tokens: name, creation, last use, and whether each is active, locked after failed logins, or revoked. Never the secrets. |
 | `admin-token revoke NAME` | Revoke an admin token and end every session it opened, immediately and for good. |
@@ -185,6 +185,33 @@ Logins are TOTP codes (RFC 6238: SHA-1, 6 digits, 30 seconds). A code is accepte
 | `409` | `already_exists`, `conflict`, `archived` | The request conflicts with what is stored. |
 | `500` | `internal` | A server fault (details are only in the server log). |
 
+## Admin web interface
+
+With `[admin] enabled = true` and `web_ui = true`, `joedocs serve` also serves pages for administrators under `/admin/`. With either off, the pages are not served: `/admin/` and every page under it answer as any unknown path does, `401` from the MCP endpoint's key check, as in 0.4.3 (only the admin API's own paths, `/admin/v1/...`, answer `404`, and only when `admin.enabled` is off). The pages do what the remote admin commands do:
+
+| Page | What it does |
+| --- | --- |
+| Overview (`/admin/`) | the `status` report, projects with their live and archived counts, and the latest audit entries |
+| Documents | a project's live documents, filtered by type and status and sorted as `list`; each document rendered or as stored, at any revision, with its properties, files, an "On this page" list, its History and diffs between revisions, and downloads of the file (`.md`, as `get -f` writes it) and of every file (`.tgz`, as `get --archive`) |
+| Search | `search` over every project or one, with type, status, `key=value` and JSON filters; the results reload as you type |
+| Projects | `project list` and `project add` |
+| API keys | `key list`, `create`, `grant`, `ungrant`, `rotate` and `revoke`; a new or rotated token is shown once, on the reply to that request |
+| Audit | `audit` with its filters, and quick filters for admin calls, refusals and the last 24 hours |
+| Archive | `archive list` and `archive restore` |
+| Maintenance | `check`, `reindex` and a backup download, and the commands that run only on the server |
+
+The document view's Actions offer `document convert` and `move-file`, and a file's History offers `restore-file`. Every change asks for confirmation first and is written with the admin token's name as author and client `joedocs-web`. Document content cannot be edited in the browser.
+
+**Signing in.** An admin signs in with an admin token and a TOTP code, as `joedocs login` does, with the same lock after five wrong codes. The server then opens a web session (`jdw_...`) of `admin.session_hours`, which the admin API does not accept (nor does the web interface accept an API session). The browser keeps it in an `HttpOnly`, `SameSite=Strict` cookie with `Path=/`: `__Host-joedocs_session` with `Secure` over HTTPS, `joedocs_session` over plain HTTP, which is allowed only when the `Host` is `localhost`, `127.0.0.1` or `[::1]`. The admin token itself is never stored by the browser. Signing out ends the session; `joedocs admin-token revoke` ends all of a token's sessions.
+
+**Requests.** Every request passes the `server.allowed_hosts` check first. A form `POST` is accepted only from the interface's own pages: a `Sec-Fetch-Site` header, when sent, must be `same-origin`, an `Origin` header, when sent, must name the request's own host or an entry of `server.allowed_origins`, and the form must carry the session's CSRF token. Replies carry a Content-Security-Policy without inline script (pages with a Mermaid diagram also allow inline style attributes, which the diagram drawing uses), `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`. Static files are served under a path with a hash of their content and cached for a year.
+
+**Audit.** Every page and form request writes one audit row with the admin token's name (or `unknown` before sign-in), client `joedocs-web`, the tool of the matching admin API operation, such as `admin:documents.search` or `admin:keys.rotate`, and the outcome: `ok`, or the code of the refusal the page shows, such as `invalid_argument` or `already_exists`; the sign-in page is `admin:web.login_page`, the Maintenance page `admin:web.maintenance_page` and any other path `admin:web.unknown`. Static files are not audited. No row holds a token, cookie or code.
+
+**Markdown.** Documents are rendered on the server, Obsidian-style: tables, footnotes, strikethrough, task lists, `==highlights==`, `#tags`, callouts (`> [!note] Title`, folded with `-` or `+`), `[[wiki links]]` and `![[embeds]]` to documents and files of the same project (shown as links), document IDs in properties as links, and headings with an "On this page" list. Mermaid diagrams are drawn in the browser by the bundled Pele, which may not draw every diagram type; one it cannot draw stays as its source with the reason. PlantUML diagrams are images from `admin.web_plantuml_url` when it is set, and their source otherwise. Raw HTML is shown as text, `%%comments%%` are hidden, images are linked rather than loaded, and only `http`, `https` and `mailto` links leave the interface.
+
+Only `/admin/` is a stable entry point: the other page paths, the HTML and the cookie may change in any release. Scripts use the [admin API](#admin-api).
+
 ## Search
 
 `search_documents` takes a text `query`, front matter `filters`, or both.
@@ -292,6 +319,7 @@ Server keys come first in a fixed order, then custom keys in the order they were
 | 3 | `0003_search` | the search index |
 | 4 | `0004_admin` (0.3.0) | admin tokens, with their TOTP secrets, and admin sessions |
 | 5 | `0005_files` (0.4.0) | multi-file documents: the sub-files of each document, the files each revision changed, and sub-file search entries |
+| 6 | `0006_web_sessions` (0.5.0) | a kind on each admin session: `api` (opened by `joedocs login`) or `web` (opened by the web interface); neither is accepted in place of the other |
 
 The index (documents, files, revisions and search) is rebuilt from the history whenever it was built by a build with another index layout: 0.4.0 changes the layout, so its first `serve` runs `reindex` once.
 

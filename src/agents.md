@@ -13,6 +13,7 @@ You are maintaining a JoeDocs server: an MCP server that stores project document
 | Listen address (`server.bind`) | {{bind}} |
 | Service | {{service}} |
 | Remote admin API | {{admin}} |
+| Admin web interface | {{web}} |
 
 Run `joedocs status` for the current state, sizes and health, and `joedocs config show` for every setting and where it came from.
 

@@ -246,6 +246,13 @@ pub struct AdminConfig {
     /// How long a session opened by `joedocs login` lasts, in hours (1 to
     /// 168).
     pub session_hours: u32,
+    /// Whether to serve the admin web interface under `/admin/`. Off by
+    /// default; needs `enabled`.
+    pub web_ui: bool,
+    /// A `PlantUML` server that draws diagrams for the web interface, such as
+    /// `https://www.plantuml.com/plantuml`. Empty shows diagrams as source.
+    /// The admin's browser sends the diagram text to it.
+    pub web_plantuml_url: String,
 }
 
 impl Default for AdminConfig {
@@ -253,6 +260,8 @@ impl Default for AdminConfig {
         Self {
             enabled: false,
             session_hours: 8,
+            web_ui: false,
+            web_plantuml_url: String::new(),
         }
     }
 }

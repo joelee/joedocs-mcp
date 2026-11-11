@@ -1,0 +1,15 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ title }}</h1>
+  <p class="lede">{{ message }}</p>
+</div>
+<section class="token-reveal" aria-labelledby="token-heading">
+  <h2 id="token-heading">The token, shown only now</h2>
+  <p>Copy it into the MCP client now. JoeDocs keeps only a hash of it, so it cannot be shown again; if it is lost, rotate the key.</p>
+  <pre class="token"><code id="new-token">{{ token }}</code></pre>
+  <p><button type="button" data-copy="new-token">Copy token</button></p>
+  <p class="hint">The client sends it as <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+</section>
+<p><a href="/admin/keys">Back to API keys</a></p>
+{% endblock %}

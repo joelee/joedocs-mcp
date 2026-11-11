@@ -60,6 +60,7 @@ One server holds the documents. Each agent connects with its own API key, scoped
 - **Scoped API keys.** Each key gets `read` or `write` access to specific projects. Tokens are shown once and stored hashed, and can be rotated or revoked at once.
 - **Multi-file documents.** A document can be a folder of files under one ID, such as a roadmap and its backlog items, each with its own front matter, searched and filtered on its own, and changed by different agents without conflicts between files.
 - **Obsidian-friendly.** Titles are file names, so `[[wiki links]]` work; renamed documents keep their old titles as `aliases`; Mermaid and PlantUML blocks are stored as written.
+- **Admin web interface.** Optional pages under `/admin/` for the server's administrators: browse, search and read documents with Obsidian-style rendering (callouts, wiki links, Mermaid diagrams), follow their history and diffs, manage projects and API keys, read the audit log, restore archived documents, and check, reindex or back up the store.
 - **Easy to run.** One binary with SQLite built in. It runs as a systemd service on Linux, under `brew services` on macOS, or in Docker. Reach it from anywhere over Tailscale or behind your own TLS proxy.
 
 ## Use cases
@@ -83,7 +84,7 @@ brew install joelee/oss/joedocs
 **Linux or macOS** (a prebuilt binary from [GitHub Releases](https://github.com/joelee/joedocs-mcp/releases), from 0.4.3: static for Linux x86_64 and aarch64, and for Apple silicon Macs):
 
 ```bash
-V=0.4.3 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
+V=0.5.0 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
 A="joedocs-$V-$T.tar.gz"
 gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber &&
   shasum -a 256 -c --ignore-missing SHA256SUMS &&
@@ -149,6 +150,22 @@ To use one server from several machines, run it on a server and publish it over 
 
 Administration is not an MCP tool, so a leaked client key cannot create keys or delete history: `joedocs project`, `key create|grant|ungrant|rotate|revoke`, `archive list|restore`, `reindex`, `check`, `status`, `get` and `backup` run on the server's command line, and so do `list`, `search`, `history`, `diff` and `audit`, which view and find documents and read the audit log (`--json` prints what the admin API returns). To run them from another machine, turn on the server's admin API: it needs a separate admin token and a code from an authenticator app (`joedocs login`). `joedocs backup` writes a consistent backup while the server runs, and `joedocs agents` prints instructions for an AI agent that maintains the server. The [reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md) lists every command, tool, parameter and error code.
 
+## Admin web interface
+
+Turn on the admin API and its web interface in the server's `config.toml`, create an admin token, and restart the server:
+
+```toml
+[admin]
+enabled = true
+web_ui = true
+```
+
+```bash
+joedocs admin-token create laptop   # prints a TOTP secret for your authenticator app, then the token
+```
+
+Then open `http://127.0.0.1:8750/admin/` and sign in with the token and a code from the authenticator. Over anything but `localhost` the interface needs HTTPS, such as `tailscale serve`; the [deployment guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/deployment.md#6b-admin-web-interface) covers proxies and drawing PlantUML diagrams. Document content is read-only in the browser; the changes it offers are the admin commands'.
+
 ## Skills for agents
 
 [`docs/skills`](https://github.com/joelee/joedocs-mcp/blob/main/docs/skills/README.md) has ready-made Claude Code skills that use JoeDocs as their document store, and together make a delivery workflow:
@@ -172,7 +189,7 @@ flowchart LR
 
 Planned:
 
-- An admin web interface (0.5.0), built on the admin API's JSON routes.
+- Admin users who sign in to the web interface with their own credentials instead of an admin token (0.5.1).
 - More agent skills: research notes, decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
 

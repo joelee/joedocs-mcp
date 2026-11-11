@@ -616,7 +616,11 @@ pub fn check(store: &Store, out: &mut dyn Write) -> Result<(), Error> {
     }
 }
 
-fn report_check(report: &CheckReport, paths: &Paths, out: &mut dyn Write) -> Result<(), Error> {
+pub(crate) fn report_check(
+    report: &CheckReport,
+    paths: &Paths,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
     if report.index_behind {
         writeln!(
             out,
@@ -809,7 +813,7 @@ fn key_row(key: &KeyRow) -> Vec<String> {
     ]
 }
 
-fn grant_list(grants: &[Grant]) -> String {
+pub(crate) fn grant_list(grants: &[Grant]) -> String {
     if grants.is_empty() {
         "none".to_owned()
     } else {

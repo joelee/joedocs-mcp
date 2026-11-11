@@ -10,7 +10,7 @@
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code
 ├── Dockerfile              Two-stage image: build, then debian-slim with git
 ├── compose.yaml            Local server; data bind-mounted from .local/data (git-ignored)
-├── .dockerignore           Sends only Cargo.toml, Cargo.lock and src/ to the build
+├── .dockerignore           Sends only Cargo.toml, Cargo.lock, src/ and templates/ to the build
 ├── CHANGELOG.md            Keep a Changelog
 ├── Cargo.toml              Manifest, MSRV, lint levels
 ├── Cargo.lock              Committed; CI uses --locked
@@ -25,6 +25,7 @@
 ├── .env.example            Supported secret variables with placeholders
 ├── .gitleaks.toml          Secret-scan rules and allowlists
 ├── .githooks/pre-commit    Git hook running `just pre-commit` (enabled by just setup)
+├── templates/              Askama templates of the admin web interface (compiled into the binary)
 ├── docs/                   Maintained documentation (rules in docs/AGENTS.md)
 │   ├── deployment.md       Running a server: systemd, brew services, Tailscale, operations
 │   ├── upgrading.md        Upgrading a server, going back, notes for each version
@@ -64,7 +65,7 @@
 │   │   ├── documents.rs    Document, listing and revision queries
 │   │   ├── files.rs        Files of multi-file documents and the files each revision changed
 │   │   ├── search.rs       Search index upkeep and the search query
-│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search, 0004_admin, 0005_files)
+│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search, 0004_admin, 0005_files, 0006_web_sessions)
 │   ├── document/
 │   │   ├── mod.rs          Slugs and re-exports
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
@@ -79,6 +80,14 @@
 │   │   ├── tools.rs        Tool parameters, results and handlers
 │   │   └── errors.rs       ToolError: codes and structured results
 │   ├── systemd.rs          joedocs systemd install|remove, ServiceManager
+│   ├── web/                The admin web interface under /admin/ (admin.web_ui)
+│   │   ├── mod.rs          Routes and their audit tools, request checks, rendering, security headers
+│   │   ├── session.rs      Session cookie, CSRF token, same-origin and HTTPS rules
+│   │   ├── assets.rs       Static files under content-hashed paths
+│   │   ├── assets/         app.css, app.js, and vendor/ (htmx, Pele and their licences)
+│   │   ├── markdown.rs     Obsidian-style Markdown to safe HTML (tests in markdown_tests.rs)
+│   │   ├── plantuml.rs     PlantUML text encoding for the configured server
+│   │   └── pages/          One module per workspace: login, overview, documents, document, history, search, projects, keys, audit, archive, maintenance
 │   ├── search/
 │   │   ├── mod.rs          Re-exports and the Invalid error
 │   │   ├── query.rs        Query grammar and FTS5 expressions
@@ -117,7 +126,8 @@
     ├── mcp.rs              Every tool over HTTP, grants, Host/Origin, serve
     ├── reindex.rs          Rebuilds: identical, after a lost write or database
     ├── search.rs           Search over a fixture vault
-    └── store.rs            A document's lifecycle across files, git and index
+    ├── store.rs            A document's lifecycle across files, git and index
+    └── web.rs              The admin web interface: pages, sessions, checks, audit, parity with the commands, accessibility
 ```
 
 Unit tests live next to the code in `#[cfg(test)] mod tests`. Integration tests in `tests/` run the compiled binary with a cleared environment in a temporary directory, or drive the library's store against a temporary vault. Tests that touch history need `git` on `PATH`.

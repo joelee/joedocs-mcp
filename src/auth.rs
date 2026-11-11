@@ -23,6 +23,8 @@ pub const KEY_PREFIX: &str = "jd_";
 pub const ADMIN_PREFIX: &str = "jda_";
 /// Prefix of every admin session token (`jds_<id>_<secret>`).
 pub const SESSION_PREFIX: &str = "jds_";
+/// Prefix of every web interface session token (`jdw_<id>_<secret>`).
+pub const WEB_SESSION_PREFIX: &str = "jdw_";
 
 /// A source of cryptographically secure random bytes.
 pub trait RandomSource {
@@ -147,8 +149,8 @@ pub fn generate(random: &dyn RandomSource) -> Result<NewKey, RandomError> {
     generate_prefixed(KEY_PREFIX, random)
 }
 
-/// Generates a new token with `prefix` ([`KEY_PREFIX`], [`ADMIN_PREFIX`] or
-/// [`SESSION_PREFIX`]).
+/// Generates a new token with `prefix` ([`KEY_PREFIX`], [`ADMIN_PREFIX`],
+/// [`SESSION_PREFIX`] or [`WEB_SESSION_PREFIX`]).
 ///
 /// # Errors
 ///

@@ -49,6 +49,7 @@ struct ApiState {
     bind: SocketAddr,
     allowed_hosts: Vec<String>,
     allowed_origins: Vec<String>,
+    web_ui: bool,
 }
 
 /// The routes, to be nested under `/admin/v1`.
@@ -66,6 +67,7 @@ pub(super) fn routes(
         bind: options.bind,
         allowed_hosts: options.allowed_hosts.clone(),
         allowed_origins: options.allowed_origins.clone(),
+        web_ui: options.web.is_some(),
     });
     Router::new()
         .route("/", axum::routing::any(dispatch))
@@ -101,39 +103,43 @@ impl ApiError {
     }
 }
 
+/// The HTTP status and error code for a store error, shared by the admin
+/// API and the web interface. A failure that is not the caller's is logged
+/// and reported as `internal`.
+pub(crate) fn classify(error: &store::Error) -> (StatusCode, &'static str) {
+    use store::Error as E;
+    match error {
+        E::AdminRefused(AdminRefusal::Unauthorized) => (StatusCode::UNAUTHORIZED, "unauthorized"),
+        E::AdminRefused(AdminRefusal::NoSession) => (StatusCode::UNAUTHORIZED, "no_session"),
+        E::AdminRefused(AdminRefusal::SessionExpired) => {
+            (StatusCode::UNAUTHORIZED, "session_expired")
+        }
+        E::AdminRefused(AdminRefusal::Locked { .. }) => (StatusCode::TOO_MANY_REQUESTS, "locked"),
+        E::NotFound(_) | E::FileNotFound { .. } | E::ProjectNotFound(_) | E::KeyNotFound(_) => {
+            (StatusCode::NOT_FOUND, "not_found")
+        }
+        E::Archived(_) => (StatusCode::CONFLICT, "archived"),
+        E::AlreadyExists(_) => (StatusCode::CONFLICT, "already_exists"),
+        E::Conflict { .. } | E::FileConflict { .. } => (StatusCode::CONFLICT, "conflict"),
+        other if other.is_user_error() => (StatusCode::BAD_REQUEST, "invalid_argument"),
+        other => {
+            tracing::error!(error = %other, "admin API store failure");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal")
+        }
+    }
+}
+
 impl From<&store::Error> for ApiError {
     fn from(error: &store::Error) -> Self {
-        use store::Error as E;
-        let (status, code) = match error {
-            E::AdminRefused(AdminRefusal::Unauthorized) => {
-                (StatusCode::UNAUTHORIZED, "unauthorized")
-            }
-            E::AdminRefused(AdminRefusal::NoSession) => (StatusCode::UNAUTHORIZED, "no_session"),
-            E::AdminRefused(AdminRefusal::SessionExpired) => {
-                (StatusCode::UNAUTHORIZED, "session_expired")
-            }
-            E::AdminRefused(AdminRefusal::Locked { retry_after, .. }) => {
-                let mut api = Self::new(StatusCode::TOO_MANY_REQUESTS, "locked", error.to_string());
-                api.retry_after = Some(*retry_after);
-                return api;
-            }
-            E::NotFound(_) | E::FileNotFound { .. } | E::ProjectNotFound(_) | E::KeyNotFound(_) => {
-                (StatusCode::NOT_FOUND, "not_found")
-            }
-            E::Archived(_) => (StatusCode::CONFLICT, "archived"),
-            E::AlreadyExists(_) => (StatusCode::CONFLICT, "already_exists"),
-            E::Conflict { .. } | E::FileConflict { .. } => (StatusCode::CONFLICT, "conflict"),
-            other if other.is_user_error() => (StatusCode::BAD_REQUEST, "invalid_argument"),
-            other => {
-                tracing::error!(error = %other, "admin API store failure");
-                return Self::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal",
-                    "internal error",
-                );
-            }
-        };
-        Self::new(status, code, error.to_string())
+        let (status, code) = classify(error);
+        if code == "internal" {
+            return Self::new(status, code, "internal error");
+        }
+        let mut api = Self::new(status, code, error.to_string());
+        if let store::Error::AdminRefused(AdminRefusal::Locked { retry_after, .. }) = error {
+            api.retry_after = Some(*retry_after);
+        }
+        api
     }
 }
 
@@ -198,16 +204,7 @@ impl Call {
 /// Refuses a `Host` outside `server.allowed_hosts` and an `Origin` outside
 /// `server.allowed_origins` (DNS rebinding and browser requests).
 fn check_origin(state: &ApiState, headers: &HeaderMap) -> Result<(), ApiError> {
-    let host = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let bare = strip_port(host);
-    let host_ok = state
-        .allowed_hosts
-        .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(host) || allowed.eq_ignore_ascii_case(bare));
-    if !host_ok {
+    if !host_allowed(&state.allowed_hosts, headers) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
@@ -227,8 +224,21 @@ fn check_origin(state: &ApiState, headers: &HeaderMap) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Whether the request's `Host` is one of `allowed_hosts` (DNS-rebinding
+/// protection), with or without its port.
+pub(crate) fn host_allowed(allowed_hosts: &[String], headers: &HeaderMap) -> bool {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let bare = strip_port(host);
+    allowed_hosts
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(host) || allowed.eq_ignore_ascii_case(bare))
+}
+
 /// `host:port` → `host`, `[::1]:80` → `::1`.
-fn strip_port(authority: &str) -> &str {
+pub(crate) fn strip_port(authority: &str) -> &str {
     if let Some(rest) = authority.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(rest);
     }
@@ -621,6 +631,7 @@ async fn status(state: Arc<ApiState>, call: Call) -> Response {
             state.config_file.clone(),
             state.bind,
             true,
+            state.web_ui,
             &crate::systemd::Systemctl,
         )
         .map_err(|e| match e {
@@ -1112,41 +1123,74 @@ fn internal() -> ApiError {
 /// store mutex (the snapshot also takes the write lock); compress without
 /// it, so MCP and admin calls carry on; then take it briefly to audit.
 fn backup_blocking(state: &ApiState, call: &Call) -> Response {
+    backup_download(
+        &state.shared,
+        |store| {
+            let checked = match &call.allowed {
+                Err(forbidden) => {
+                    let who = call
+                        .token
+                        .as_ref()
+                        .and_then(|t| store.admin_token_for(t).ok().flatten());
+                    Err(refused(who, forbidden.clone()))
+                }
+                Ok(()) => authenticate(store, call),
+            };
+            checked.map_err(|refusal| {
+                write_audit(store, refusal.who.as_ref(), call, refusal.error.code);
+                Box::new(refusal.error.into_response())
+            })
+        },
+        |error| {
+            let refused = from_crate(error);
+            (refused.code, refused.into_response())
+        },
+        |store, admin, outcome| write_audit(store, Some(admin), call, outcome),
+        || {
+            #[cfg(test)]
+            if let Some(hook) = &state.after_staging {
+                hook(&state.shared);
+            }
+        },
+    )
+}
+
+/// A backup download, shared by `GET /admin/v1/backup` and the web
+/// interface's Maintenance page, in three phases. Under the store lock,
+/// `authorize` checks the caller (auditing a refusal itself) and the store
+/// is staged (the snapshot also takes the write lock). Without it, the
+/// archive is compressed to a temporary file in the state directory, so MCP
+/// and admin calls carry on meanwhile. Then, briefly under the lock again,
+/// `audit` records the outcome. The reply streams the archive as
+/// `application/gzip` with `JoeDocs-Documents` and `JoeDocs-Skipped-Links`;
+/// `refusal` gives an error's audit code and reply.
+pub(crate) fn backup_download<W>(
+    shared: &Shared,
+    authorize: impl FnOnce(&Store) -> Result<W, Box<Response>>,
+    refusal: impl Fn(&crate::Error) -> (&'static str, Response),
+    audit: impl Fn(&Store, &W, &str),
+    after_staging: impl FnOnce(),
+) -> Response {
     let staged = {
-        let Ok(store) = state.shared.store.lock() else {
-            return internal().into_response();
+        let Ok(store) = shared.store.lock() else {
+            let poisoned = std::io::Error::other("the store lock is poisoned");
+            return refusal(&crate::Error::Output(poisoned)).1;
         };
-        let checked = match &call.allowed {
-            Err(forbidden) => {
-                let who = call
-                    .token
-                    .as_ref()
-                    .and_then(|t| store.admin_token_for(t).ok().flatten());
-                Err(refused(who, forbidden.clone()))
-            }
-            Ok(()) => authenticate(&store, call),
-        };
-        let admin = match checked {
-            Ok(admin) => admin,
-            Err(refusal) => {
-                write_audit(&store, refusal.who.as_ref(), call, refusal.error.code);
-                return refusal.error.into_response();
-            }
+        let who = match authorize(&store) {
+            Ok(who) => who,
+            Err(reply) => return *reply,
         };
         match crate::backup::stage(&store) {
-            Ok(staged) => (admin, staged, store.paths().state_dir.clone()),
+            Ok(staged) => (who, staged, store.paths().state_dir.clone()),
             Err(error) => {
-                let refused = from_crate(&crate::Error::Backup(error));
-                write_audit(&store, Some(&admin), call, refused.code);
-                return refused.into_response();
+                let (code, reply) = refusal(&crate::Error::Backup(error));
+                audit(&store, &who, code);
+                return reply;
             }
         }
     };
-    let (admin, staged, state_dir) = staged;
-    #[cfg(test)]
-    if let Some(hook) = &state.after_staging {
-        hook(&state.shared);
-    }
+    let (who, staged, state_dir) = staged;
+    after_staging();
     let mut random = [0_u8; 8];
     let _ = getrandom::fill(&mut random);
     let path = state_dir.join(format!(
@@ -1154,16 +1198,15 @@ fn backup_blocking(state: &ApiState, call: &Call) -> Response {
         std::process::id(),
         crate::auth::hex(&random)
     ));
-    let written = crate::backup::write_staged(&staged, &path);
-    let result = written
-        .map_err(|e| from_crate(&crate::Error::Backup(e)))
+    let result = crate::backup::write_staged(&staged, &path)
+        .map_err(crate::Error::Backup)
         .and_then(|_| {
             let file = std::fs::File::open(&path);
             // The open file stays readable after its name is removed.
             let _ = std::fs::remove_file(&path);
             file.map_err(|e| {
                 tracing::error!(error = %e, "cannot open the backup for download");
-                internal()
+                crate::Error::Output(e)
             })
         })
         .map(|file| {
@@ -1185,13 +1228,16 @@ fn backup_blocking(state: &ApiState, call: &Call) -> Response {
             response
         });
     drop(staged);
-    let outcome = result.as_ref().map_or_else(|e| e.code, |_| "ok");
-    if let Ok(store) = state.shared.store.lock() {
-        write_audit(&store, Some(&admin), call, outcome);
+    let (outcome, reply) = match result {
+        Ok(reply) => ("ok", reply),
+        Err(error) => refusal(&error),
+    };
+    if let Ok(store) = shared.store.lock() {
+        audit(&store, &who, outcome);
     } else {
-        tracing::error!("cannot write the admin audit entry: the store lock is poisoned");
+        tracing::error!("cannot write the audit entry: the store lock is poisoned");
     }
-    result.unwrap_or_else(IntoResponse::into_response)
+    reply
 }
 
 #[cfg(test)]
@@ -1235,6 +1281,7 @@ mod tests {
             bind: "127.0.0.1:8750".parse().unwrap(),
             allowed_hosts: vec!["127.0.0.1".into()],
             allowed_origins: Vec::new(),
+            web_ui: false,
         };
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1"));

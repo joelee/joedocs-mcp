@@ -8,10 +8,11 @@ use secrecy::SecretString;
 
 use super::{Error, Store};
 use crate::auth::{
-    ADMIN_PREFIX, RandomSource, SESSION_PREFIX, generate_prefixed, parse_prefixed, verify_secret,
+    ADMIN_PREFIX, RandomSource, SESSION_PREFIX, WEB_SESSION_PREFIX, generate_prefixed,
+    parse_prefixed, verify_secret,
 };
 use crate::clock::format_timestamp;
-use crate::db::{self, AdminTokenRow};
+use crate::db::{self, AdminTokenRow, SessionKind};
 use crate::document::is_slug;
 use crate::totp;
 
@@ -68,6 +69,15 @@ pub struct OpenedSession {
     pub admin: AdminTokenRow,
     /// The full `jds_<id>_<secret>` session token.
     pub token: SecretString,
+    /// When it expires.
+    pub expires_at: String,
+}
+
+/// A current web session, as checked by [`Store::web_session`].
+#[derive(Debug)]
+pub struct WebSession {
+    /// The admin token that opened it.
+    pub admin: AdminTokenRow,
     /// When it expires.
     pub expires_at: String,
 }
@@ -184,6 +194,36 @@ impl Store {
         session_hours: u32,
         random: &dyn RandomSource,
     ) -> Result<OpenedSession, Error> {
+        self.login(token, code, session_hours, random, SessionKind::Api)
+    }
+
+    /// Logs in to the web interface: as [`Store::admin_login`], with the same
+    /// checks and lockout, but the session is a web session (`jdw_...`),
+    /// checked on its own by [`Store::web_session`] and refused by the admin
+    /// API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AdminRefused`] when the login is refused, and random
+    /// or database errors.
+    pub fn web_login(
+        &mut self,
+        token: &SecretString,
+        code: &str,
+        session_hours: u32,
+        random: &dyn RandomSource,
+    ) -> Result<OpenedSession, Error> {
+        self.login(token, code, session_hours, random, SessionKind::Web)
+    }
+
+    fn login(
+        &mut self,
+        token: &SecretString,
+        code: &str,
+        session_hours: u32,
+        random: &dyn RandomSource,
+        kind: SessionKind,
+    ) -> Result<OpenedSession, Error> {
         let Some((admin, secrets)) = self.verified_admin(token)? else {
             return Err(AdminRefusal::Unauthorized.into());
         };
@@ -207,7 +247,11 @@ impl Store {
             db::record_failed_login(&self.conn, &admin.id, lock.as_deref())?;
             return Err(AdminRefusal::Unauthorized.into());
         };
-        let session = generate_prefixed(SESSION_PREFIX, random)?;
+        let prefix = match kind {
+            SessionKind::Api => SESSION_PREFIX,
+            SessionKind::Web => WEB_SESSION_PREFIX,
+        };
+        let session = generate_prefixed(prefix, random)?;
         let expires_at = later(now, i64::from(session_hours) * 3600);
         let tx = self.conn.transaction()?;
         db::record_login(&tx, &admin.id, step, &now_text)?;
@@ -218,6 +262,7 @@ impl Store {
             &session.secret_sha256,
             &now_text,
             &expires_at,
+            kind,
         )?;
         let admin = db::find_admin_token_by_id(&tx, &admin.id)?.unwrap_or(admin);
         tx.commit()?;
@@ -264,6 +309,62 @@ impl Store {
         Ok(admin)
     }
 
+    /// Checks that `session` is a current web session whose admin token is
+    /// not revoked, and records its use. The session alone is the
+    /// credential: the web interface never holds the admin token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AdminRefused`] ([`AdminRefusal::NoSession`] or
+    /// [`AdminRefusal::SessionExpired`]) when it is not valid, and database
+    /// errors.
+    pub fn web_session(&self, session: &SecretString) -> Result<WebSession, Error> {
+        let (admin, row) = self.web_session_row(session)?;
+        if row.expires_at <= self.now() {
+            return Err(AdminRefusal::SessionExpired.into());
+        }
+        db::touch_session(&self.conn, &row, &self.now())?;
+        Ok(WebSession {
+            admin,
+            expires_at: row.expires_at,
+        })
+    }
+
+    /// Ends a web session (sign out). An expired session can still be
+    /// ended.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AdminRefused`] when it is not a live web session,
+    /// and database errors.
+    pub fn end_web_session(&self, session: &SecretString) -> Result<AdminTokenRow, Error> {
+        let (admin, row) = self.web_session_row(session)?;
+        db::revoke_session(&self.conn, &row.id, &self.now())?;
+        Ok(admin)
+    }
+
+    fn web_session_row(
+        &self,
+        session: &SecretString,
+    ) -> Result<(AdminTokenRow, db::SessionRow), Error> {
+        let Some((id, secret)) = parse_prefixed(WEB_SESSION_PREFIX, session) else {
+            return Err(AdminRefusal::NoSession.into());
+        };
+        let Some(row) = db::find_session(&self.conn, &id)? else {
+            return Err(AdminRefusal::NoSession.into());
+        };
+        if row.kind != SessionKind::Web
+            || row.revoked_at.is_some()
+            || !verify_secret(&secret, &row.secret_sha256)
+        {
+            return Err(AdminRefusal::NoSession.into());
+        }
+        let admin = db::find_admin_token_by_id(&self.conn, &row.admin_token_id)?
+            .filter(|admin| admin.revoked_at.is_none())
+            .ok_or(AdminRefusal::NoSession)?;
+        Ok((admin, row))
+    }
+
     fn session_of(
         &self,
         token: &SecretString,
@@ -278,6 +379,7 @@ impl Store {
         match found {
             Some((Some(row), secret))
                 if row.admin_token_id == admin.id
+                    && row.kind == SessionKind::Api
                     && row.revoked_at.is_none()
                     && verify_secret(&secret, &row.secret_sha256) =>
             {

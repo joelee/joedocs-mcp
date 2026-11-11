@@ -1,0 +1,22 @@
+{% if let Some(message) = error %}
+<p class="notice error" role="alert">{{ message }}</p>
+{% else if !searched %}
+<p class="empty">Type words to find, or pick a project, type, status or front matter filter.</p>
+{% else if hits.is_empty() %}
+<p class="empty">Nothing matches. Try fewer words, <code>word*</code>, or another filter.</p>
+{% else %}
+<p class="hint">{{ start }} to {{ shown_to }} of {{ total }} {% if total == 1 %}match{% else %}matches{% endif %}</p>
+<ol class="hits" start="{{ start }}">
+  {% for hit in hits %}
+  <li class="hit">
+    <p class="hit-head"><a class="hit-link" href="{{ hit.href }}">{{ hit.title }}</a> <code class="nowrap">{{ hit.id }}</code>{% if let Some(file) = hit.file %} <span class="hit-file">{{ file }}</span>{% endif %}</p>
+    <p class="hit-meta hint">{{ hit.project }} · {{ hit.doc_type }} · <span class="badge badge-status-{{ hit.status }}">{{ hit.status }}</span> · updated <time datetime="{{ hit.updated }}">{{ hit.updated }}</time></p>
+    {% if !hit.snippet.is_empty() %}<p class="snippet">{% for (marked, text) in hit.snippet %}{% if *marked %}<mark>{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+<nav class="pager" aria-label="Result pages">
+  {% if let Some(href) = previous %}<a href="{{ href }}">Previous</a>{% endif %}
+  {% if let Some(href) = next %}<a href="{{ href }}">Next</a>{% endif %}
+</nav>
+{% endif %}

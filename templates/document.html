@@ -1,0 +1,140 @@
+{% extends "layout.html" %}
+{% block scripts %}{% if needs_pele %}<script src="{{ assets.pele|safe }}" defer></script>{% endif %}{% endblock %}
+{% block content %}
+<div class="page-head doc-head">
+  <p class="crumbs"><a href="/admin/documents?project={{ fetched.document.project }}">{{ fetched.document.project }}</a> / <code>{{ fetched.document.id }}</code>{% if let Some(file) = file %} / {{ file }}{% endif %}</p>
+  <h1>{{ facts.title }}</h1>
+  <p class="doc-meta">
+    <span class="badge badge-status-{{ facts.status }}">{{ facts.status }}</span>
+    <span>{{ facts.doc_type }}</span>
+    <span>revision {{ fetched.revision.revision }}{% if fetched.revision.revision != fetched.document.revision %} of {{ fetched.document.revision }}{% endif %}</span>
+    <span class="hint">updated {{ fetched.revision.at }} by {{ fetched.revision.author }} ({{ fetched.revision.client }})</span>
+  </p>
+  {% if facts.current %}<p class="hint" data-facts="current">The title and status shown are the document's current ones: a file of a multi-file document does not record them.</p>{% endif %}
+  {% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
+  {% if offer != Offer::Nothing %}
+  <details class="actions-menu">
+    <summary>Actions</summary>
+    <div class="menu">
+      {% if offer == Offer::Convert %}<button type="button" class="secondary" commandfor="convert-dialog" command="show-modal">Convert to multi-file</button>{% endif %}
+      {% if offer == Offer::Move %}<button type="button" class="secondary" commandfor="move-dialog" command="show-modal">Move this file</button>{% endif %}
+    </div>
+  </details>
+  {% if offer == Offer::Convert %}
+  <dialog id="convert-dialog" aria-labelledby="convert-heading">
+    <form method="post" action="/admin/documents/{{ fetched.document.id }}/convert" class="stack">
+      <h2 id="convert-heading">Convert {{ fetched.document.id }} to a multi-file document?</h2>
+      <p>The document becomes a folder with this text as its main file; files can then be added to it. This cannot be undone from here.</p>
+      <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+      <div class="dialog-actions">
+        <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
+        <button type="submit">Convert {{ fetched.document.id }}</button>
+      </div>
+    </form>
+  </dialog>
+  {% endif %}
+  {% if offer == Offer::Move %}{% if let Some(name) = file %}
+  <dialog id="move-dialog" aria-labelledby="move-heading">
+    <form method="post" action="/admin/documents/{{ fetched.document.id }}/move-file" class="stack">
+      <h2 id="move-heading">Move {{ name }} to another document?</h2>
+      <p>The file leaves {{ fetched.document.id }} and joins another multi-file document, with its history; each document gets a new revision.</p>
+      <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+      <input type="hidden" name="file" value="{{ name }}">
+      <label for="move-to">To document</label>
+      <input id="move-to" name="to" required placeholder="JD-42" autocomplete="off">
+      <label for="move-as">As <span class="hint">optional new path in that document</span></label>
+      <input id="move-as" name="as" placeholder="{{ name }}" autocomplete="off">
+      <div class="dialog-actions">
+        <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
+        <button type="submit">Move {{ name }}</button>
+      </div>
+    </form>
+  </dialog>
+  {% endif %}{% endif %}
+  {% endif %}
+  {% if fetched.revision.revision != fetched.document.revision %}
+  <p class="notice">You are reading revision {{ fetched.revision.revision }}. <a href="{{ latest_href }}">Read the latest</a>.</p>
+  {% endif %}
+</div>
+
+<nav class="tabs" aria-label="View">
+  <a href="{{ rendered_href }}"{% if !source %} aria-current="page"{% endif %}>Rendered</a>
+  <a href="{{ source_href }}"{% if source %} aria-current="page"{% endif %}>Source</a>
+  <a href="{{ history_href }}">History</a>
+</nav>
+
+<div class="doc-layout">
+  <article class="doc-body" aria-label="Content">
+    {% if source %}
+    <pre class="source"><code>{{ markdown }}</code></pre>
+    {% else %}
+    <div class="markdown">{{ rendered|safe }}</div>
+    {% endif %}
+  </article>
+
+  <aside class="doc-side">
+    <section class="properties" aria-labelledby="props-heading">
+      <h2 id="props-heading">Properties</h2>
+      <dl class="facts">
+        {% if file.is_none() %}
+        <dt>ID</dt><dd><code>{{ fetched.document.id }}</code></dd>
+        <dt>Type</dt><dd>{{ facts.doc_type }}</dd>
+        <dt>Status</dt><dd><span class="badge badge-status-{{ facts.status }}">{{ facts.status }}</span></dd>
+        <dt>Created</dt><dd>{{ facts.created }} <span class="hint">by {{ facts.created_by }}</span></dd>
+        <dt>Updated</dt><dd>{{ facts.updated }} <span class="hint">by {{ facts.updated_by }} ({{ facts.client }})</span></dd>
+        {% endif %}
+        {% if !tags.is_empty() %}
+        <dt>Tags</dt><dd>{% for tag in tags %}<span class="chip">{{ tag }}</span>{% endfor %}</dd>
+        {% endif %}
+        {% if !aliases.is_empty() %}
+        <dt>Aliases</dt><dd>{% for alias in aliases %}<span class="chip">{{ alias }}</span>{% endfor %}</dd>
+        {% endif %}
+        {% for property in properties %}
+        <dt>{{ property.key }}</dt>
+        <dd>{% for value in property.values %}{% match value %}{% when PropValue::Document(id) %}<a href="/admin/documents/{{ id }}">{{ id }}</a>{% when PropValue::Url(url) %}<a href="{{ url }}" rel="noopener noreferrer">{{ url }}</a>{% when PropValue::Text(text) %}<span class="value">{{ text }}</span>{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %}</dd>
+        {% endfor %}
+      </dl>
+    </section>
+
+    {% if !files.is_empty() %}
+    <section aria-labelledby="files-heading">
+      <h2 id="files-heading">Files</h2>
+      <ul class="side-list">
+        {% for link in files %}
+        <li><a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if !headings.is_empty() %}
+    <section aria-labelledby="toc-heading">
+      <h2 id="toc-heading">On this page</h2>
+      <ul class="side-list toc">
+        {% for heading in headings %}
+        <li class="toc-{{ heading.level }}"><a href="#{{ heading.id }}">{{ heading.text }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <section aria-labelledby="downloads-heading">
+      <h2 id="downloads-heading">Download</h2>
+      <ul class="side-list">
+        <li><a href="{{ download_href }}" download>This file (.md)</a></li>
+        {% if let Some(href) = archive_href %}<li><a href="{{ href }}" download>All files (.tgz)</a></li>{% endif %}
+      </ul>
+    </section>
+
+    <section aria-labelledby="revisions-heading">
+      <h2 id="revisions-heading">Revisions</h2>
+      <ul class="side-list revisions">
+        {% for link in revisions %}
+        <li><a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a></li>
+        {% endfor %}
+      </ul>
+      {% if older %}<p class="hint">Older revisions are in the History.</p>{% endif %}
+    </section>
+  </aside>
+</div>
+{% endblock %}

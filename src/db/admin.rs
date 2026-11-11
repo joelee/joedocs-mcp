@@ -32,6 +32,26 @@ pub struct AdminSecrets {
     pub last_totp_step: Option<i64>,
 }
 
+/// What opened a session, and so where it is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKind {
+    /// Opened by `joedocs login`; used with the admin token on `/admin/v1/`.
+    Api,
+    /// Opened by the web interface's login page; held in a browser cookie.
+    Web,
+}
+
+impl SessionKind {
+    /// The stored value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Api => "api",
+            Self::Web => "web",
+        }
+    }
+}
+
 /// A stored admin session (never its secret).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRow {
@@ -45,6 +65,8 @@ pub struct SessionRow {
     pub expires_at: String,
     /// Revocation time (logout or token revocation), if any.
     pub revoked_at: Option<String>,
+    /// What opened it.
+    pub kind: SessionKind,
 }
 
 const SELECT: &str = "SELECT id, name, created_at, last_used_at, revoked_at, failed_logins, locked_until FROM admin_tokens";
@@ -207,11 +229,12 @@ pub fn insert_session(
     secret_sha256: &[u8],
     at: &str,
     expires_at: &str,
+    kind: SessionKind,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO admin_sessions (id, admin_token_id, secret_sha256, created_at, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, admin_token_id, secret_sha256, at, expires_at],
+        "INSERT INTO admin_sessions (id, admin_token_id, secret_sha256, created_at, expires_at, kind)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, admin_token_id, secret_sha256, at, expires_at, kind.as_str()],
     )?;
     Ok(())
 }
@@ -223,15 +246,21 @@ pub fn insert_session(
 /// Returns an error when the query fails.
 pub fn find_session(conn: &Connection, id: &str) -> rusqlite::Result<Option<SessionRow>> {
     conn.query_row(
-        "SELECT id, admin_token_id, secret_sha256, expires_at, revoked_at FROM admin_sessions WHERE id = ?1",
+        "SELECT id, admin_token_id, secret_sha256, expires_at, revoked_at, kind FROM admin_sessions WHERE id = ?1",
         [id],
         |row| {
+            let kind: String = row.get(5)?;
             Ok(SessionRow {
                 id: row.get(0)?,
                 admin_token_id: row.get(1)?,
                 secret_sha256: row.get(2)?,
                 expires_at: row.get(3)?,
                 revoked_at: row.get(4)?,
+                kind: if kind == "web" {
+                    SessionKind::Web
+                } else {
+                    SessionKind::Api
+                },
             })
         },
     )
