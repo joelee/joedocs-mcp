@@ -1,0 +1,110 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Overview</h1>
+  <p class="lede">JoeDocs {{ report.version }} on {{ report.host }}</p>
+</div>
+
+<section class="cards" aria-label="Server state">
+  <article class="card">
+    <h2>Health</h2>
+    <p><span class="badge {% if health_ok %}badge-ok{% else %}badge-bad{% endif %}">{{ health }}</span></p>
+    <p class="hint">Listening on <code>{{ report.bind }}</code></p>
+  </article>
+  <article class="card">
+    <h2>Index</h2>
+    {% if report.store.index_current %}
+    <p><span class="badge badge-ok">current</span></p>
+    {% else %}
+    <p><span class="badge badge-warn">behind the history</span></p>
+    <p><a href="/admin/maintenance">Rebuild it in Maintenance</a></p>
+    {% endif %}
+    {% if report.store.stale_index_files.is_empty() %}
+    <p class="hint">INDEX.md files up to date</p>
+    {% else %}
+    <p class="hint">{{ report.store.stale_index_files.len() }} INDEX.md files missing or out of date. <a href="/admin/maintenance">Maintenance</a></p>
+    {% endif %}
+  </article>
+  <article class="card">
+    <h2>History</h2>
+    {% if let Some(head) = report.store.history_head %}
+    <p><code class="hash">{{ head }}</code></p>
+    {% else %}
+    <p>No commits yet</p>
+    {% endif %}
+    {% if let Some(at) = report.store.last_change %}
+    <p class="hint">Last change {{ at }}</p>
+    {% endif %}
+  </article>
+  <article class="card">
+    <h2>Access</h2>
+    <p>{{ report.store.keys_active }} API keys active, {{ report.store.keys_revoked }} revoked</p>
+    <p class="hint">{{ report.store.admin_tokens_active }} admin tokens active, {{ report.store.admin_tokens_revoked }} revoked</p>
+    <p><a href="/admin/keys">Manage API keys</a></p>
+  </article>
+  <article class="card">
+    <h2>Storage</h2>
+    <dl class="facts">
+      <dt>Vault</dt><dd>{{ vault }}</dd>
+      <dt>State</dt><dd>{{ state }}</dd>
+      <dt>Database</dt><dd>{{ database }}</dd>
+      <dt>History</dt><dd>{{ history }}</dd>
+    </dl>
+    <p><a href="/admin/maintenance">Back up or check the store</a></p>
+  </article>
+</section>
+
+<section aria-labelledby="projects-heading">
+  <div class="section-head">
+    <h2 id="projects-heading">Projects</h2>
+    <a href="/admin/projects">Manage projects</a>
+  </div>
+  {% if report.store.projects.is_empty() %}
+  <p class="empty">No projects yet. <a href="/admin/projects">Add one</a>.</p>
+  {% else %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th scope="col">Project</th><th scope="col">Key</th><th scope="col" class="num">Documents</th><th scope="col" class="num">Archived</th></tr></thead>
+      <tbody>
+        {% for project in report.store.projects %}
+        <tr>
+          <td><a href="/admin/documents?project={{ project.name }}">{{ project.name }}</a></td>
+          <td><code>{{ project.key }}</code></td>
+          <td class="num">{{ project.live }}</td>
+          <td class="num">{% if project.archived > 0 %}<a href="/admin/archive?project={{ project.name }}">{{ project.archived }}</a>{% else %}0{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+
+<section aria-labelledby="activity-heading">
+  <div class="section-head">
+    <h2 id="activity-heading">Recent activity</h2>
+    <a href="/admin/audit">All activity</a>
+  </div>
+  {% if audit.is_empty() %}
+  <p class="empty">Nothing yet.</p>
+  {% else %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Key</th><th scope="col">Client</th><th scope="col">Tool</th><th scope="col">Document</th><th scope="col">Outcome</th></tr></thead>
+      <tbody>
+        {% for row in audit %}
+        <tr>
+          <td><time datetime="{{ row.at }}">{{ row.at }}</time></td>
+          <td>{{ row.key_name }}</td>
+          <td>{{ row.client }}</td>
+          <td><code>{{ row.tool }}</code></td>
+          <td>{% if let Some(id) = row.document_id %}<a href="/admin/documents/{{ id }}">{{ id }}</a>{% endif %}</td>
+          <td><span class="badge {% if row.outcome == "ok" %}badge-ok{% else %}badge-bad{% endif %}">{{ row.outcome }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

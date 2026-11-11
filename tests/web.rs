@@ -35,6 +35,14 @@ struct Server {
 /// Starts a server with `edit` applied to a configuration that has the admin
 /// API and the web interface on.
 async fn start_with(edit: impl FnOnce(&mut Config)) -> TestResult<Server> {
+    start_full(edit, |_| Ok(())).await
+}
+
+/// As [`start_with`], with `setup` run on the store before it is served.
+async fn start_full(
+    edit: impl FnOnce(&mut Config),
+    setup: impl FnOnce(&mut Store) -> TestResult<()>,
+) -> TestResult<Server> {
     let mut config = Config::default();
     config.admin.enabled = true;
     config.admin.web_ui = true;
@@ -54,6 +62,7 @@ async fn start_with(edit: impl FnOnce(&mut Config)) -> TestResult<Server> {
         Arc::clone(&clock) as Arc<dyn joedocs::clock::Clock>,
     )?;
     let created = store.create_admin_token("laptop", &joedocs::auth::OsRandom)?;
+    setup(&mut store)?;
     let secret =
         joedocs::totp::base32_decode(created.totp_secret.expose_secret()).ok_or("bad base32")?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -531,4 +540,183 @@ async fn web_requests_are_audited_with_the_web_client() -> TestResult<()> {
         .collect::<Result<_, _>>()?;
     assert_eq!(names[..4], ["laptop", "laptop", "laptop", "laptop"]);
     server.stop().await
+}
+
+// --- STEP-04: shell, design system and Overview -------------------------------
+
+/// The pages every signed-in page links to, with their navigation labels.
+const NAVIGATION: [(&str, &str); 7] = [
+    ("/admin/", "Overview"),
+    ("/admin/documents", "Documents"),
+    ("/admin/projects", "Projects"),
+    ("/admin/keys", "API keys"),
+    ("/admin/audit", "Audit"),
+    ("/admin/archive", "Archive"),
+    ("/admin/maintenance", "Maintenance"),
+];
+
+#[tokio::test]
+async fn the_overview_shows_the_server_its_projects_and_recent_activity() -> TestResult<()> {
+    let server = start_full(
+        |_| {},
+        |store| {
+            store.add_project("joedocs", "JD", Some("JoeDocs"))?;
+            store.add_project("notes", "NT", None)?;
+            // Clients name themselves; their names reach the page escaped.
+            store.audit(
+                "k1",
+                &joedocs::store::Actor::new("laptop-key", "<script>alert(1)</script>"),
+                "new_document",
+                Some("JD-1"),
+                "ok",
+            )?;
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    for expected in [
+        concat!("JoeDocs ", env!("CARGO_PKG_VERSION")),
+        "joedocs",
+        "JD",
+        "notes",
+        "NT",
+        "Index",
+        "new_document",
+        "laptop-key",
+        "Signed in as",
+    ] {
+        assert!(page.body.contains(expected), "{expected} in {}", page.body);
+    }
+    assert!(
+        !page.body.contains("<script>alert"),
+        "escaped: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains("&#60;script&#62;alert(1)"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains("href=\"/admin/documents?project=joedocs\""),
+        "a project links to its documents"
+    );
+    assert!(
+        page.body.contains("href=\"/admin/documents/JD-1\""),
+        "an audit row links to its document"
+    );
+    for (href, label) in NAVIGATION {
+        let link = format!("href=\"{href}\"");
+        assert!(page.body.contains(&link), "{link} in the navigation");
+        assert!(page.body.contains(label), "{label}");
+    }
+    assert!(page.body.contains("aria-current=\"page\""));
+    assert!(
+        page.body.contains("action=\"/admin/search\""),
+        "search form"
+    );
+    assert!(
+        page.body.contains("action=\"/admin/logout\""),
+        "sign out form"
+    );
+    // The page's links all stay inside the interface or on this site.
+    for (at, _) in page.body.match_indices("href=\"") {
+        let rest = &page.body[at + 6..];
+        assert!(
+            rest.starts_with('/') || rest.starts_with('#'),
+            "{}",
+            &rest[..40.min(rest.len())]
+        );
+    }
+    server.stop().await
+}
+
+#[test]
+fn serve_prints_the_web_interface_url_only_when_it_is_on() {
+    use std::io::{BufRead as _, BufReader};
+    use std::process::{Command, Stdio};
+
+    let dir = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_joedocs");
+    let command = |web: bool| {
+        let mut cmd = Command::new(binary);
+        cmd.env_clear()
+            .env("HOME", dir.path())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("JOEDOCS__STORAGE__HOME", dir.path().join("vault"))
+            .env("JOEDOCS__STORAGE__STATE_DIR", dir.path().join("state"))
+            .env("JOEDOCS__SERVER__BIND", "127.0.0.1:0")
+            .env("JOEDOCS__ADMIN__ENABLED", "true")
+            .env("JOEDOCS__ADMIN__WEB_UI", web.to_string())
+            .current_dir(dir.path());
+        if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+            cmd.env("LLVM_PROFILE_FILE", profile);
+        }
+        cmd
+    };
+    assert!(
+        command(false)
+            .arg("init")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    for web in [true, false] {
+        let mut child = command(web)
+            .arg("serve")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        let mut lines = Vec::new();
+        for _ in 0..if web { 3 } else { 2 } {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            lines.push(line.trim().to_owned());
+        }
+        assert!(
+            lines[0].starts_with("JoeDocs MCP endpoint: http://127.0.0.1:"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].starts_with("JoeDocs admin API: http://127.0.0.1:"),
+            "{lines:?}"
+        );
+        if web {
+            assert!(
+                lines[2].starts_with("JoeDocs web interface: http://127.0.0.1:"),
+                "{lines:?}"
+            );
+            assert!(lines[2].ends_with("/admin/"), "{lines:?}");
+        }
+        // Wait until it answers, so the signal handler is in place.
+        let addr = lines[0]
+            .trim_start_matches("JoeDocs MCP endpoint: http://")
+            .trim_end_matches("/mcp")
+            .to_owned();
+        let mut health = std::net::TcpStream::connect(&addr).unwrap();
+        std::io::Write::write_all(
+            &mut health,
+            format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .unwrap();
+        let mut answer = String::new();
+        std::io::Read::read_to_string(&mut health, &mut answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        let killed = Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success());
+        let mut rest = String::new();
+        std::io::Read::read_to_string(&mut reader, &mut rest).unwrap();
+        assert!(!rest.contains("web interface"), "{rest}");
+        assert!(child.wait().unwrap().success());
+    }
 }

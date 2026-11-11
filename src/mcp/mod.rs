@@ -253,6 +253,9 @@ pub fn run(
         if options.admin.is_some() {
             writeln!(out, "JoeDocs admin API: http://{local}/admin/v1/")?;
         }
+        if options.web.is_some() {
+            writeln!(out, "JoeDocs web interface: http://{local}/admin/")?;
+        }
         out.flush()?;
         tracing::info!(%local, "listening");
         serve(listener, Shared::new(store), &options, shutdown_signal())

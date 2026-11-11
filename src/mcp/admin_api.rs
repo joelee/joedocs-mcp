@@ -49,6 +49,7 @@ struct ApiState {
     bind: SocketAddr,
     allowed_hosts: Vec<String>,
     allowed_origins: Vec<String>,
+    web_ui: bool,
 }
 
 /// The routes, to be nested under `/admin/v1`.
@@ -66,6 +67,7 @@ pub(super) fn routes(
         bind: options.bind,
         allowed_hosts: options.allowed_hosts.clone(),
         allowed_origins: options.allowed_origins.clone(),
+        web_ui: options.web.is_some(),
     });
     Router::new()
         .route("/", axum::routing::any(dispatch))
@@ -629,6 +631,7 @@ async fn status(state: Arc<ApiState>, call: Call) -> Response {
             state.config_file.clone(),
             state.bind,
             true,
+            state.web_ui,
             &crate::systemd::Systemctl,
         )
         .map_err(|e| match e {
@@ -1243,6 +1246,7 @@ mod tests {
             bind: "127.0.0.1:8750".parse().unwrap(),
             allowed_hosts: vec!["127.0.0.1".into()],
             allowed_origins: Vec::new(),
+            web_ui: false,
         };
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1"));

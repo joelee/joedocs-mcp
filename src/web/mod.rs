@@ -63,6 +63,10 @@ pub(crate) struct WebState {
     allowed_hosts: Vec<String>,
     allowed_origins: Vec<String>,
     csp: HeaderValue,
+    /// `server.bind`, for the Overview's health probe.
+    bind: std::net::SocketAddr,
+    /// The config file in use, for the Overview.
+    config_file: Option<std::path::PathBuf>,
 }
 
 /// The routes: `/` and `/admin` redirect to `/admin/`, and everything under
@@ -76,6 +80,8 @@ pub(crate) fn routes(shared: &Arc<Shared>, web: &WebOptions, server: &ServerOpti
         allowed_hosts: server.allowed_hosts.clone(),
         allowed_origins: server.allowed_origins.clone(),
         csp,
+        bind: server.bind,
+        config_file: server.admin.as_ref().and_then(|a| a.config_file.clone()),
     });
     Router::new()
         .route("/", any(dispatch))
