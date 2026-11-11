@@ -16,6 +16,8 @@ flowchart LR
     exec --> show[config::render_show / render_paths]
     exec -->|serve| mcp[mcp: axum + rmcp]
     mcp -->|bearer key| store
+    mcp -->|"/admin/ pages"| web[web: Askama pages]
+    web --> store
     exec -->|init, project, key, reindex, archive, check| admin[admin: reports]
     admin --> store[store::Store]
     store --> db[(db: SQLite)]
@@ -46,7 +48,8 @@ flowchart LR
 | `systemd` | `joedocs systemd install|remove`: renders a user or sandboxed system unit that pins the effective configuration, and runs `systemctl` through `ServiceManager`. |
 | `admin` | Text reports for `init`, `project`, `key`, `reindex`, `archive` and `check`. |
 | `mcp` | `joedocs serve`: the axum app (`/mcp` behind bearer authentication, `/health`), rmcp's Streamable HTTP service with `Host`/`Origin` checks, the nineteen tools with JSON schemas, grant checks, audit logging, and error mapping. |
-| `mcp::admin_api` | The `/admin/v1/` API, merged into the router only when `admin.enabled`: `Host`/`Origin` checks, admin token and session authentication, TOTP login, one audit row per call, and routes that run the same `admin` command functions and return their text. `status`, `documents/{id}` and `backup` return data and the archive. The routes added in 0.4.2 (`documents`, `search`, `documents/{id}/history`, `documents/{id}/diff`, `audit`) return JSON built by `browse`, in the shapes of the matching MCP tool results, so the 0.5.0 admin web interface can use them. One handler reads every request itself (a 64 KiB body limit), so nothing is rejected before it is checked and audited. A remote backup stages its snapshot under the store mutex and write lock, then compresses without them, so other calls carry on. |
+| `mcp::admin_api` | The `/admin/v1/` API, merged into the router only when `admin.enabled`: `Host`/`Origin` checks, admin token and session authentication, TOTP login, one audit row per call, and routes that run the same `admin` command functions and return their text. `status`, `documents/{id}` and `backup` return data and the archive. The routes added in 0.4.2 (`documents`, `search`, `documents/{id}/history`, `documents/{id}/diff`, `audit`) return JSON built by `browse`, in the shapes of the matching MCP tool results, for client mode. One handler reads every request itself (a 64 KiB body limit), so nothing is rejected before it is checked and audited. A remote backup (`backup_download`, shared with the web interface) stages its snapshot under the store mutex and write lock, then compresses without them, so other calls carry on. |
+| `web` | The admin web interface under `/admin/`, merged into the router only when `admin.enabled` and `admin.web_ui`: routing and the audit tool of each page (`mod.rs`, whose documentation lists them), the session cookie, CSRF token and same-origin rule (`session.rs`), static files under content-hashed paths (`assets.rs`, with htmx and Pele vendored in `assets/vendor/`), Obsidian-style Markdown to safe HTML (`markdown.rs`) and PlantUML text encoding (`plantuml.rs`), and one module per workspace in `pages/` with its Askama template in `templates/`. Pages call the store, `browse` and `admin` functions in-process, never the JSON API. |
 | `browse` | `joedocs list`, `search`, `history`, `diff` and `audit`: from arguments to store requests, the JSON reply (the MCP tool result shapes, built from the same output types), and the tables printed from it. Local runs and client mode both render the reply, so they print the same; table cells escape control characters. |
 | `client` | `joedocs` as a client of a server's admin API (`client.server`, `--server`): reqwest with rustls (ring) and the OS root store, the session file, the `Prompt` trait for codes, and the re-login retry. |
 | `status` | `joedocs status`: `StatusReport` (shared with the admin API), the `/health` probe, systemd unit state through `ServiceManager`, directory sizes. |
@@ -79,6 +82,31 @@ sequenceDiagram
     A-->>C: 200 with the command output
     Note over C,A: an expired session gets 401 session_expired, then the client asks for a new code and retries once
 ```
+
+## Web request path
+
+The web interface is the admin API's operations as server-rendered pages. It is off unless both `admin.enabled` and `admin.web_ui` are set. An admin token and a TOTP code open a web session (`jdw_...`) that the API does not accept, held in an `HttpOnly`, `SameSite=Strict` cookie; the token is never stored by the browser. Every request is checked and audited before anything else runs, and the handler runs on a blocking thread under the store mutex, as an MCP tool does. htmx only swaps parts of a page in place: every page and form also works as a plain link or form post.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as web
+    participant S as Store
+    B->>W: POST /admin/login with token, code and next
+    W->>W: Host check, then HTTPS or loopback
+    W->>S: web_login checks the token, the code step and the lock
+    S-->>W: web session and expiry
+    W-->>B: 303 to next, with the session cookie
+    B->>W: POST /admin/keys/ci/rotate with the CSRF token
+    W->>W: Host check, then the same-origin rule
+    W->>S: web_session checks the cookie
+    W->>W: CSRF token of that session
+    W->>S: rotate_key, then the audit row
+    W-->>B: 200 with the new token, shown once
+    Note over B,W: a static file under /admin/assets/ is served after the Host check alone, cached for a year and not audited
+```
+
+Documents are rendered to HTML on the server (`web::markdown`), so the browser never parses Markdown. Raw HTML in a document becomes text, links keep only safe schemes, and every element the renderer writes comes from escaped parts. Mermaid blocks are placeholders that the bundled Pele draws in the page; PlantUML blocks are images from the configured PlantUML server. The Content-Security-Policy allows no inline script, so `app.js` and htmx are the only scripts.
 
 ## Write path
 
@@ -121,4 +149,7 @@ flowchart TD
 - **Secrets are separate from config.** They never appear in `config.toml`, overrides or `config show` output.
 - **Exit codes follow `sysexits.h`.** `1` when `check` finds problems, `65` for requests the user can fix, `69` when the server cannot listen, `70` for store faults, `74` for output errors, `78` for configuration errors.
 - **Git through its command line.** No new crates, and administrators can inspect the history with normal git. The user's git configuration is ignored so hooks and signing cannot interfere.
+- **A server-rendered admin web interface.** Askama templates compiled into the binary, htmx for partial updates, native `<dialog>` and invoker commands, and one hand-written script: no Node, WASM or SPA build, the same tests and lints as the rest of the code, and a strict Content-Security-Policy.
+- **Web sessions are their own kind.** A browser holds a `jdw_` session in a cookie, never the admin token; the admin API and the web interface each refuse the other's sessions, so a stolen cookie cannot drive the API.
+- **Markdown is rendered on the server.** One renderer decides what HTML a document may produce, and it is tested with hostile input; the browser only draws Mermaid diagrams.
 - **The history is the source of truth.** The database index can always be rebuilt from it; only projects and API keys need a database backup.

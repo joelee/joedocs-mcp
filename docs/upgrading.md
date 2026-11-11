@@ -103,6 +103,9 @@ Changes made after the backup are lost, so go back soon or not at all.
 ### 0.4.3 to 0.5.0
 
 - **Migration 6** runs on the first start: admin sessions gain a kind, `api` (from `joedocs login`) or `web` (from the web interface), and every existing session becomes `api`, so `joedocs login` sessions keep working. **Take the backup in step 1 first:** going back to 0.4.3 means restoring it, because 0.4.3 refuses a version 6 database.
+- **The admin web interface is off** until you set `[admin] enabled = true` and `web_ui = true` and restart; nothing changes for a server that leaves them off. Turning it on, HTTPS and proxies are in the [deployment guide](deployment.md#6b-admin-web-interface). It signs in with the admin tokens you already have.
+- **Two new keys**, `admin.web_ui` (default `false`) and `admin.web_plantuml_url` (default empty). `joedocs serve` prints one more line, and `joedocs status` and `joedocs agents` one more line each, when the interface is on; the `status` JSON of `GET /admin/v1/status` gains `web_ui_enabled`.
+- MCP clients, the command line and the admin API are unchanged: a 0.4.3 client works with a 0.5.0 server and the other way round.
 
 ### 0.4.2 to 0.4.3
 

@@ -29,7 +29,7 @@ JoeDocs needs `git` at run time (`sudo pacman -S git`, `sudo apt install git`, o
 **Prebuilt binaries.** Each release has `joedocs-X.Y.Z-<target>.tar.gz` for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (static, so they run on any distribution) and `aarch64-apple-darwin` (Apple silicon), with a `SHA256SUMS` file and a build-provenance attestation for each archive. Check both before installing:
 
 ```bash
-V=0.4.3 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
+V=0.5.0 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
 A="joedocs-$V-$T.tar.gz"
 gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber &&
   shasum -a 256 -c --ignore-missing SHA256SUMS &&
@@ -241,6 +241,31 @@ The admin commands can also run from another machine, through the server's admin
 
 When the session expires, the next command asks for a new code. `joedocs admin-token revoke laptop` on the server ends that token and its sessions at once. The server's `/admin/v1/` path must be reachable the same way as `/mcp` (for example through `tailscale serve`), and `server.allowed_hosts` must list the name you use.
 
+## 6b. Admin web interface
+
+The admin API can also serve pages for a browser under `/admin/`: browse, search and read documents, follow history and diffs, manage projects and keys, read the audit log, restore archives, and check, reindex or back up the store (the [reference](reference.md#admin-web-interface) lists every page). It is off until you turn it on, and needs the admin API.
+
+1. On the server, turn both on and restart the service:
+
+   ```toml
+   [admin]
+   enabled = true
+   web_ui = true
+   ```
+
+   `joedocs serve` then prints `JoeDocs web interface: http://127.0.0.1:8750/admin/`, and `joedocs status` says it is on.
+2. Create an admin token as in 6a step 2 and add its secret to your authenticator app.
+3. Open `https://<your server>/admin/` and sign in with the token and a code. The browser keeps a web session for `admin.session_hours`; the token is not stored.
+
+**HTTPS.** Signing in is refused over plain HTTP except on the server itself (`http://localhost:8750/admin/`, `127.0.0.1` or `[::1]`), so reach it through `tailscale serve` or a TLS proxy (section 5), not through `bind` set to a Tailscale address. Over HTTPS the session cookie is `Secure` and host-only (`__Host-`).
+
+**Proxies.** The interface checks the `Host` header, like `/mcp`, and accepts a form only when the browser's `Origin` names that same host (or an entry of `server.allowed_origins`):
+
+- Add the public name to `server.allowed_hosts` and let the proxy pass the `Host` through. `tailscale serve` and Caddy's `reverse_proxy` do; with nginx, set `proxy_set_header Host $host;`.
+- If your proxy rewrites `Host` to the backend address instead, add the public origin to `server.allowed_origins`, for example `allowed_origins = ["https://docs.example.net"]`, or every sign-in is refused as "not sent from this site".
+
+**PlantUML diagrams.** The bundled renderer draws Mermaid diagrams in the browser. PlantUML diagrams are shown as source unless `admin.web_plantuml_url` names a PlantUML server, such as `https://www.plantuml.com/plantuml`. The admin's browser then fetches each diagram from `<url>/svg/<encoded diagram text>`, so **that server receives the text of every diagram you view**; JoeDocs itself sends nothing. For private diagrams run your own server, for example the `plantuml/plantuml-server` container on the same machine, and set its address (`http://127.0.0.1:8080` is allowed only on loopback; use `https://` otherwise).
+
 ## 7. Operate
 
 | Task | How |
@@ -263,6 +288,9 @@ When the session expires, the next command asks for a new code. `joedocs admin-t
 | --- | --- |
 | `403 Forbidden` | The `Host` the client used is not in `server.allowed_hosts` (or its `Origin` is not in `server.allowed_origins`). Add it and restart. |
 | `401 Unauthorized` | The token is wrong, rotated or revoked. Check with `joedocs key list`. |
+| `/admin/` answers `404` | `admin.enabled` or `admin.web_ui` is off. Turn both on and restart. |
+| Signing in says "Signing in needs HTTPS" | The page was opened over plain HTTP from another machine. Use `https://` through `tailscale serve` or a TLS proxy (section 6b). |
+| Signing in says the form was "not sent from this site" | The proxy changes the `Host` header. Pass it through, or add the public origin to `server.allowed_origins` (section 6b). |
 | `Failed to connect to bus` from `systemctl --user` | Not a real login session (for example after `su`). Log in over SSH as that user. |
 | The service stops at logout | Enable lingering: `sudo loginctl enable-linger "$USER"`. |
 | Exit code `78` on start | A configuration error; the message names the file, variable or key. `joedocs config show` shows every value and its source. |
