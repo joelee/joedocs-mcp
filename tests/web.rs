@@ -2104,3 +2104,255 @@ async fn rotate_and_revoke_stop_old_tokens_and_no_token_is_kept() -> TestResult<
     assert!(line.contains("revoked"), "{keys}");
     Ok(())
 }
+
+// --- STEP-10: audit --------------------------------------------------------------
+
+/// The STEP-06 vault, an API key `ci`, and audit rows from MCP clients that
+/// no web request can match: key `ci-bot`, MCP tools.
+fn audit_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::Actor;
+    fixture(store)?;
+    store.create_key("ci", &[], &joedocs::auth::OsRandom)?;
+    let bot = Actor::new("ci-bot", "claude-code");
+    for (tool, document, outcome) in [
+        ("new_document", Some("JD-1"), "ok"),
+        ("update_document", Some("JD-1"), "conflict"),
+        ("new_document", Some("JD-2"), "ok"),
+        ("archive_document", Some("JD-4"), "ok"),
+    ] {
+        store.audit("bot-id", &bot, tool, document, outcome)?;
+    }
+    Ok(())
+}
+
+/// Audit filters whose results must match `joedocs audit`, as
+/// `(command line arguments, page query)`.
+const AUDIT_FILTERS: [(&[&str], &str); 8] = [
+    (&["-k", "ci-bot"], "key=ci-bot"),
+    (
+        &["-k", "ci-bot", "--tool", "new_document"],
+        "key=ci-bot&tool=new_document",
+    ),
+    (&["--tool", "new_*"], "tool=new_%2A"),
+    (&["-d", "JD-1"], "document=JD-1"),
+    (&["--outcome", "conflict"], "outcome=conflict"),
+    (
+        &["-k", "ci-bot", "--since", "2026-10-26"],
+        "key=ci-bot&since=2026-10-26",
+    ),
+    (
+        &["-k", "ci-bot", "--until", "2026-10-26"],
+        "key=ci-bot&until=2026-10-26",
+    ),
+    (
+        &["-k", "ci-bot", "--start", "2", "-n", "2"],
+        "key=ci-bot&start=2&limit=2",
+    ),
+];
+
+/// `tool document outcome` for each row of `joedocs audit args`.
+fn cli_audit(store: &Store, args: &[&str]) -> TestResult<Vec<String>> {
+    use clap::Parser as _;
+    let all: Vec<&str> = ["joedocs", "audit"]
+        .into_iter()
+        .chain(args.iter().copied())
+        .collect();
+    let joedocs::Command::Audit(args) = joedocs::Cli::try_parse_from(all)?.command else {
+        return Err("not audit".into());
+    };
+    let reply = joedocs::browse::audit(store, &args)?;
+    let items = reply["items"].as_array().ok_or("no items")?;
+    Ok(items
+        .iter()
+        .map(|row| {
+            format!(
+                "{} {} {}",
+                row["tool"].as_str().unwrap_or(""),
+                row["document_id"].as_str().unwrap_or("-"),
+                row["outcome"].as_str().unwrap_or("")
+            )
+        })
+        .collect())
+}
+
+/// `tool document outcome` for each row of an audit page.
+fn page_entries(body: &str) -> Vec<String> {
+    body.split("<tr data-entry=\"")
+        .skip(1)
+        .filter_map(|part| part.split('"').next().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_audit_page_filters_and_pages_as_joedocs_audit_does() -> TestResult<()> {
+    let expected = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = Arc::clone(&expected);
+    let server = start_full(
+        |_| {},
+        move |store| {
+            audit_fixture(store)?;
+            let mut out = record.lock().map_err(|_| "poisoned")?;
+            for (args, _) in AUDIT_FILTERS {
+                out.push(cli_audit(store, args)?);
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let expected = expected.lock().map_err(|_| "poisoned")?.clone();
+    for ((args, query), want) in AUDIT_FILTERS.iter().zip(&expected) {
+        let page = server
+            .get(&format!("/admin/audit?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(page.status, 200, "{query}: {}", page.body);
+        assert_eq!(&page_entries(&page.body), want, "{args:?} / {query}");
+    }
+    assert_eq!(expected[0].len(), 4);
+    assert_eq!(
+        expected[2],
+        ["new_document JD-2 ok", "new_document JD-1 ok"]
+    );
+    assert_eq!(expected[4], ["update_document JD-1 conflict"]);
+    assert!(expected[6].is_empty(), "until is exclusive");
+    assert_eq!(expected[7].len(), 2);
+
+    let all = server.get("/admin/audit", Some(&cookie)).await?;
+    let row = all
+        .body
+        .split("<tr data-entry=\"update_document JD-1 conflict\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</tr>").next())
+        .ok_or("no conflict row")?;
+    for cell in [
+        "ci-bot",
+        "claude-code",
+        "update_document",
+        "conflict",
+        "2026-10-26T07:33:20Z",
+    ] {
+        assert!(row.contains(cell), "{cell}: {row}");
+    }
+    assert!(row.contains("href=\"/admin/documents/JD-1\""), "{row}");
+    for quick in [
+        "href=\"/admin/audit?tool=admin%3A*\"",
+        "href=\"/admin/audit?outcome_not=ok\"",
+        "href=\"/admin/audit?since=",
+    ] {
+        assert!(all.body.contains(quick), "{quick}: {}", all.body);
+    }
+    let refusals = server
+        .get("/admin/audit?outcome_not=ok&key=ci-bot", Some(&cookie))
+        .await?;
+    assert_eq!(
+        page_entries(&refusals.body),
+        ["update_document JD-1 conflict"]
+    );
+
+    let first = server
+        .get("/admin/audit?key=ci-bot&limit=1", Some(&cookie))
+        .await?;
+    assert!(
+        first
+            .body
+            .contains("href=\"/admin/audit?key=ci-bot&#38;start=2&#38;limit=1\""),
+        "paging keeps the filters: {}",
+        first.body
+    );
+    for (query, message) in [
+        ("since=yesterday", "is not a UTC date (2026-11-10) or time"),
+        ("document=nope", "nope"),
+        ("limit=0", "must be 1 to"),
+    ] {
+        let bad = server
+            .get(&format!("/admin/audit?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(bad.status, 400, "{query}: {}", bad.body);
+        assert!(bad.body.contains(message), "{query}: {}", bad.body);
+        assert!(
+            bad.body.contains("<form"),
+            "the filters stay usable: {query}"
+        );
+    }
+    server.stop().await
+}
+
+/// Each route in the table of `src/web/mod.rs`'s documentation, as
+/// `(method, path, audit tool)`.
+fn documented_routes() -> Vec<(String, String, String)> {
+    include_str!("../src/web/mod.rs")
+        .lines()
+        .filter_map(|line| {
+            let row = line.strip_prefix("//! | `")?;
+            let (route, rest) = row.split_once("` | `")?;
+            let tool = rest.strip_suffix("` |")?;
+            let (method, path) = route.split_once(' ')?;
+            Some((method.to_owned(), path.to_owned(), tool.to_owned()))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn every_route_writes_one_audit_row_with_its_documented_tool() -> TestResult<()> {
+    let server = start_full(|_| {}, audit_fixture).await?;
+    let routes = documented_routes();
+    assert!(routes.len() >= 19, "{routes:?}");
+    assert!(
+        routes
+            .iter()
+            .any(|(_, p, t)| p == "/admin/audit" && t == "admin:audit.list")
+    );
+    let mut cookie = server.login().await?;
+    let mut csrf = server.csrf(&cookie).await?;
+    for (method, path, tool) in &routes {
+        let path = path.replace("{id}", "JD-1").replace("{name}", "ci");
+        let before = server.audit()?.len();
+        let reply = match (method.as_str(), path.as_str()) {
+            ("POST", "/admin/login") => server.post_login(&server.code(), "/admin/").await?,
+            ("POST", "/admin/logout") => {
+                let reply = server.post_form(&path, &cookie, Some(&csrf), &[]).await?;
+                server.clock.advance(30);
+                cookie = server.login().await?;
+                csrf = server.csrf(&cookie).await?;
+                reply
+            }
+            ("POST", _) => server.post_form(&path, &cookie, Some(&csrf), &[]).await?,
+            _ => server.get(&path, Some(&cookie)).await?,
+        };
+        assert!(reply.status < 500, "{method} {path}: {}", reply.body);
+        let rows = server.audit()?;
+        let written: Vec<_> = rows[before..]
+            .iter()
+            .filter(|(t, _, _)| t == tool)
+            .collect();
+        assert_eq!(
+            written.len(),
+            1,
+            "{method} {path} → {tool}: {:?}",
+            &rows[before..]
+        );
+        assert_eq!(written[0].1, "joedocs-web", "{method} {path}");
+    }
+    let unknown_before = server.audit()?.len();
+    server.get("/admin/nowhere", Some(&cookie)).await?;
+    let rows = server.audit()?;
+    assert_eq!(rows[unknown_before..].len(), 1);
+    assert_eq!(rows[unknown_before].0, "admin:web.unknown");
+    let page = server.get("/admin/", Some(&cookie)).await?;
+    let asset = page
+        .body
+        .split("href=\"/admin/assets/")
+        .nth(1)
+        .and_then(|r| r.split('"').next());
+    let before = server.audit()?.len();
+    let stylesheet = server
+        .get(&format!("/admin/assets/{}", asset.ok_or("no asset")?), None)
+        .await?;
+    assert_eq!(stylesheet.status, 200);
+    assert_eq!(
+        server.audit()?.len(),
+        before,
+        "static files are not audited"
+    );
+    server.stop().await
+}

@@ -1,6 +1,7 @@
 //! The pages: one module per workspace, each with its handlers and the
 //! Askama structs of its templates.
 
+mod audit;
 mod document;
 mod documents;
 mod history;
@@ -176,6 +177,7 @@ pub(crate) fn page(
         Route::KeysUngrant(name) => keys::ungrant(store, request, session, name),
         Route::KeysRotate(name) => keys::rotate(store, session, name),
         Route::KeysRevoke(name) => keys::revoke(store, session, name),
+        Route::Audit => Ok(audit::page(store, request, session)),
         _ => Err(WebError::new(
             StatusCode::NOT_FOUND,
             "not_found",

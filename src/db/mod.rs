@@ -178,6 +178,8 @@ pub struct AuditQuery<'a> {
     pub document_id: Option<&'a str>,
     /// Only this outcome (`ok` or an error code).
     pub outcome: Option<&'a str>,
+    /// Every outcome but this one (`ok` for the refusals).
+    pub outcome_not: Option<&'a str>,
     /// Entries to skip.
     pub offset: u64,
     /// Most entries to return.
@@ -215,7 +217,8 @@ pub fn list_audit(
     let filter = "WHERE (?1 IS NULL OR at >= ?1) AND (?2 IS NULL OR at < ?2)
         AND (?3 IS NULL OR key_name = ?3) AND (?4 IS NULL OR tool = ?4)
         AND (?5 IS NULL OR substr(tool, 1, length(?5)) = ?5)
-        AND (?6 IS NULL OR document_id = ?6) AND (?7 IS NULL OR outcome = ?7)";
+        AND (?6 IS NULL OR document_id = ?6) AND (?7 IS NULL OR outcome = ?7)
+        AND (?8 IS NULL OR outcome <> ?8)";
     let conditions = params![
         query.since,
         query.until,
@@ -224,6 +227,7 @@ pub fn list_audit(
         query.tool_prefix,
         query.document_id,
         query.outcome,
+        query.outcome_not,
     ];
     let total = conn.query_row(
         &format!("SELECT count(*) FROM audit_log {filter}"),
@@ -232,7 +236,7 @@ pub fn list_audit(
     )?;
     let mut stmt = conn.prepare(&format!(
         "SELECT at, api_key_id, key_name, client, tool, document_id, outcome
-         FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?8 OFFSET ?9"
+         FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?9 OFFSET ?10"
     ))?;
     let rows = stmt
         .query_map(
@@ -244,6 +248,7 @@ pub fn list_audit(
                 query.tool_prefix,
                 query.document_id,
                 query.outcome,
+                query.outcome_not,
                 query.limit,
                 query.offset,
             ],
@@ -584,6 +589,15 @@ mod tests {
             ..all.clone()
         };
         assert_eq!(read(&by_document).0, ["update_document", "new_document"]);
+        let refused = AuditQuery {
+            outcome_not: Some("ok"),
+            ..all.clone()
+        };
+        assert_eq!(
+            read(&refused).0,
+            ["update_document"],
+            "every outcome but ok"
+        );
         let page = AuditQuery {
             offset: 1,
             limit: 2,

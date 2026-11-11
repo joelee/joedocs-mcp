@@ -268,6 +268,10 @@ pre.token { background: var(--surface); white-space: pre-wrap; overflow-wrap: an
 
 .pager { display: flex; gap: var(--space-4); align-items: center; margin-top: var(--space-3); }
 
+/* Audit */
+.quick-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.quick-filters a { padding: var(--space-1) var(--space-3); border: 1px solid var(--border); border-radius: 999px; background: var(--surface); text-decoration: none; font-size: var(--text-sm); }
+
 /* Search */
 .search-form .search-words { flex: 2 1 16rem; }
 .search-form .search-json { flex: 2 1 18rem; }

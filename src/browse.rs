@@ -253,6 +253,7 @@ pub fn audit(store: &Store, args: &AuditArgs) -> Result<Value, Error> {
         tool: args.tool.clone(),
         document: args.document.clone(),
         outcome: args.outcome.clone(),
+        outcome_not: None,
         start: args.start,
         limit: args.limit,
     })?;

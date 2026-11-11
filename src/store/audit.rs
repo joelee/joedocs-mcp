@@ -23,6 +23,9 @@ pub struct AuditRequest {
     pub document: Option<String>,
     /// Only this outcome: `ok` or an error code.
     pub outcome: Option<String>,
+    /// Every outcome but this one: `ok` for the refusals. The web
+    /// interface's quick filter; `joedocs audit` has no flag for it.
+    pub outcome_not: Option<String>,
     /// 1-based position of the first entry, newest first.
     pub start: u64,
     /// Most entries to return, 1 to [`MAX_AUDIT_LIMIT`].
@@ -90,6 +93,7 @@ impl Store {
                 tool_prefix,
                 document_id: document.as_deref(),
                 outcome: request.outcome.as_deref(),
+                outcome_not: request.outcome_not.as_deref(),
                 offset,
                 limit: request.limit,
             },

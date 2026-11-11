@@ -34,6 +34,7 @@
 //! | `POST /admin/keys/{name}/ungrant` | `admin:keys.ungrant` |
 //! | `POST /admin/keys/{name}/rotate` | `admin:keys.rotate` |
 //! | `POST /admin/keys/{name}/revoke` | `admin:keys.revoke` |
+//! | `GET /admin/audit` | `admin:audit.list` |
 //! | any other path under `/admin/` | `admin:web.unknown` |
 //!
 //! Only `/admin/` is a stable entry point; other page paths, the HTML and
@@ -150,6 +151,7 @@ pub(crate) enum Route {
     KeysUngrant(String),
     KeysRotate(String),
     KeysRevoke(String),
+    Audit,
     Unknown,
 }
 
@@ -189,6 +191,7 @@ impl Route {
             ("/admin/projects", _) if post => Self::ProjectsAdd,
             ("/admin/keys", _) if get => Self::KeysList,
             ("/admin/keys", _) if post => Self::KeysCreate,
+            ("/admin/audit", _) if get => Self::Audit,
             (_, ["keys", name, action]) if post && !name.is_empty() => {
                 let name = percent_decode(name);
                 match *action {
@@ -224,6 +227,7 @@ impl Route {
             Self::KeysUngrant(_) => "admin:keys.ungrant",
             Self::KeysRotate(_) => "admin:keys.rotate",
             Self::KeysRevoke(_) => "admin:keys.revoke",
+            Self::Audit => "admin:audit.list",
             Self::Unknown => "admin:web.unknown",
         }
     }
