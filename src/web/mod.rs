@@ -22,6 +22,7 @@
 //! | `GET /admin/` | `admin:status` |
 //! | `GET /admin/documents` | `admin:documents.list` |
 //! | `GET /admin/documents/{id}` | `admin:documents.get` |
+//! | `GET /admin/search` | `admin:documents.search` |
 //! | any other path under `/admin/` | `admin:web.unknown` |
 //!
 //! Only `/admin/` is a stable entry point; other page paths, the HTML and
@@ -126,6 +127,7 @@ pub(crate) enum Route {
     Home,
     DocumentsList,
     Document(String),
+    Search,
     Unknown,
 }
 
@@ -151,6 +153,7 @@ impl Route {
             ("/admin/", _) if get => Self::Home,
             (_, ["documents"]) if get => Self::DocumentsList,
             (_, ["documents", id]) if get && !id.is_empty() => Self::Document(percent_decode(id)),
+            ("/admin/search", _) if get => Self::Search,
             _ => Self::Unknown,
         }
     }
@@ -165,6 +168,7 @@ impl Route {
             Self::Home => "admin:status",
             Self::DocumentsList => "admin:documents.list",
             Self::Document(_) => "admin:documents.get",
+            Self::Search => "admin:documents.search",
             Self::Unknown => "admin:web.unknown",
         }
     }
@@ -173,9 +177,12 @@ impl Route {
         match self {
             Self::LoginPage => Access::Public,
             Self::Login => Access::Login,
-            Self::Logout | Self::Home | Self::DocumentsList | Self::Document(_) | Self::Unknown => {
-                Access::Session
-            }
+            Self::Logout
+            | Self::Home
+            | Self::DocumentsList
+            | Self::Document(_)
+            | Self::Search
+            | Self::Unknown => Access::Session,
         }
     }
 }
@@ -222,9 +229,24 @@ impl WebRequest {
         first(&self.form, key)
     }
 
+    /// Every query parameter `key`, in order.
+    pub(crate) fn query_all(&self, key: &str) -> Vec<&str> {
+        self.query
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+            .collect()
+    }
+
     /// Whether htmx sent it.
     pub(crate) fn is_htmx(&self) -> bool {
         session::text(&self.headers, "hx-request") == Some("true")
+    }
+
+    /// Whether htmx asked for part of a page: a region to swap in. A
+    /// history restore asks for the whole page (`HX-Request-Type: full`).
+    pub(crate) fn wants_fragment(&self) -> bool {
+        self.is_htmx() && session::text(&self.headers, "hx-request-type") == Some("partial")
     }
 
     /// The path and query, to come back to after logging in.

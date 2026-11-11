@@ -1055,3 +1055,237 @@ async fn plantuml_diagrams_come_from_the_configured_server_only() -> TestResult<
     assert_eq!(list.status, 200);
     server.stop().await
 }
+
+// --- STEP-07: search -------------------------------------------------------------
+
+/// The STEP-06 vault, plus a note in `notes` whose body needs escaping.
+fn search_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewDocument};
+    fixture(store)?;
+    store.create(
+        &Actor::new("laptop-key", "claude-code"),
+        NewDocument {
+            project: "notes".into(),
+            doc_type: Some("notes".into()),
+            title: "Cartoon".into(),
+            content: "Tom & Jerry <script>alert(1)</script> chase each other.\n".into(),
+            ..NewDocument::default()
+        },
+    )?;
+    Ok(())
+}
+
+/// The command lines whose results the Search page must match, as
+/// `(joedocs search arguments, the same search as a page query)`.
+const SAME_AS_THE_CLI: [(&[&str], &str); 7] = [
+    (&["gap OR body"], "q=gap+OR+body"),
+    (
+        &["-p", "joedocs", "-t", "plans"],
+        "project=joedocs&type=plans",
+    ),
+    (&["-s", "approved"], "status=approved"),
+    (&["-F", "state=planned"], "filter=state%3Dplanned"),
+    (
+        &["--filters", "{\"steps_count\": {\"gt\": 2}}"],
+        "filters=%7B%22steps_count%22%3A+%7B%22gt%22%3A+2%7D%7D",
+    ),
+    (&["-p", "notes", "chase"], "project=notes&q=chase"),
+    (&["-p", "joedocs", "chase"], "project=joedocs&q=chase"),
+];
+
+/// `ID` or `ID?file=FILE` for each hit of `joedocs search args`.
+fn cli_hits(store: &Store, args: &[&str]) -> TestResult<Vec<String>> {
+    use clap::Parser as _;
+    let mut all = vec!["joedocs", "search"];
+    all.extend_from_slice(args);
+    let joedocs::Command::Search(args) = joedocs::Cli::try_parse_from(all)?.command else {
+        return Err("not a search".into());
+    };
+    let spec = joedocs::browse::SearchSpec::from_args(&args)?;
+    let reply = joedocs::browse::search(store, &spec)?;
+    let items = reply["items"].as_array().ok_or("no items")?;
+    Ok(items
+        .iter()
+        .map(|hit| match hit["file"].as_str() {
+            Some(file) => format!("{}?file={}", hit["id"].as_str().unwrap_or(""), file),
+            None => hit["id"].as_str().unwrap_or("").to_owned(),
+        })
+        .collect())
+}
+
+/// `ID` or `ID?file=FILE` for each hit linked from a results page, in order.
+fn page_hits(body: &str) -> Vec<String> {
+    let mut hits: Vec<String> = Vec::new();
+    for part in body
+        .split("<a class=\"hit-link\" href=\"/admin/documents/")
+        .skip(1)
+    {
+        let href = part.split('"').next().unwrap_or("");
+        let hit = href.replace("%2F", "/");
+        if !hits.contains(&hit) {
+            hits.push(hit);
+        }
+    }
+    hits
+}
+
+#[tokio::test]
+async fn search_matches_the_command_line_and_links_each_file() -> TestResult<()> {
+    let expected = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = Arc::clone(&expected);
+    let server = start_full(
+        |_| {},
+        move |store| {
+            search_fixture(store)?;
+            let mut out = record.lock().map_err(|_| "poisoned")?;
+            for (args, _) in SAME_AS_THE_CLI {
+                out.push(cli_hits(store, args)?);
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let expected = expected.lock().map_err(|_| "poisoned")?.clone();
+    for ((args, query), want) in SAME_AS_THE_CLI.iter().zip(&expected) {
+        let page = server
+            .get(&format!("/admin/search?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(page.status, 200, "{query}: {}", page.body);
+        assert_eq!(&page_hits(&page.body), want, "{args:?} / {query}");
+    }
+    // The searches above cover a main file, a sub-file, every filter and an
+    // empty result; check the fixture really gives them.
+    assert_eq!(expected[0], ["JD-3?file=items/one", "JD-1"]);
+    assert_eq!(expected[1], ["JD-1"]);
+    assert_eq!(expected[2], ["JD-2"]);
+    assert_eq!(expected[3], ["JD-3?file=items/one"]);
+    assert_eq!(expected[4], ["JD-1"]);
+    assert_eq!(expected[5], ["NT-1"]);
+    assert_eq!(expected[6], Vec::<String>::new());
+
+    let both = server
+        .get("/admin/search?q=gap+OR+body", Some(&cookie))
+        .await?;
+    assert!(
+        both.body
+            .contains("<a class=\"hit-link\" href=\"/admin/documents/JD-3?file=items%2Fone\">"),
+        "a sub-file hit opens that file: {}",
+        both.body
+    );
+    assert!(both.body.contains("items/one"), "the file is named");
+    assert!(
+        both.body.contains("value=\"gap OR body\""),
+        "the query stays in the form"
+    );
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    assert!(
+        tools.iter().any(|t| t == "admin:documents.search"),
+        "{tools:?}"
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn search_snippets_mark_matches_and_escape_the_rest() -> TestResult<()> {
+    let server = start_full(|_| {}, search_fixture).await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/search?q=chase", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    assert!(page.body.contains("<mark>chase</mark>"), "{}", page.body);
+    assert!(page.body.contains("Tom &#38; Jerry"), "{}", page.body);
+    assert!(
+        page.body
+            .contains("&#60;script&#62;alert(1)&#60;/script&#62;")
+    );
+    assert!(!page.body.contains("<script>alert"), "never raw");
+    assert!(!page.body.contains('«'), "the markers are replaced");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn search_shows_the_store_message_pages_and_answers_htmx_with_a_fragment() -> TestResult<()> {
+    let server = start_full(|_| {}, search_fixture).await?;
+    let cookie = server.login().await?;
+    for (query, message) in [
+        ("q=-gap", "needs at least one word to find"),
+        (
+            "filters=%7B%22steps_count%22%3A%7B%22bogus%22%3A1%7D%7D",
+            "bogus",
+        ),
+        ("filters=%5B1%5D", "must be a JSON object"),
+        ("filter=nokey", "KEY=VALUE"),
+        ("type=nope", "nope"),
+    ] {
+        let page = server
+            .get(&format!("/admin/search?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(page.status, 400, "{query}: {}", page.body);
+        assert!(page.body.contains(message), "{query}: {}", page.body);
+        assert!(
+            page.body.contains("<form"),
+            "the form stays usable: {query}"
+        );
+    }
+
+    let first = server
+        .get("/admin/search?q=gap+OR+body&limit=1", Some(&cookie))
+        .await?;
+    assert_eq!(page_hits(&first.body), ["JD-3?file=items/one"]);
+    assert!(
+        first
+            .body
+            .contains("href=\"/admin/search?q=gap+OR+body&#38;start=2&#38;limit=1\""),
+        "the next page keeps the query: {}",
+        first.body
+    );
+    let second = server
+        .get("/admin/search?q=gap+OR+body&start=2&limit=1", Some(&cookie))
+        .await?;
+    assert_eq!(page_hits(&second.body), ["JD-1"]);
+    assert!(
+        second
+            .body
+            .contains("href=\"/admin/search?q=gap+OR+body&#38;limit=1\""),
+        "the previous page: {}",
+        second.body
+    );
+
+    // Search as you type: the form reloads only the results region.
+    let empty = server.get("/admin/search", Some(&cookie)).await?;
+    assert_eq!(empty.status, 200);
+    assert_eq!(page_hits(&empty.body), Vec::<String>::new());
+    for needle in [
+        "hx-get=\"/admin/search\"",
+        "hx-trigger=\"input changed delay:300ms, submit\"",
+        "hx-target=\"#results\"",
+        "hx-push-url=\"true\"",
+        "id=\"results\"",
+    ] {
+        assert!(empty.body.contains(needle), "{needle}: {}", empty.body);
+    }
+    let headers =
+        |kind: &str| format!("Cookie: {cookie}\r\nHX-Request: true\r\nHX-Request-Type: {kind}\r\n");
+    let fragment = server
+        .send("GET", "/admin/search?q=chase", &headers("partial"), "")
+        .await?;
+    assert_eq!(fragment.status, 200);
+    assert_eq!(page_hits(&fragment.body), ["NT-1"]);
+    assert!(!fragment.body.contains("<html"), "{}", fragment.body);
+    assert!(!fragment.body.contains("skip-link"), "no layout");
+    let refused = server
+        .send("GET", "/admin/search?q=-gap", &headers("partial"), "")
+        .await?;
+    assert_eq!(refused.status, 400);
+    assert!(refused.body.contains("needs at least one word"));
+    assert!(
+        !refused.body.contains("<html"),
+        "an error is a fragment too"
+    );
+    // A history restore asks for the whole page.
+    let restore = server
+        .send("GET", "/admin/search?q=chase", &headers("full"), "")
+        .await?;
+    assert!(restore.body.contains("<html"), "{}", restore.body);
+    server.stop().await
+}

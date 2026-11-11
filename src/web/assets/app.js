@@ -140,16 +140,23 @@
   drawDiagrams(document);
 
   // After htmx swaps a region in, move focus there so keyboard and
-  // screen-reader users land on the new content, and announce it.
+  // screen-reader users land on the new content, and announce it. htmx 4
+  // fires the event on the element that made the request; the swapped
+  // region is `detail.ctx.target`. A region marked `data-focus="keep"`
+  // (search results, which reload while the user types) leaves focus where
+  // it is.
   document.addEventListener("htmx:after:swap", (event) => {
-    const region = event.target instanceof HTMLElement ? event.target : null;
+    const target = event.detail && event.detail.ctx ? event.detail.ctx.target : null;
+    const region = target instanceof HTMLElement ? target : null;
     if (!region) {
       return;
     }
-    if (!region.hasAttribute("tabindex")) {
-      region.setAttribute("tabindex", "-1");
+    if (region.dataset.focus !== "keep") {
+      if (!region.hasAttribute("tabindex")) {
+        region.setAttribute("tabindex", "-1");
+      }
+      region.focus({ preventScroll: false });
     }
-    region.focus({ preventScroll: false });
     drawDiagrams(region);
     const label = region.dataset.announce;
     if (label) {

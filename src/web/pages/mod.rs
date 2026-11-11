@@ -5,6 +5,7 @@ mod document;
 mod documents;
 pub(crate) mod login;
 mod overview;
+mod search;
 
 use askama::Template;
 use axum::http::StatusCode;
@@ -36,6 +37,8 @@ pub(crate) enum Section {
     Audit,
     Archive,
     Maintenance,
+    /// The Search page, reached from the search box, not the navigation.
+    Search,
 }
 
 impl Section {
@@ -58,6 +61,7 @@ impl Section {
             Self::Audit => "/admin/audit",
             Self::Archive => "/admin/archive",
             Self::Maintenance => "/admin/maintenance",
+            Self::Search => "/admin/search",
         }
     }
 
@@ -70,6 +74,7 @@ impl Section {
             Self::Audit => "Audit",
             Self::Archive => "Archive",
             Self::Maintenance => "Maintenance",
+            Self::Search => "Search",
         }
     }
 }
@@ -140,6 +145,7 @@ pub(crate) fn page(
         Route::Home => overview::page(store, state, session),
         Route::DocumentsList => documents::list(store, request, session),
         Route::Document(id) => document::view(store, state, request, session, id),
+        Route::Search => search::page(store, request, session),
         _ => Err(WebError::new(
             StatusCode::NOT_FOUND,
             "not_found",

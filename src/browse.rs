@@ -19,7 +19,7 @@ use crate::mcp::tools::{
     DiffOut, DocumentOut, HistoryOut, ListDocumentsOut, RevisionOut, SearchDocumentsOut,
     SearchHitOut,
 };
-use crate::store::{self, AuditRequest, ListRequest, SearchRequest, Store};
+use crate::store::{self, AuditRequest, ListRequest, SearchRequest, SearchResults, Store};
 
 /// `joedocs list`: one page of a project's live documents, as the
 /// `list_documents` result.
@@ -141,6 +141,20 @@ fn invalid(field: &'static str, message: impl Into<String>) -> Error {
 /// Returns [`Error::Store`] for an unknown project, a bad type, query,
 /// filter, start or limit, and database errors.
 pub fn search(store: &Store, spec: &SearchSpec) -> Result<Value, Error> {
+    let results = search_results(store, spec)?;
+    to_json(&SearchDocumentsOut {
+        items: results.items.into_iter().map(SearchHitOut::from).collect(),
+        total: results.total,
+        next_start: results.next_start,
+    })
+}
+
+/// [`search`] before it becomes JSON, for the web interface.
+///
+/// # Errors
+///
+/// As [`search`].
+pub fn search_results(store: &Store, spec: &SearchSpec) -> Result<SearchResults, Error> {
     let projects = match spec.project.as_deref() {
         None | Some("*") => store.projects()?.into_iter().map(|p| p.name).collect(),
         Some(name) => {
@@ -150,7 +164,7 @@ pub fn search(store: &Store, spec: &SearchSpec) -> Result<Value, Error> {
             vec![name.to_owned()]
         }
     };
-    let results = store.search(&SearchRequest {
+    Ok(store.search(&SearchRequest {
         projects,
         doc_type: spec.doc_type.clone(),
         query: spec.query.clone().unwrap_or_default(),
@@ -158,12 +172,7 @@ pub fn search(store: &Store, spec: &SearchSpec) -> Result<Value, Error> {
         start: spec.start,
         limit: spec.limit,
         document_id: spec.document_id.clone(),
-    })?;
-    to_json(&SearchDocumentsOut {
-        items: results.items.into_iter().map(SearchHitOut::from).collect(),
-        total: results.total,
-        next_start: results.next_start,
-    })
+    })?)
 }
 
 /// `joedocs history`: one page of a document's revisions, or of one file's,

@@ -1,0 +1,83 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Search</h1>
+  <p class="lede">Titles, aliases and bodies of live documents and their files, in every project or one.</p>
+</div>
+
+<form class="filters search-form" method="get" action="/admin/search" role="search"
+      hx-get="/admin/search" hx-trigger="input changed delay:300ms, submit" hx-target="#results" hx-push-url="true">
+  <div class="search-words">
+    <label for="s-q">Words</label>
+    <input id="s-q" name="q" type="search" value="{{ query }}" autocomplete="off" aria-describedby="search-help-summary">
+  </div>
+  <div>
+    <label for="s-project">Project</label>
+    <select id="s-project" name="project">
+      {% for choice in projects %}
+      <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="s-type">Type</label>
+    <select id="s-type" name="type">
+      {% for choice in types %}
+      <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="s-status">Status</label>
+    <select id="s-status" name="status">
+      {% for choice in statuses %}
+      <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% for value in filter_values %}
+  <div>
+    <label for="s-filter-{{ loop.index }}">Front matter <span class="hint">key=value</span></label>
+    <input id="s-filter-{{ loop.index }}" name="filter" type="text" value="{{ value }}" placeholder="state=planned" autocomplete="off">
+  </div>
+  {% endfor %}
+  <div class="search-json">
+    <label for="s-filters">Filters <span class="hint">JSON</span></label>
+    <input id="s-filters" name="filters" type="text" value="{{ filters_json }}" placeholder='{"status": {"in": ["draft", "review"]}}' autocomplete="off" spellcheck="false">
+  </div>
+  {% if let Some(limit) = limit %}<input type="hidden" name="limit" value="{{ limit }}">{% endif %}
+  <div><button type="submit">Search</button></div>
+</form>
+
+<details class="search-help">
+  <summary id="search-help-summary">Search syntax</summary>
+  <p>Words match titles, aliases and bodies, ignoring case, accents and word endings (<code>plans</code> matches <code>plan</code>). Title matches rank above body matches.</p>
+  <table>
+    <thead><tr><th scope="col">Syntax</th><th scope="col">Matches</th></tr></thead>
+    <tbody>
+      <tr><td><code>rate limit</code></td><td>documents with both words</td></tr>
+      <tr><td><code>"rate limit"</code></td><td>the words in that order</td></tr>
+      <tr><td><code>-redis</code></td><td>excludes documents with the word</td></tr>
+      <tr><td><code>auth*</code></td><td>words starting with <code>auth</code></td></tr>
+      <tr><td><code>redis OR valkey</code></td><td>either word</td></tr>
+    </tbody>
+  </table>
+  <p>A search of exclusions only is refused. Without words, results are newest first.</p>
+  <p><strong>Filters</strong> must all hold. <code>key=value</code> means equals. The JSON filters take an object keyed by front matter key, with a plain value or operators:</p>
+  <table>
+    <thead><tr><th scope="col">Operator</th><th scope="col">Example</th></tr></thead>
+    <tbody>
+      <tr><td><code>eq</code>, <code>ne</code></td><td><code>{"status": {"ne": "done"}}</code></td></tr>
+      <tr><td><code>in</code></td><td><code>{"status": {"in": ["draft", "review"]}}</code></td></tr>
+      <tr><td><code>contains</code></td><td><code>{"tags": {"contains": "security"}}</code> (for lists)</td></tr>
+      <tr><td><code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code></td><td><code>{"updated": {"gte": "2026-10-01"}}</code>, <code>{"priority": {"lte": 2}}</code></td></tr>
+      <tr><td><code>exists</code></td><td><code>{"approved_by": {"exists": true}}</code></td></tr>
+    </tbody>
+  </table>
+  <p>Text compares ignoring case, numbers as numbers, and dates as text, so prefixes such as <code>2026-10-01</code> work. Each file of a multi-file document is searched on its own, and filters apply to the front matter of the file that matched.</p>
+</details>
+
+<section id="results" class="results" aria-label="Results" data-focus="keep" data-announce="Search results updated">
+{{ results|safe }}
+</section>
+{% endblock %}

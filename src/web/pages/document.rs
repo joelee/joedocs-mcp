@@ -90,7 +90,7 @@ struct DocumentPage<'a> {
 }
 
 /// The URL of this page with `file`, `version` and `view`.
-fn href(id: &str, file: Option<&str>, version: Option<u64>, source: bool) -> String {
+pub(crate) fn href(id: &str, file: Option<&str>, version: Option<u64>, source: bool) -> String {
     let mut query = form_urlencoded::Serializer::new(String::new());
     if let Some(file) = file {
         query.append_pair("file", file);

@@ -252,6 +252,24 @@ dialog::backdrop { background: rgb(0 0 0 / 0.45); }
 /* --- Document library and view --------------------------------------- */
 
 .pager { display: flex; gap: var(--space-4); align-items: center; margin-top: var(--space-3); }
+
+/* Search */
+.search-form .search-words { flex: 2 1 16rem; }
+.search-form .search-json { flex: 2 1 18rem; }
+.search-form .search-words input, .search-form .search-json input { width: 100%; }
+.search-json input { font-family: var(--mono); font-size: var(--text-sm); }
+.search-help { margin-bottom: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: var(--space-2) var(--space-3); }
+.search-help summary { cursor: pointer; font-weight: 600; }
+.search-help table { margin: var(--space-2) 0; }
+.hits { list-style: none; padding: 0; margin: var(--space-3) 0 0; display: grid; gap: var(--space-3); }
+.hit { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3) var(--space-4); }
+.hit p { margin: 0; }
+.hit-head { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; }
+.hit-link { font-weight: 600; }
+.hit-file { font-family: var(--mono); font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
+.hit .hit-meta { margin-top: var(--space-1); }
+.hit .snippet { margin-top: var(--space-2); overflow-wrap: anywhere; }
+code.nowrap, .nowrap { white-space: nowrap; }
 .crumbs { color: var(--muted); font-size: var(--text-sm); margin-bottom: var(--space-1); }
 .doc-meta { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
 
@@ -324,7 +342,6 @@ summary.callout-title { cursor: pointer; }
 .diagram-toggle { margin-top: var(--space-2); font-size: var(--text-sm); padding: var(--space-1) var(--space-2); }
 .diagram-error { color: var(--bad); font-size: var(--text-sm); }
 .diagram.diagram-failed .diagram-canvas { display: none; }
-td.nowrap { white-space: nowrap; }
 .diagram.plantuml img { max-width: 100%; height: auto; background: #fff; border-radius: var(--radius); }
 .diagram.plantuml figcaption { font-size: var(--text-sm); color: var(--muted); }
 
