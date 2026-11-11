@@ -40,14 +40,14 @@
         <td>{{ item.archived_by }}</td>
         <td>{{ item.reason }}</td>
         <td>
-          <button type="button" class="secondary" data-dialog-open="restore-{{ item.document.id }}">Restore</button>
+          <button type="button" class="secondary" commandfor="restore-{{ item.document.id }}" command="show-modal">Restore</button>
           <dialog id="restore-{{ item.document.id }}" aria-labelledby="restore-{{ item.document.id }}-heading">
             <form method="post" action="/admin/archive/{{ item.document.id }}/restore" class="stack">
               <h2 id="restore-{{ item.document.id }}-heading">Restore {{ item.document.id }}?</h2>
               <p>{{ item.document.title }} goes back to {{ item.document.project }} as a new revision, with its history intact.</p>
               <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
               <div class="dialog-actions">
-                <button type="button" class="secondary" data-dialog-close>Cancel</button>
+                <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
                 <button type="submit">Restore {{ item.document.id }}</button>
               </div>
             </form>

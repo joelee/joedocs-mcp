@@ -23,14 +23,14 @@
 <section class="panel" aria-labelledby="reindex-heading">
   <h2 id="reindex-heading">Rebuild the index</h2>
   <p>Rebuilds the database index from the history, as <code>joedocs reindex</code> does. Search and lists may pause while it runs.</p>
-  <button type="button" class="secondary" data-dialog-open="reindex-dialog">Rebuild index</button>
+  <button type="button" class="secondary" commandfor="reindex-dialog" command="show-modal">Rebuild index</button>
   <dialog id="reindex-dialog" aria-labelledby="reindex-dialog-heading">
     <form method="post" action="/admin/maintenance/reindex" class="stack" data-busy="Rebuilding…">
       <h2 id="reindex-dialog-heading">Rebuild the index now?</h2>
       <p>The index is rebuilt from the history; documents and their history are not changed. Other requests wait until it finishes.</p>
       <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
       <div class="dialog-actions">
-        <button type="button" class="secondary" data-dialog-close>Cancel</button>
+        <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
         <button type="submit">Rebuild index</button>
       </div>
     </form>

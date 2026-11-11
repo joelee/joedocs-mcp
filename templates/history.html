@@ -30,7 +30,7 @@
         <td>{{ row.summary }}</td>
         <td>{% if let Some(diff) = row.diff %}<a href="{{ diff }}">Diff</a>{% else %}<span class="hint">first</span>{% endif %}</td>
         {% if let Some(name) = file %}<td>{% if row.revision != document.revision %}
-          <button type="button" class="link" data-dialog-open="restore-{{ row.revision }}">Restore</button>
+          <button type="button" class="link" commandfor="restore-{{ row.revision }}" command="show-modal">Restore</button>
           <dialog id="restore-{{ row.revision }}" aria-labelledby="restore-{{ row.revision }}-heading">
             <form method="post" action="/admin/documents/{{ document.id }}/restore-file" class="stack">
               <h2 id="restore-{{ row.revision }}-heading">Restore {{ name }} as at revision {{ row.revision }}?</h2>
@@ -39,7 +39,7 @@
               <input type="hidden" name="file" value="{% if let Some(then) = row.file %}{{ then }}{% else %}{{ name }}{% endif %}">
               <input type="hidden" name="version" value="{{ row.revision }}">
               <div class="dialog-actions">
-                <button type="button" class="secondary" data-dialog-close>Cancel</button>
+                <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
                 <button type="submit">Restore revision {{ row.revision }}</button>
               </div>
             </form>

@@ -5,7 +5,7 @@
     <h1>API keys</h1>
     <p class="lede">Keys let MCP clients read or write the projects they are granted.</p>
   </div>
-  <button type="button" data-dialog-open="create-key"{% if projects.is_empty() %} disabled{% endif %}>Create key</button>
+  <button type="button" commandfor="create-key" command="show-modal"{% if projects.is_empty() %} disabled{% endif %}>Create key</button>
 </div>
 
 {% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
@@ -52,8 +52,8 @@
               <div><button type="submit" class="secondary">Grant</button></div>
             </form>
             <p class="key-danger">
-              <button type="button" class="secondary" data-dialog-open="rotate-{{ key.name }}">Rotate</button>
-              <button type="button" class="danger" data-dialog-open="revoke-{{ key.name }}">Revoke</button>
+              <button type="button" class="secondary" commandfor="rotate-{{ key.name }}" command="show-modal">Rotate</button>
+              <button type="button" class="danger" commandfor="revoke-{{ key.name }}" command="show-modal">Revoke</button>
             </p>
           </details>
           <dialog id="rotate-{{ key.name }}" aria-labelledby="rotate-{{ key.name }}-heading">
@@ -62,7 +62,7 @@
               <p>A new token is shown once. The old token stops working at once, so every client using it needs the new one.</p>
               <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
               <div class="dialog-actions">
-                <button type="button" class="secondary" data-dialog-close>Cancel</button>
+                <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
                 <button type="submit">Rotate {{ key.name }}</button>
               </div>
             </form>
@@ -73,7 +73,7 @@
               <p>Its token stops working at once. Revoking cannot be undone; create a new key instead.</p>
               <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
               <div class="dialog-actions">
-                <button type="button" class="secondary" data-dialog-close>Cancel</button>
+                <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
                 <button type="submit" class="danger">Revoke {{ key.name }}</button>
               </div>
             </form>
@@ -108,7 +108,7 @@
     </fieldset>
     <p class="hint">The token is shown once, on the next page.</p>
     <div class="dialog-actions">
-      <button type="button" class="secondary" data-dialog-close>Cancel</button>
+      <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
       <button type="submit">Create key</button>
     </div>
   </form>

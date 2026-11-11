@@ -258,13 +258,26 @@ fn headings_get_prefixed_unique_ids_and_a_contents_list() {
         &Fixed,
         "",
     );
+    // One level down: the page title is the page's only <h1>.
     assert!(
-        rendered.html.contains("<h1 id=\"h-intro\">"),
+        rendered.html.contains("<h2 id=\"h-intro\">Intro</h2>"),
         "{}",
         rendered.html
     );
-    assert!(rendered.html.contains("<h2 id=\"h-next-steps\">"));
-    assert!(rendered.html.contains("<h2 id=\"h-next-steps-2\">"));
+    assert!(rendered.html.contains("<h3 id=\"h-next-steps\">"));
+    assert!(rendered.html.contains("<h3 id=\"h-next-steps-2\">"));
+    assert!(!rendered.html.contains("<h1"), "{}", rendered.html);
+    let deep = render(
+        "###### Six
+",
+        &Fixed,
+        "",
+    );
+    assert!(
+        deep.html.contains("<h6 id=\"h-six\">Six</h6>"),
+        "{}",
+        deep.html
+    );
     let ids: Vec<_> = rendered.headings.iter().map(|h| h.id.as_str()).collect();
     assert_eq!(
         ids,

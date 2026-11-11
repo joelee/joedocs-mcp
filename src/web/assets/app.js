@@ -5,6 +5,8 @@
 
 (() => {
   const THEME_KEY = "joedocs-theme";
+  // Whether buttons open dialogs by themselves (invoker commands).
+  const NATIVE_COMMANDS = "command" in HTMLButtonElement.prototype;
 
   // localStorage holds the theme choice and nothing else. It can be
   // unavailable (private windows, blocked storage); the page works anyway.
@@ -66,19 +68,18 @@
       }
       return;
     }
-    const opener = target.closest("[data-dialog-open]");
+    // Dialogs open with the browser's own invoker commands
+    // (`commandfor`, `command="show-modal"`) and close with
+    // `formmethod="dialog"`, so they work without this script. It only
+    // closes a menu the opener sits in, and opens the dialog itself in a
+    // browser without invoker commands.
+    const opener = target.closest("[commandfor][command=show-modal]");
     if (opener) {
-      const dialog = document.getElementById(opener.dataset.dialogOpen);
-      if (dialog instanceof HTMLDialogElement) {
-        // A menu the opener sits in closes, so it is not left open behind.
-        opener.closest("details")?.removeAttribute("open");
+      opener.closest("details")?.removeAttribute("open");
+      const dialog = document.getElementById(opener.getAttribute("commandfor"));
+      if (!NATIVE_COMMANDS && dialog instanceof HTMLDialogElement && !dialog.open) {
         dialog.showModal();
       }
-      return;
-    }
-    const closer = target.closest("[data-dialog-close]");
-    if (closer) {
-      closer.closest("dialog")?.close();
     }
   });
 

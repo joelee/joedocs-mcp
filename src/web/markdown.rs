@@ -23,7 +23,8 @@
 use std::collections::HashMap;
 
 use pulldown_cmark::{
-    CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd, TextMergeStream,
+    CodeBlockKind, CowStr, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd,
+    TextMergeStream,
 };
 
 use super::plantuml;
@@ -163,11 +164,14 @@ impl<'a> Renderer<'_, 'a> {
                         id: id.clone(),
                     });
                     self.out.push(Event::Start(Tag::Heading {
-                        level,
+                        level: demoted(level),
                         id: Some(id.into()),
                         classes: Vec::new(),
                         attrs: Vec::new(),
                     }));
+                }
+                Event::End(TagEnd::Heading(level)) => {
+                    self.out.push(Event::End(TagEnd::Heading(demoted(level))));
                 }
                 Event::Start(Tag::CodeBlock(kind)) => {
                     let (text, next) =
@@ -550,6 +554,18 @@ fn callout_class(kind: &str) -> &'static str {
         "example" => "example",
         "quote" | "cite" => "quote",
         _ => "note",
+    }
+}
+
+/// A document heading one level down, so the page title stays the page's
+/// only `<h1>`; `######` stays an `<h6>`.
+fn demoted(level: HeadingLevel) -> HeadingLevel {
+    match level {
+        HeadingLevel::H1 => HeadingLevel::H2,
+        HeadingLevel::H2 => HeadingLevel::H3,
+        HeadingLevel::H3 => HeadingLevel::H4,
+        HeadingLevel::H4 => HeadingLevel::H5,
+        HeadingLevel::H5 | HeadingLevel::H6 => HeadingLevel::H6,
     }
 }
 

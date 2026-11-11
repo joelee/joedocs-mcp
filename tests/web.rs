@@ -2756,7 +2756,7 @@ async fn reindex_needs_its_confirmation_and_shows_its_report() -> TestResult<()>
     let csrf = server.csrf(&cookie).await?;
     let page = server.get("/admin/maintenance", Some(&cookie)).await?;
     for expected in [
-        "data-dialog-open=\"reindex-dialog\"",
+        "commandfor=\"reindex-dialog\" command=\"show-modal\"",
         "<dialog id=\"reindex-dialog\"",
         "action=\"/admin/maintenance/reindex\"",
         "data-busy=",
@@ -2829,5 +2829,224 @@ async fn a_backup_downloads_with_a_readable_manifest() -> TestResult<()> {
     assert_eq!(backups[0].2, "forbidden");
     assert_eq!(backups[1].2, "ok");
     assert!(backups.iter().all(|(_, client, _)| client == "joedocs-web"));
+    server.stop().await
+}
+
+// --- STEP-13: accessibility --------------------------------------------------------
+
+/// One start tag: its name and attributes (names lower-cased).
+struct Tag {
+    name: String,
+    attributes: Vec<(String, String)>,
+}
+
+impl Tag {
+    fn get(&self, name: &str) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// Every start tag of `html`, read with quoted attribute values.
+fn tags(html: &str) -> Vec<Tag> {
+    let bytes = html.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(offset) = html[i..].find('<') {
+        i += offset + 1;
+        if !bytes.get(i).is_some_and(u8::is_ascii_alphabetic) {
+            continue;
+        }
+        let name_end = html[i..]
+            .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+            .map_or(html.len(), |e| i + e);
+        let name = html[i..name_end].to_ascii_lowercase();
+        let mut attributes = Vec::new();
+        let mut j = name_end;
+        loop {
+            while bytes
+                .get(j)
+                .is_some_and(|b| b.is_ascii_whitespace() || *b == b'/')
+            {
+                j += 1;
+            }
+            match bytes.get(j) {
+                None => break,
+                Some(b'>') => {
+                    j += 1;
+                    break;
+                }
+                Some(_) => {}
+            }
+            let start = j;
+            while bytes
+                .get(j)
+                .is_some_and(|b| !b.is_ascii_whitespace() && !matches!(b, b'=' | b'>' | b'/'))
+            {
+                j += 1;
+            }
+            let attribute = html[start..j].to_ascii_lowercase();
+            let mut value = String::new();
+            if bytes.get(j) == Some(&b'=') {
+                j += 1;
+                match bytes.get(j) {
+                    Some(&quote) if quote == b'"' || quote == b'\'' => {
+                        let end = html[j + 1..]
+                            .find(quote as char)
+                            .map_or(html.len(), |e| j + 1 + e);
+                        html[j + 1..end].clone_into(&mut value);
+                        j = end + 1;
+                    }
+                    _ => {
+                        let start = j;
+                        while bytes
+                            .get(j)
+                            .is_some_and(|b| !b.is_ascii_whitespace() && *b != b'>')
+                        {
+                            j += 1;
+                        }
+                        html[start..j].clone_into(&mut value);
+                    }
+                }
+            }
+            if attribute.is_empty() {
+                j += 1;
+            } else {
+                attributes.push((attribute, value));
+            }
+        }
+        out.push(Tag { name, attributes });
+        i = j.min(html.len());
+    }
+    out
+}
+
+/// What a page breaks of the structural checks of STEP-13.
+fn html_problems(html: &str) -> Vec<String> {
+    let tags = tags(html);
+    let mut problems = Vec::new();
+    let h1 = tags.iter().filter(|t| t.name == "h1").count();
+    if h1 != 1 {
+        problems.push(format!("{h1} <h1> elements"));
+    }
+    if !tags
+        .iter()
+        .any(|t| t.name == "html" && t.get("lang").is_some_and(|l| !l.is_empty()))
+    {
+        problems.push("no lang on <html>".to_owned());
+    }
+    for tag in &tags {
+        for (name, _) in &tag.attributes {
+            if name == "style" || name.starts_with("on") {
+                problems.push(format!("<{} {name}=...>", tag.name));
+            }
+        }
+        match tag.name.as_str() {
+            "script" if tag.get("src").is_none() => problems.push("inline <script>".to_owned()),
+            "img" if tag.get("alt").is_none() => {
+                problems.push(format!("<img> without alt: {:?}", tag.get("src")));
+            }
+            "input" | "select" | "textarea" => {
+                let kind = tag.get("type").unwrap_or("text");
+                if matches!(kind, "hidden" | "submit" | "button" | "reset") {
+                    continue;
+                }
+                let labelled = tag.get("aria-label").is_some()
+                    || tag.get("aria-labelledby").is_some()
+                    || tag
+                        .get("id")
+                        .is_some_and(|id| html.contains(&format!("for=\"{id}\"")));
+                if !labelled {
+                    problems.push(format!(
+                        "<{} name={:?}> has no label",
+                        tag.name,
+                        tag.get("name")
+                    ));
+                }
+            }
+            "button"
+                if tag.get("data-dialog-open").is_some()
+                    || tag.get("data-dialog-close").is_some() =>
+            {
+                problems.push(format!(
+                    "a dialog button needs JavaScript: {:?}",
+                    tag.attributes
+                ));
+            }
+            _ => {}
+        }
+    }
+    for table in html.split("<table").skip(1) {
+        let table = table.split("</table>").next().unwrap_or("");
+        if !table.contains("<th") {
+            problems.push("a table without headers".to_owned());
+        }
+    }
+    problems
+}
+
+#[tokio::test]
+async fn every_page_passes_the_structural_accessibility_checks() -> TestResult<()> {
+    let server = start_full(|_| {}, structure_fixture).await?;
+    let mut pages = vec![(
+        "/admin/login".to_owned(),
+        server.get("/admin/login", None).await?,
+    )];
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    for path in [
+        "/admin/",
+        "/admin/documents",
+        "/admin/documents/JD-1",
+        "/admin/documents/JD-1?view=source",
+        "/admin/documents/JD-2",
+        "/admin/documents/JD-3",
+        "/admin/documents/JD-3?file=items%2Ffirst",
+        "/admin/documents/JD-3/history",
+        "/admin/documents/JD-3/history?file=items%2Ffirst",
+        "/admin/documents/JD-1/diff?from=1",
+        "/admin/documents/JD-4",
+        "/admin/search",
+        "/admin/search?q=gap+OR+body",
+        "/admin/search?q=-gap",
+        "/admin/projects",
+        "/admin/keys",
+        "/admin/audit",
+        "/admin/archive",
+        "/admin/maintenance",
+        "/admin/nowhere",
+    ] {
+        // A plain GET, without any htmx header, gives the whole page.
+        pages.push((path.to_owned(), server.get(path, Some(&cookie)).await?));
+    }
+    for (path, fields) in [
+        (
+            "/admin/keys",
+            vec![("name", "ci"), ("grant.joedocs", "read")],
+        ),
+        ("/admin/maintenance/check", vec![]),
+        ("/admin/maintenance/reindex", vec![]),
+        ("/admin/projects", vec![("name", "Bad Name"), ("key", "BN")]),
+    ] {
+        pages.push((
+            format!("POST {path}"),
+            server
+                .post_form(path, &cookie, Some(&csrf), &fields)
+                .await?,
+        ));
+    }
+    let keys = server.get("/admin/keys", Some(&cookie)).await?;
+    pages.push(("/admin/keys (with a key)".to_owned(), keys));
+    let mut failures = Vec::new();
+    for (path, reply) in &pages {
+        assert!(reply.body.contains("<html"), "{path} is a whole page");
+        let problems = html_problems(&reply.body);
+        if !problems.is_empty() {
+            failures.push(format!("{path}: {problems:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
     server.stop().await
 }

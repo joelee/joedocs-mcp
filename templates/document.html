@@ -15,8 +15,8 @@
   <details class="actions-menu">
     <summary>Actions</summary>
     <div class="menu">
-      {% if offer == Offer::Convert %}<button type="button" class="secondary" data-dialog-open="convert-dialog">Convert to multi-file</button>{% endif %}
-      {% if offer == Offer::Move %}<button type="button" class="secondary" data-dialog-open="move-dialog">Move this file</button>{% endif %}
+      {% if offer == Offer::Convert %}<button type="button" class="secondary" commandfor="convert-dialog" command="show-modal">Convert to multi-file</button>{% endif %}
+      {% if offer == Offer::Move %}<button type="button" class="secondary" commandfor="move-dialog" command="show-modal">Move this file</button>{% endif %}
     </div>
   </details>
   {% if offer == Offer::Convert %}
@@ -26,7 +26,7 @@
       <p>The document becomes a folder with this text as its main file; files can then be added to it. This cannot be undone from here.</p>
       <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
       <div class="dialog-actions">
-        <button type="button" class="secondary" data-dialog-close>Cancel</button>
+        <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
         <button type="submit">Convert {{ fetched.document.id }}</button>
       </div>
     </form>
@@ -44,7 +44,7 @@
       <label for="move-as">As <span class="hint">optional new path in that document</span></label>
       <input id="move-as" name="as" placeholder="{{ name }}" autocomplete="off">
       <div class="dialog-actions">
-        <button type="button" class="secondary" data-dialog-close>Cancel</button>
+        <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
         <button type="submit">Move {{ name }}</button>
       </div>
     </form>

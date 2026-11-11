@@ -5,7 +5,7 @@
     <h1>Projects</h1>
     <p class="lede">Each project is a folder of the vault with its own document key.</p>
   </div>
-  <button type="button" data-dialog-open="add-project">Add project</button>
+  <button type="button" commandfor="add-project" command="show-modal">Add project</button>
 </div>
 
 {% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
@@ -45,7 +45,7 @@
     <label for="p-title">Title <span class="hint">optional; the name if empty</span></label>
     <input id="p-title" name="title" value="{{ form.title }}" autocomplete="off">
     <div class="dialog-actions">
-      <button type="button" class="secondary" data-dialog-close>Cancel</button>
+      <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
       <button type="submit">Add project</button>
     </div>
   </form>
