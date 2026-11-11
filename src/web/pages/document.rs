@@ -68,6 +68,7 @@ pub(crate) struct Link {
 #[template(path = "document.html")]
 struct DocumentPage<'a> {
     title: &'a str,
+    facts: &'a Facts,
     assets: Urls,
     chrome: Chrome<'a>,
     fetched: &'a Fetched,
@@ -107,6 +108,52 @@ pub(crate) enum Offer {
     /// Move this file, on the latest revision of a multi-file document's
     /// file.
     Move,
+}
+
+/// The document's title, status, type and server facts as the page shows
+/// them. They come from the stored front matter of the main file shown, so
+/// an older revision shows its own. A file of a multi-file document stores
+/// none of them, so its page shows the document's current ones, labelled as
+/// current on an older revision.
+pub(crate) struct Facts {
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) doc_type: String,
+    pub(crate) created: String,
+    pub(crate) created_by: String,
+    pub(crate) updated: String,
+    pub(crate) updated_by: String,
+    pub(crate) client: String,
+    /// Whether these are the current values on an older revision's page.
+    pub(crate) current: bool,
+}
+
+fn facts(
+    document: &crate::store::DocumentInfo,
+    fields: &front_matter::Fields,
+    sub_file: bool,
+    pinned: bool,
+) -> Facts {
+    // A key the stored front matter lacks falls back to the current value.
+    let stored = |key: &str, now: &str| {
+        fields
+            .get(key)
+            .filter(|_| !sub_file)
+            .and_then(Value::as_str)
+            .unwrap_or(now)
+            .to_owned()
+    };
+    Facts {
+        title: stored("title", &document.title),
+        status: stored("status", &document.status),
+        doc_type: stored("type", &document.doc_type),
+        created: stored("created", &document.created),
+        created_by: stored("created_by", &document.created_by),
+        updated: stored("updated", &document.updated),
+        updated_by: stored("updated_by", &document.updated_by),
+        client: stored("client", &document.client),
+        current: sub_file && pinned,
+    }
 }
 
 /// The URL of this page with `file`, `version` and `view`.
@@ -177,8 +224,10 @@ pub(crate) fn view(
     let latest = document.revision;
     let pinned = (shown_version != latest).then_some(shown_version);
     let pinned_text = pinned.map(|v| v.to_string());
+    let facts = facts(document, &fields, file.is_some(), pinned.is_some());
     let page = DocumentPage {
-        title: &document.title,
+        title: &facts.title,
+        facts: &facts,
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Documents, ""),
         file,

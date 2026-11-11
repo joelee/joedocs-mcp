@@ -3,13 +3,14 @@
 {% block content %}
 <div class="page-head doc-head">
   <p class="crumbs"><a href="/admin/documents?project={{ fetched.document.project }}">{{ fetched.document.project }}</a> / <code>{{ fetched.document.id }}</code>{% if let Some(file) = file %} / {{ file }}{% endif %}</p>
-  <h1>{{ fetched.document.title }}</h1>
+  <h1>{{ facts.title }}</h1>
   <p class="doc-meta">
-    <span class="badge badge-status-{{ fetched.document.status }}">{{ fetched.document.status }}</span>
-    <span>{{ fetched.document.doc_type }}</span>
+    <span class="badge badge-status-{{ facts.status }}">{{ facts.status }}</span>
+    <span>{{ facts.doc_type }}</span>
     <span>revision {{ fetched.revision.revision }}{% if fetched.revision.revision != fetched.document.revision %} of {{ fetched.document.revision }}{% endif %}</span>
     <span class="hint">updated {{ fetched.revision.at }} by {{ fetched.revision.author }} ({{ fetched.revision.client }})</span>
   </p>
+  {% if facts.current %}<p class="hint" data-facts="current">The title and status shown are the document's current ones: a file of a multi-file document does not record them.</p>{% endif %}
   {% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
   {% if offer != Offer::Nothing %}
   <details class="actions-menu">
@@ -77,10 +78,10 @@
       <dl class="facts">
         {% if file.is_none() %}
         <dt>ID</dt><dd><code>{{ fetched.document.id }}</code></dd>
-        <dt>Type</dt><dd>{{ fetched.document.doc_type }}</dd>
-        <dt>Status</dt><dd><span class="badge badge-status-{{ fetched.document.status }}">{{ fetched.document.status }}</span></dd>
-        <dt>Created</dt><dd>{{ fetched.document.created }} <span class="hint">by {{ fetched.document.created_by }}</span></dd>
-        <dt>Updated</dt><dd>{{ fetched.document.updated }} <span class="hint">by {{ fetched.document.updated_by }} ({{ fetched.document.client }})</span></dd>
+        <dt>Type</dt><dd>{{ facts.doc_type }}</dd>
+        <dt>Status</dt><dd><span class="badge badge-status-{{ facts.status }}">{{ facts.status }}</span></dd>
+        <dt>Created</dt><dd>{{ facts.created }} <span class="hint">by {{ facts.created_by }}</span></dd>
+        <dt>Updated</dt><dd>{{ facts.updated }} <span class="hint">by {{ facts.updated_by }} ({{ facts.client }})</span></dd>
         {% endif %}
         {% if !tags.is_empty() %}
         <dt>Tags</dt><dd>{% for tag in tags %}<span class="chip">{{ tag }}</span>{% endfor %}</dd>

@@ -3252,3 +3252,142 @@ async fn refused_searches_and_audit_filters_are_audited_with_their_code() -> Tes
     assert_eq!(only_row_since(&server, before)?.1, "ok");
     server.stop().await
 }
+
+// --- JD-34 STEP-02: an older revision shows its own facts ----------------------------
+
+/// JD-1 created as a `draft` note "Draft title" by `laptop-key`, then
+/// approved (r2), renamed "Final title" (r3) and moved to `plans` (r4) by
+/// `ci-key` from `opencode`; JD-2 a multi-file note whose file `items/a`
+/// came at r2, approved at r3.
+fn facts_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewDocument, NewFile};
+    let first = Actor::new("laptop-key", "claude-code");
+    let later = Actor::new("ci-key", "opencode");
+    let approved = |store: &mut Store, id: &str| {
+        let mut set = joedocs::document::front_matter::Fields::new();
+        set.insert("status".into(), serde_json::json!("approved"));
+        store.change_front_matter(&later, id, &set, &[], None)
+    };
+    store.add_project("joedocs", "JD", Some("JoeDocs"))?;
+    store.create(
+        &first,
+        NewDocument {
+            project: "joedocs".into(),
+            doc_type: Some("notes".into()),
+            title: "Draft title".into(),
+            content: "The first text.\n".into(),
+            ..NewDocument::default()
+        },
+    )?;
+    approved(store, "JD-1")?;
+    store.rename(&later, "JD-1", "Final title", None)?;
+    store.move_document(&later, "JD-1", "plans", None)?;
+    store.create(
+        &first,
+        NewDocument {
+            project: "joedocs".into(),
+            doc_type: Some("notes".into()),
+            title: "Backlog".into(),
+            content: "The backlog.\n".into(),
+            multifile: true,
+            ..NewDocument::default()
+        },
+    )?;
+    store.create_file(
+        &first,
+        &NewFile {
+            document_id: "JD-2".into(),
+            file: "items/a".into(),
+            content: "Item a.\n".into(),
+            front_matter: joedocs::document::front_matter::Fields::new(),
+            expected_revision: None,
+            summary: None,
+        },
+    )?;
+    approved(store, "JD-2")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_older_revision_shows_its_own_title_status_type_and_facts() -> TestResult<()> {
+    let server = start_full(|_| {}, facts_fixture).await?;
+    let cookie = server.login().await?;
+    let source = server
+        .get("/admin/documents/JD-1?version=1&view=source", Some(&cookie))
+        .await?;
+    for stored in [
+        "title: Draft title",
+        "type: notes",
+        "status: draft",
+        "updated_by: laptop-key",
+        "client: claude-code",
+    ] {
+        assert!(
+            source.body.contains(stored),
+            "revision 1 stores {stored}: {}",
+            source.body
+        );
+    }
+    let old = server
+        .get("/admin/documents/JD-1?version=1", Some(&cookie))
+        .await?;
+    assert_eq!(old.status, 200, "{}", old.body);
+    for shown in [
+        "<title>Draft title - JoeDocs</title>",
+        "<h1>Draft title</h1>",
+        "<span class=\"badge badge-status-draft\">draft</span>",
+        "<dt>Type</dt><dd>notes</dd>",
+        "by laptop-key (claude-code)",
+    ] {
+        assert!(
+            old.body.contains(shown),
+            "revision 1 shows {shown}: {}",
+            old.body
+        );
+    }
+    for absent in [
+        "Final title",
+        "badge-status-approved",
+        "<dd>plans</dd>",
+        "ci-key",
+    ] {
+        assert!(
+            !old.body.contains(absent),
+            "revision 1 does not show {absent}"
+        );
+    }
+    let latest = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    for shown in [
+        "<title>Final title - JoeDocs</title>",
+        "<h1>Final title</h1>",
+        "<span class=\"badge badge-status-approved\">approved</span>",
+        "<dt>Type</dt><dd>plans</dd>",
+        "by ci-key (opencode)",
+    ] {
+        assert!(
+            latest.body.contains(shown),
+            "the latest shows {shown}: {}",
+            latest.body
+        );
+    }
+    assert!(!latest.body.contains("data-facts=\"current\""));
+    // A file at an older revision does not hold the document's title and
+    // status, so those are labelled as current.
+    let file = server
+        .get(
+            "/admin/documents/JD-2?file=items%2Fa&version=2",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(file.status, 200, "{}", file.body);
+    assert!(
+        file.body.contains("data-facts=\"current\""),
+        "{}",
+        file.body
+    );
+    let file_now = server
+        .get("/admin/documents/JD-2?file=items%2Fa", Some(&cookie))
+        .await?;
+    assert!(!file_now.body.contains("data-facts=\"current\""));
+    server.stop().await
+}
