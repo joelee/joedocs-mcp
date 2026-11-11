@@ -35,6 +35,11 @@
 //! | `POST /admin/keys/{name}/rotate` | `admin:keys.rotate` |
 //! | `POST /admin/keys/{name}/revoke` | `admin:keys.revoke` |
 //! | `GET /admin/audit` | `admin:audit.list` |
+//! | `GET /admin/archive` | `admin:archive.list` |
+//! | `POST /admin/archive/{id}/restore` | `admin:archive.restore` |
+//! | `POST /admin/documents/{id}/convert` | `admin:document.convert` |
+//! | `POST /admin/documents/{id}/move-file` | `admin:document.move_file` |
+//! | `POST /admin/documents/{id}/restore-file` | `admin:document.restore_file` |
 //! | any other path under `/admin/` | `admin:web.unknown` |
 //!
 //! Only `/admin/` is a stable entry point; other page paths, the HTML and
@@ -152,6 +157,11 @@ pub(crate) enum Route {
     KeysRotate(String),
     KeysRevoke(String),
     Audit,
+    ArchiveList,
+    ArchiveRestore(String),
+    DocumentConvert(String),
+    FileMove(String),
+    FileRestore(String),
     Unknown,
 }
 
@@ -192,6 +202,19 @@ impl Route {
             ("/admin/keys", _) if get => Self::KeysList,
             ("/admin/keys", _) if post => Self::KeysCreate,
             ("/admin/audit", _) if get => Self::Audit,
+            ("/admin/archive", _) if get => Self::ArchiveList,
+            (_, ["archive", id, "restore"]) if post && !id.is_empty() => {
+                Self::ArchiveRestore(percent_decode(id))
+            }
+            (_, ["documents", id, action]) if post && !id.is_empty() => {
+                let id = percent_decode(id);
+                match *action {
+                    "convert" => Self::DocumentConvert(id),
+                    "move-file" => Self::FileMove(id),
+                    "restore-file" => Self::FileRestore(id),
+                    _ => Self::Unknown,
+                }
+            }
             (_, ["keys", name, action]) if post && !name.is_empty() => {
                 let name = percent_decode(name);
                 match *action {
@@ -228,6 +251,11 @@ impl Route {
             Self::KeysRotate(_) => "admin:keys.rotate",
             Self::KeysRevoke(_) => "admin:keys.revoke",
             Self::Audit => "admin:audit.list",
+            Self::ArchiveList => "admin:archive.list",
+            Self::ArchiveRestore(_) => "admin:archive.restore",
+            Self::DocumentConvert(_) => "admin:document.convert",
+            Self::FileMove(_) => "admin:document.move_file",
+            Self::FileRestore(_) => "admin:document.restore_file",
             Self::Unknown => "admin:web.unknown",
         }
     }

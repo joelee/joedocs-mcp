@@ -2356,3 +2356,318 @@ async fn every_route_writes_one_audit_row_with_its_documented_tool() -> TestResu
     );
     server.stop().await
 }
+
+// --- STEP-11: archive and structure actions ----------------------------------------
+
+/// The STEP-08 vault plus a second backlog file: JD-3 has `items/first`
+/// (once `items/one`) and `items/second`; JD-4 is archived.
+fn structure_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewFile};
+    history_fixture(store)?;
+    store.create_file(
+        &Actor::new("laptop-key", "claude-code"),
+        &NewFile {
+            document_id: "JD-3".into(),
+            file: "items/second".into(),
+            content: "Item two.\n".into(),
+            front_matter: joedocs::document::front_matter::Fields::new(),
+            expected_revision: None,
+            summary: None,
+        },
+    )?;
+    Ok(())
+}
+
+/// Whether the newest History row of `path` was written by the signed-in
+/// admin token (`laptop`) from the web interface.
+async fn latest_by_web(server: &Server, cookie: &str, path: &str) -> TestResult<bool> {
+    let history = server.get(path, Some(cookie)).await?;
+    let newest = history
+        .body
+        .split("<tr data-revision=\"")
+        .nth(1)
+        .and_then(|row| row.split("</tr>").next())
+        .unwrap_or("");
+    Ok(newest.contains("<td>laptop <span class=\"hint\">joedocs-web</span></td>"))
+}
+
+#[tokio::test]
+async fn the_archive_lists_and_restores_documents() -> TestResult<()> {
+    let server = start_full(|_| {}, structure_fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let archive = server.get("/admin/archive", Some(&cookie)).await?;
+    assert_eq!(archive.status, 200, "{}", archive.body);
+    let row = row_of(&archive.body, "archived", "JD-4");
+    for cell in ["Old note", "joedocs", "notes", "obsolete", "laptop-key"] {
+        assert!(row.contains(cell), "{cell}: {row}");
+    }
+    for (query, listed) in [
+        ("project=notes", false),
+        ("type=notes", true),
+        ("project=joedocs&type=plans", false),
+    ] {
+        let page = server
+            .get(&format!("/admin/archive?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(page.status, 200, "{query}");
+        assert_eq!(
+            page.body.contains("data-archived=\"JD-4\""),
+            listed,
+            "{query}"
+        );
+    }
+    let bad = server
+        .get("/admin/archive?type=nope", Some(&cookie))
+        .await?;
+    assert_eq!(bad.status, 400);
+    assert!(bad.body.contains("nope"), "{}", bad.body);
+
+    let restored = server
+        .post_form("/admin/archive/JD-4/restore", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(restored.status, 303, "{}", restored.body);
+    let location = restored.header("location").ok_or("no location")?.to_owned();
+    assert_eq!(location, "/admin/documents/JD-4?done=unarchived");
+    let view = server.get(&location, Some(&cookie)).await?;
+    assert_eq!(view.status, 200, "{}", view.body);
+    assert!(
+        view.body
+            .contains("Restored JD-4 from the archive; it is now at revision 3."),
+        "{}",
+        view.body
+    );
+    assert!(latest_by_web(&server, &cookie, "/admin/documents/JD-4/history").await?);
+    let empty = server.get("/admin/archive", Some(&cookie)).await?;
+    assert!(!empty.body.contains("data-archived=\"JD-4\""));
+    let again = server
+        .post_form("/admin/archive/JD-4/restore", &cookie, Some(&csrf), &[])
+        .await?;
+    assert!(again.status >= 400 && again.status < 500, "{}", again.body);
+    assert!(
+        again.body.contains("JD-4"),
+        "the store's message: {}",
+        again.body
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn convert_makes_a_document_multi_file_with_the_messages_of_document_convert()
+-> TestResult<()> {
+    let server = start_full(|_| {}, structure_fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let single = server.get("/admin/documents/JD-2", Some(&cookie)).await?;
+    assert!(
+        single
+            .body
+            .contains("action=\"/admin/documents/JD-2/convert\""),
+        "{}",
+        single.body
+    );
+    let multi = server.get("/admin/documents/JD-3", Some(&cookie)).await?;
+    assert!(
+        !multi.body.contains("/convert\""),
+        "not offered on a multi-file document"
+    );
+    let file = server
+        .get("/admin/documents/JD-3?file=items%2Fsecond", Some(&cookie))
+        .await?;
+    assert!(
+        file.body
+            .contains("action=\"/admin/documents/JD-3/move-file\""),
+        "{}",
+        file.body
+    );
+
+    let converted = server
+        .post_form("/admin/documents/JD-2/convert", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(converted.status, 303, "{}", converted.body);
+    let view = server
+        .get(
+            converted.header("location").ok_or("no location")?,
+            Some(&cookie),
+        )
+        .await?;
+    assert!(
+        view.body
+            .contains("Converted JD-2 to a multi-file document at revision 2."),
+        "{}",
+        view.body
+    );
+    assert!(latest_by_web(&server, &cookie, "/admin/documents/JD-2/history").await?);
+    let twice = server
+        .post_form("/admin/documents/JD-2/convert", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(twice.status, 400);
+    assert!(
+        twice.body.contains("JD-2 is already a multi-file document"),
+        "{}",
+        twice.body
+    );
+
+    server.stop().await
+}
+
+/// [`structure_fixture`] with JD-2 converted, so files can move to it.
+fn move_fixture(store: &mut Store) -> TestResult<()> {
+    structure_fixture(store)?;
+    store.convert(
+        &joedocs::store::Actor::new("laptop-key", "claude-code"),
+        "JD-2",
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn files_move_between_documents_with_the_messages_of_move_file() -> TestResult<()> {
+    let server = start_full(|_| {}, move_fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let moved = server
+        .post_form(
+            "/admin/documents/JD-3/move-file",
+            &cookie,
+            Some(&csrf),
+            &[("file", "items/first"), ("to", "JD-2"), ("as", "")],
+        )
+        .await?;
+    assert_eq!(moved.status, 303, "{}", moved.body);
+    let location = moved.header("location").ok_or("no location")?.to_owned();
+    assert_eq!(
+        location,
+        "/admin/documents/JD-2?file=items%2Ffirst&done=moved&from=JD-3"
+    );
+    let target = server.get(&location, Some(&cookie)).await?;
+    assert!(
+        target
+            .body
+            .contains("Moved here from JD-3; JD-2 is now at revision 3."),
+        "{}",
+        target.body
+    );
+    assert!(latest_by_web(&server, &cookie, "/admin/documents/JD-2/history").await?);
+    for (fields, message) in [
+        (
+            [
+                ("file", "items/second"),
+                ("to", "JD-2"),
+                ("as", "items/first"),
+            ],
+            "file items/first in JD-2 already exists",
+        ),
+        (
+            [("file", "items/second"), ("to", "JD-1"), ("as", "")],
+            "JD-1 is a single-file document",
+        ),
+        (
+            [("file", "items/second"), ("to", "nope"), ("as", "")],
+            "\"nope\" is not a document ID like JD-42",
+        ),
+    ] {
+        let refused = server
+            .post_form(
+                "/admin/documents/JD-3/move-file",
+                &cookie,
+                Some(&csrf),
+                &fields,
+            )
+            .await?;
+        assert!(refused.status >= 400 && refused.status < 500, "{fields:?}");
+        assert!(
+            refused.body.contains(&escaped(message)),
+            "{fields:?}: {}",
+            refused.body
+        );
+        assert!(
+            refused.body.contains("href=\"/admin/documents/JD-3\""),
+            "a way back: {}",
+            refused.body
+        );
+    }
+    let main = server
+        .post_form(
+            "/admin/documents/JD-3/move-file",
+            &cookie,
+            Some(&csrf),
+            &[("file", "Backlog"), ("to", "JD-2"), ("as", "")],
+        )
+        .await?;
+    assert!(
+        main.status >= 400 && main.status < 500,
+        "the main file cannot move: {}",
+        main.body
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn restore_file_brings_back_a_file_as_at_a_revision() -> TestResult<()> {
+    let server = start_full(|_| {}, structure_fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let history = server
+        .get(
+            "/admin/documents/JD-3/history?file=items%2Ffirst",
+            Some(&cookie),
+        )
+        .await?;
+    assert!(
+        history
+            .body
+            .contains("action=\"/admin/documents/JD-3/restore-file\""),
+        "each row offers Restore: {}",
+        history.body
+    );
+    let restored = server
+        .post_form(
+            "/admin/documents/JD-3/restore-file",
+            &cookie,
+            Some(&csrf),
+            &[("file", "items/one"), ("version", "2")],
+        )
+        .await?;
+    assert_eq!(restored.status, 303, "{}", restored.body);
+    let location = restored.header("location").ok_or("no location")?.to_owned();
+    assert_eq!(
+        location,
+        "/admin/documents/JD-3?file=items%2Fone&done=restored&from=2"
+    );
+    let view = server.get(&location, Some(&cookie)).await?;
+    assert!(
+        view.body
+            .contains("Restored items/one as it was at revision 2; JD-3 is now at revision 6."),
+        "{}",
+        view.body
+    );
+    assert!(view.body.contains("Item one body."), "{}", view.body);
+    assert!(latest_by_web(&server, &cookie, "/admin/documents/JD-3/history").await?);
+    let again = server
+        .post_form(
+            "/admin/documents/JD-3/restore-file",
+            &cookie,
+            Some(&csrf),
+            &[("file", "items/one"), ("version", "2")],
+        )
+        .await?;
+    assert_eq!(again.status, 400, "{}", again.body);
+    assert!(
+        again
+            .body
+            .contains("items/one is already as it was at revision 2"),
+        "{}",
+        again.body
+    );
+    let bad = server
+        .post_form(
+            "/admin/documents/JD-3/restore-file",
+            &cookie,
+            Some(&csrf),
+            &[("file", "items/one"), ("version", "two")],
+        )
+        .await?;
+    assert_eq!(bad.status, 400);
+    server.stop().await
+}

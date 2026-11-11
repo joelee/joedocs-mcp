@@ -10,6 +10,47 @@
     <span>revision {{ fetched.revision.revision }}{% if fetched.revision.revision != fetched.document.revision %} of {{ fetched.document.revision }}{% endif %}</span>
     <span class="hint">updated {{ fetched.revision.at }} by {{ fetched.revision.author }} ({{ fetched.revision.client }})</span>
   </p>
+  {% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
+  {% if offer != Offer::Nothing %}
+  <details class="actions-menu">
+    <summary>Actions</summary>
+    <div class="menu">
+      {% if offer == Offer::Convert %}<button type="button" class="secondary" data-dialog-open="convert-dialog">Convert to multi-file</button>{% endif %}
+      {% if offer == Offer::Move %}<button type="button" class="secondary" data-dialog-open="move-dialog">Move this file</button>{% endif %}
+    </div>
+  </details>
+  {% if offer == Offer::Convert %}
+  <dialog id="convert-dialog" aria-labelledby="convert-heading">
+    <form method="post" action="/admin/documents/{{ fetched.document.id }}/convert" class="stack">
+      <h2 id="convert-heading">Convert {{ fetched.document.id }} to a multi-file document?</h2>
+      <p>The document becomes a folder with this text as its main file; files can then be added to it. This cannot be undone from here.</p>
+      <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-dialog-close>Cancel</button>
+        <button type="submit">Convert {{ fetched.document.id }}</button>
+      </div>
+    </form>
+  </dialog>
+  {% endif %}
+  {% if offer == Offer::Move %}{% if let Some(name) = file %}
+  <dialog id="move-dialog" aria-labelledby="move-heading">
+    <form method="post" action="/admin/documents/{{ fetched.document.id }}/move-file" class="stack">
+      <h2 id="move-heading">Move {{ name }} to another document?</h2>
+      <p>The file leaves {{ fetched.document.id }} and joins another multi-file document, with its history; each document gets a new revision.</p>
+      <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+      <input type="hidden" name="file" value="{{ name }}">
+      <label for="move-to">To document</label>
+      <input id="move-to" name="to" required placeholder="JD-42" autocomplete="off">
+      <label for="move-as">As <span class="hint">optional new path in that document</span></label>
+      <input id="move-as" name="as" placeholder="{{ name }}" autocomplete="off">
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-dialog-close>Cancel</button>
+        <button type="submit">Move {{ name }}</button>
+      </div>
+    </form>
+  </dialog>
+  {% endif %}{% endif %}
+  {% endif %}
   {% if fetched.revision.revision != fetched.document.revision %}
   <p class="notice">You are reading revision {{ fetched.revision.revision }}. <a href="{{ latest_href }}">Read the latest</a>.</p>
   {% endif %}

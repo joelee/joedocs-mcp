@@ -70,6 +70,8 @@
     if (opener) {
       const dialog = document.getElementById(opener.dataset.dialogOpen);
       if (dialog instanceof HTMLDialogElement) {
+        // A menu the opener sits in closes, so it is not left open behind.
+        opener.closest("details")?.removeAttribute("open");
         dialog.showModal();
       }
       return;

@@ -1,6 +1,7 @@
 //! The pages: one module per workspace, each with its handlers and the
 //! Askama structs of its templates.
 
+mod archive;
 mod audit;
 mod document;
 mod documents;
@@ -136,6 +137,26 @@ pub(crate) fn link(path: &str, pairs: &[(&str, Option<&str>)]) -> String {
     }
 }
 
+/// The signed-in admin as the author of a change: the admin token's name,
+/// from the web interface.
+pub(crate) fn actor(session: &Session) -> crate::store::Actor {
+    crate::store::Actor::new(&session.admin.name, super::CLIENT)
+}
+
+/// The refusal for a store error, shown with a link back to `href`.
+pub(crate) fn refused_with_link(error: &crate::store::Error, href: &str, label: &str) -> WebError {
+    let refusal = WebError::from_store(error);
+    let page = ErrorPage {
+        title: "Refused",
+        assets: super::assets::urls(),
+        status: refusal.status.as_u16(),
+        message: &refusal.message,
+        link: Some((href, label)),
+    };
+    let page = super::render(refusal.status, &page);
+    refusal.with_page(page)
+}
+
 /// A route anyone may use.
 pub(crate) fn public(
     state: &WebState,
@@ -178,6 +199,11 @@ pub(crate) fn page(
         Route::KeysRotate(name) => keys::rotate(store, session, name),
         Route::KeysRevoke(name) => keys::revoke(store, session, name),
         Route::Audit => Ok(audit::page(store, request, session)),
+        Route::ArchiveList => archive::list(store, request, session),
+        Route::ArchiveRestore(id) => archive::restore(store, session, id),
+        Route::DocumentConvert(id) => document::convert(store, session, id),
+        Route::FileMove(id) => document::move_file(store, request, session, id),
+        Route::FileRestore(id) => document::restore_file(store, request, session, id),
         _ => Err(WebError::new(
             StatusCode::NOT_FOUND,
             "not_found",

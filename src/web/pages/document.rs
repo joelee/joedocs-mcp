@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::super::assets::{self, Urls};
 use super::super::markdown::{self, Heading, Resolver, Target};
 use super::super::{Session, WebError, WebRequest, WebState, render};
-use super::{Chrome, Section, link};
+use super::{Chrome, Section, actor, link, refused_with_link};
 use crate::document::front_matter::{self, SERVER_OWNED};
 use crate::document::is_project_key;
 use crate::store::{self, Fetched, FileInfo, Store};
@@ -91,6 +91,22 @@ struct DocumentPage<'a> {
     download_href: String,
     /// All files as a `.tgz`, for a multi-file document.
     archive_href: Option<String>,
+    /// What the last action did, when the URL says.
+    notice: Option<String>,
+    /// The action the Actions menu offers.
+    offer: Offer,
+}
+
+/// What the Actions menu offers on the page shown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Offer {
+    /// Nothing: an older revision, or a multi-file document's main file.
+    Nothing,
+    /// Convert, on the latest single-file document.
+    Convert,
+    /// Move this file, on the latest revision of a multi-file document's
+    /// file.
+    Move,
 }
 
 /// The URL of this page with `file`, `version` and `view`.
@@ -191,6 +207,12 @@ pub(crate) fn view(
         rendered_href: href(&document.id, file, pinned, false),
         source_href: href(&document.id, file, pinned, true),
         latest_href: href(&document.id, file, None, source),
+        notice: notice(request, document, file),
+        offer: match (pinned, document.multifile, file) {
+            (None, false, None) => Offer::Convert,
+            (None, true, Some(_)) => Offer::Move,
+            _ => Offer::Nothing,
+        },
         history_href: link(
             &format!("/admin/documents/{}/history", document.id),
             &[("file", file)],
@@ -211,20 +233,28 @@ pub(crate) fn view(
         fetched: &fetched,
     };
     let needs_pele = page.needs_pele;
-    let mut response = render(StatusCode::OK, &page);
-    if needs_pele {
-        let policy = format!(
-            "{}{}",
-            state.csp.to_str().unwrap_or("default-src 'none'"),
-            super::super::PELE_STYLE_ATTRIBUTES
-        );
-        if let Ok(value) = axum::http::HeaderValue::from_str(&policy) {
-            response
-                .headers_mut()
-                .insert(axum::http::header::CONTENT_SECURITY_POLICY, value);
-        }
+    let response = render(StatusCode::OK, &page);
+    Ok(if needs_pele {
+        with_pele_policy(response, state)
+    } else {
+        response
+    })
+}
+
+/// `response` with the policy a page that loads Pele needs: the usual one
+/// plus `style-src-attr 'unsafe-inline'` (Pele styles the SVG it draws).
+fn with_pele_policy(mut response: Response, state: &WebState) -> Response {
+    let policy = format!(
+        "{}{}",
+        state.csp.to_str().unwrap_or("default-src 'none'"),
+        super::super::PELE_STYLE_ATTRIBUTES
+    );
+    if let Ok(value) = axum::http::HeaderValue::from_str(&policy) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_SECURITY_POLICY, value);
     }
-    Ok(response)
+    response
 }
 
 /// The refusal for a document that cannot be shown; an archived one links
@@ -326,6 +356,113 @@ fn download_name(id: &str, file: Option<&str>, version: Option<u64>, extension: 
         Some(version) => format!("{name}-r{version}.{extension}"),
         None => format!("{name}.{extension}"),
     }
+}
+
+/// The line that reports what an action did, from the `done` (and `from`)
+/// the action redirected with. Only these known codes are shown.
+fn notice(
+    request: &WebRequest,
+    document: &crate::store::DocumentInfo,
+    file: Option<&str>,
+) -> Option<String> {
+    let (id, revision) = (&document.id, document.revision);
+    let from = request.query("from").filter(|f| !f.is_empty());
+    match request.query("done")? {
+        "unarchived" => Some(format!(
+            "Restored {id} from the archive; it is now at revision {revision}."
+        )),
+        "converted" => Some(format!(
+            "Converted {id} to a multi-file document at revision {revision}."
+        )),
+        "moved" => {
+            let source = from?.parse::<crate::document::DocumentId>().ok()?;
+            Some(format!(
+                "Moved here from {source}; {id} is now at revision {revision}."
+            ))
+        }
+        "restored" => {
+            let version = from?.parse::<u64>().ok()?;
+            Some(format!(
+                "Restored {} as it was at revision {version}; {id} is now at revision {revision}.",
+                file?
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// A link back to document `id`, for a refused action.
+fn back(id: &str) -> String {
+    format!("/admin/documents/{id}")
+}
+
+/// `POST /admin/documents/{id}/convert`, as `joedocs document convert`.
+pub(crate) fn convert(
+    store: &mut Store,
+    session: &Session,
+    id: &str,
+) -> Result<Response, WebError> {
+    let converted = store
+        .convert(&actor(session), id)
+        .map_err(|e| refused_with_link(&e, &back(id), "Back to the document"))?;
+    Ok(super::super::redirect(&link(
+        &back(&converted.id),
+        &[("done", Some("converted"))],
+    )))
+}
+
+/// `POST /admin/documents/{id}/move-file` with `file`, `to` and an
+/// optional `as`, as `joedocs document move-file`.
+pub(crate) fn move_file(
+    store: &mut Store,
+    request: &WebRequest,
+    session: &Session,
+    id: &str,
+) -> Result<Response, WebError> {
+    let field = |key: &str| request.form(key).unwrap_or("").trim();
+    let as_file = Some(field("as")).filter(|a| !a.is_empty());
+    let moved = store
+        .move_file(&actor(session), id, field("file"), field("to"), as_file)
+        .map_err(|e| refused_with_link(&e, &back(id), "Back to the document"))?;
+    Ok(super::super::redirect(&link(
+        &back(&moved.target),
+        &[
+            ("file", Some(&moved.file)),
+            ("done", Some("moved")),
+            ("from", Some(&moved.source)),
+        ],
+    )))
+}
+
+/// `POST /admin/documents/{id}/restore-file` with `file` and `version`, as
+/// `joedocs document restore-file`.
+pub(crate) fn restore_file(
+    store: &mut Store,
+    request: &WebRequest,
+    session: &Session,
+    id: &str,
+) -> Result<Response, WebError> {
+    let file = request.form("file").unwrap_or("").trim();
+    let text = request.form("version").unwrap_or("").trim();
+    let version = text.parse::<u64>().map_err(|_| {
+        WebError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_argument",
+            format!("`version` must be a revision number, not \"{text}\""),
+        )
+    })?;
+    let restored = store
+        .restore_file(&actor(session), id, file, version)
+        .map_err(|e| refused_with_link(&e, &back(id), "Back to the document"))?;
+    let version = version.to_string();
+    Ok(super::super::redirect(&link(
+        &back(&restored.id),
+        &[
+            ("file", restored.file.as_deref()),
+            ("done", Some("restored")),
+            ("from", Some(&version)),
+        ],
+    )))
 }
 
 /// The files of a multi-file document, main file first.
