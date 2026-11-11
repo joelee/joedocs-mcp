@@ -1,0 +1,25 @@
+/* JoeDocs admin web interface. Hand-written; no framework or build step. */
+:root {
+  color-scheme: light dark;
+  --bg: light-dark(#f7f7f5, #16171a);
+  --surface: light-dark(#ffffff, #1f2125);
+  --text: light-dark(#1d1f23, #e6e6e3);
+  --muted: light-dark(#5b6068, #a3a7ae);
+  --border: light-dark(#d9dadc, #34373d);
+  --accent: light-dark(#3b5bdb, #8ea2ff);
+  --danger: light-dark(#b42318, #ff8a80);
+  --radius: 6px;
+  --space: 1rem;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+body { margin: 0; background: var(--bg); color: var(--text); }
+main { max-width: 60rem; margin: 0 auto; padding: var(--space); }
+.login { max-width: 24rem; margin-top: 10vh; }
+.stack { display: grid; gap: 0.5rem; }
+input, button { font: inherit; padding: 0.5rem 0.75rem; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+button { background: var(--accent); color: var(--surface); border-color: var(--accent); cursor: pointer; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.notice { padding: 0.75rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.notice.error { border-color: var(--danger); color: var(--danger); }
+.hint { color: var(--muted); font-size: 0.9rem; }

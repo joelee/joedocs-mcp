@@ -1,5 +1,7 @@
-# Only Cargo.toml, Cargo.lock and src/ are needed to build the image.
+# Only Cargo.toml, Cargo.lock, src/ and templates/ (the web interface's
+# Askama templates) are needed to build the image.
 *
 !Cargo.toml
 !Cargo.lock
 !src/
+!templates/

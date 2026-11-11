@@ -101,39 +101,43 @@ impl ApiError {
     }
 }
 
+/// The HTTP status and error code for a store error, shared by the admin
+/// API and the web interface. A failure that is not the caller's is logged
+/// and reported as `internal`.
+pub(crate) fn classify(error: &store::Error) -> (StatusCode, &'static str) {
+    use store::Error as E;
+    match error {
+        E::AdminRefused(AdminRefusal::Unauthorized) => (StatusCode::UNAUTHORIZED, "unauthorized"),
+        E::AdminRefused(AdminRefusal::NoSession) => (StatusCode::UNAUTHORIZED, "no_session"),
+        E::AdminRefused(AdminRefusal::SessionExpired) => {
+            (StatusCode::UNAUTHORIZED, "session_expired")
+        }
+        E::AdminRefused(AdminRefusal::Locked { .. }) => (StatusCode::TOO_MANY_REQUESTS, "locked"),
+        E::NotFound(_) | E::FileNotFound { .. } | E::ProjectNotFound(_) | E::KeyNotFound(_) => {
+            (StatusCode::NOT_FOUND, "not_found")
+        }
+        E::Archived(_) => (StatusCode::CONFLICT, "archived"),
+        E::AlreadyExists(_) => (StatusCode::CONFLICT, "already_exists"),
+        E::Conflict { .. } | E::FileConflict { .. } => (StatusCode::CONFLICT, "conflict"),
+        other if other.is_user_error() => (StatusCode::BAD_REQUEST, "invalid_argument"),
+        other => {
+            tracing::error!(error = %other, "admin API store failure");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal")
+        }
+    }
+}
+
 impl From<&store::Error> for ApiError {
     fn from(error: &store::Error) -> Self {
-        use store::Error as E;
-        let (status, code) = match error {
-            E::AdminRefused(AdminRefusal::Unauthorized) => {
-                (StatusCode::UNAUTHORIZED, "unauthorized")
-            }
-            E::AdminRefused(AdminRefusal::NoSession) => (StatusCode::UNAUTHORIZED, "no_session"),
-            E::AdminRefused(AdminRefusal::SessionExpired) => {
-                (StatusCode::UNAUTHORIZED, "session_expired")
-            }
-            E::AdminRefused(AdminRefusal::Locked { retry_after, .. }) => {
-                let mut api = Self::new(StatusCode::TOO_MANY_REQUESTS, "locked", error.to_string());
-                api.retry_after = Some(*retry_after);
-                return api;
-            }
-            E::NotFound(_) | E::FileNotFound { .. } | E::ProjectNotFound(_) | E::KeyNotFound(_) => {
-                (StatusCode::NOT_FOUND, "not_found")
-            }
-            E::Archived(_) => (StatusCode::CONFLICT, "archived"),
-            E::AlreadyExists(_) => (StatusCode::CONFLICT, "already_exists"),
-            E::Conflict { .. } | E::FileConflict { .. } => (StatusCode::CONFLICT, "conflict"),
-            other if other.is_user_error() => (StatusCode::BAD_REQUEST, "invalid_argument"),
-            other => {
-                tracing::error!(error = %other, "admin API store failure");
-                return Self::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal",
-                    "internal error",
-                );
-            }
-        };
-        Self::new(status, code, error.to_string())
+        let (status, code) = classify(error);
+        if code == "internal" {
+            return Self::new(status, code, "internal error");
+        }
+        let mut api = Self::new(status, code, error.to_string());
+        if let store::Error::AdminRefused(AdminRefusal::Locked { retry_after, .. }) = error {
+            api.retry_after = Some(*retry_after);
+        }
+        api
     }
 }
 
@@ -198,16 +202,7 @@ impl Call {
 /// Refuses a `Host` outside `server.allowed_hosts` and an `Origin` outside
 /// `server.allowed_origins` (DNS rebinding and browser requests).
 fn check_origin(state: &ApiState, headers: &HeaderMap) -> Result<(), ApiError> {
-    let host = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let bare = strip_port(host);
-    let host_ok = state
-        .allowed_hosts
-        .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(host) || allowed.eq_ignore_ascii_case(bare));
-    if !host_ok {
+    if !host_allowed(&state.allowed_hosts, headers) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
@@ -227,8 +222,21 @@ fn check_origin(state: &ApiState, headers: &HeaderMap) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Whether the request's `Host` is one of `allowed_hosts` (DNS-rebinding
+/// protection), with or without its port.
+pub(crate) fn host_allowed(allowed_hosts: &[String], headers: &HeaderMap) -> bool {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let bare = strip_port(host);
+    allowed_hosts
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(host) || allowed.eq_ignore_ascii_case(bare))
+}
+
 /// `host:port` → `host`, `[::1]:80` → `::1`.
-fn strip_port(authority: &str) -> &str {
+pub(crate) fn strip_port(authority: &str) -> &str {
     if let Some(rest) = authority.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(rest);
     }

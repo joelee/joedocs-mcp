@@ -76,6 +76,18 @@ docker compose down              # stops the stack; the data stays in .local/dat
 - To start afresh: `docker compose down && rm -rf .local/data`.
 - After an upgrade, `serve` rebuilds the index from the history if the database is from an older build; `docker compose logs` shows the outcome. To rebuild by hand: `docker compose exec joedocs joedocs reindex`.
 
+## Web interface
+
+The admin web interface lives in `src/web/`, with its Askama templates in `templates/` at the repository root (Askama's default directory; Askama's `config` feature, which would let them live elsewhere, depends on the unmaintained `basic-toml`). The templates and the static files in `src/web/assets/` are compiled into the binary; `Cargo.toml` `include`, the `Dockerfile` and `.dockerignore` list `templates/`. There is no Node or WASM build step.
+
+### Vendored browser files
+
+Third-party browser files sit in `src/web/assets/vendor/`, unmodified, each with its licence text beside it. To update one, download the new version from the npm registry, check the tarball against the registry's `integrity` value, copy the file and its licence, and update this table.
+
+| File | Version | Source | SHA-256 | Licence |
+| --- | --- | --- | --- | --- |
+| `htmx.min.js` | htmx 4.0.1 | `dist/htmx.min.js` from <https://registry.npmjs.org/htmx.org/-/htmx.org-4.0.1.tgz> (integrity `sha512-oF7JgXhDW9UXCy/k1ZYFUQgzu/rm19ORWPSPNL91vPluB2PB9+MV55tyQdH/w7o2EAbTYUG5SDW1R60mdkdqGg==`) | `a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130` | 0BSD, `htmx.LICENSE` |
+
 ## Running as a service
 
 Running JoeDocs as a systemd or `brew services` service, reaching it from other machines, and operating it are in the [deployment guide](deployment.md). When you change `src/systemd.rs`, check the rendered unit with `cargo run -- systemd install --dry-run` (and `--system --run-as USER`).

@@ -28,7 +28,8 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-pub use admin_api::{AdminOptions, SESSION_HEADER};
+pub use admin_api::{AdminOptions, BODY_LIMIT, SESSION_HEADER};
+pub(crate) use admin_api::{classify, host_allowed, strip_port};
 pub use auth::Caller;
 pub use errors::ToolError;
 pub use tools::JoeDocsServer;
@@ -55,6 +56,9 @@ pub struct ServerOptions {
     pub max_request_bytes: usize,
     /// The admin API, when `admin.enabled` is on.
     pub admin: Option<AdminOptions>,
+    /// The admin web interface, when `admin.enabled` and `admin.web_ui`
+    /// are both on.
+    pub web: Option<crate::web::WebOptions>,
 }
 
 impl ServerOptions {
@@ -80,13 +84,17 @@ impl ServerOptions {
                 session_hours: config.admin.session_hours,
                 config_file: None,
             }),
+            web: (config.admin.enabled && config.admin.web_ui).then(|| crate::web::WebOptions {
+                session_hours: config.admin.session_hours,
+                plantuml_url: config.admin.web_plantuml_url.clone(),
+            }),
         }
     }
 }
 
 /// `https://host` → `https://host:443`, `http://host` → `http://host:80`, so
 /// an origin entry matches only the scheme's default port.
-fn with_default_port(origin: &str) -> String {
+pub(crate) fn with_default_port(origin: &str) -> String {
     let (scheme, rest, port) = if let Some(rest) = origin.strip_prefix("https://") {
         ("https", rest, 443)
     } else if let Some(rest) = origin.strip_prefix("http://") {
@@ -121,6 +129,12 @@ impl Shared {
             store: Mutex::new(store),
             settings,
         })
+    }
+
+    /// The store's lock, for the web interface's handlers, which run on
+    /// blocking threads.
+    pub(crate) fn store(&self) -> &Mutex<Store> {
+        &self.store
     }
 
     /// Runs `f` with exclusive access to the store on a blocking thread.
@@ -164,9 +178,12 @@ pub fn router(shared: &Arc<Shared>, options: &ServerOptions, ct: &CancellationTo
                 Arc::clone(shared),
                 auth::require_key,
             ));
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(mcp);
+    if let Some(web) = &options.web {
+        app = app.merge(crate::web::routes(shared, web, options));
+    }
     match &options.admin {
         Some(admin) => app.nest("/admin/v1", admin_api::routes(shared, admin, options)),
         // Without this, the MCP router's key check would answer these paths
