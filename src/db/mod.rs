@@ -21,9 +21,9 @@ pub use admin::{
     record_failed_login, record_login, revoke_admin_token, revoke_session, touch_session,
 };
 pub use documents::{
-    DocumentRow, ListQuery, RevisionRow, Sort, archived_documents, document_counts, get_document,
-    get_revision, insert_document, insert_revision, last_change_at, list_documents, list_revisions,
-    live_documents, live_documents_in, path_taken, save_document,
+    DocumentRow, ListQuery, RevisionRow, Sort, archived_documents, document_counts, find_by_title,
+    find_files, get_document, get_revision, insert_document, insert_revision, last_change_at,
+    list_documents, list_revisions, live_documents, live_documents_in, path_taken, save_document,
 };
 pub use files::{
     FileChange, FileRow, RevisionFileRow, count_live_files, file_by_id, files_of, find_live_file,

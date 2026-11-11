@@ -31,6 +31,7 @@ mod files;
 mod folders;
 mod index_file;
 mod journal;
+mod links;
 mod registry;
 mod reindex;
 mod revisions;

@@ -1481,6 +1481,61 @@ fn sessions_expire_belong_to_their_token_and_end_with_it() {
     ));
 }
 
+// --- Wiki link lookup (JD-32 STEP-05) -----------------------------------------
+
+#[test]
+fn wiki_link_titles_resolve_by_title_then_alias_same_project_first() {
+    let mut fx = fixture();
+    fx.store.add_project("notes", "NT", None).unwrap();
+    let plan = fx.store.create(&actor(), new_doc("Rollout Plan")).unwrap();
+    let mut aliased = new_doc("Formal name");
+    aliased.front_matter = fields(json!({"aliases": ["Nickname"]}));
+    let alias = fx.store.create(&actor(), aliased).unwrap();
+    let mut elsewhere = new_doc("Rollout plan");
+    elsewhere.project = "notes".into();
+    elsewhere.doc_type = Some("notes".into());
+    let other = fx.store.create(&actor(), elsewhere).unwrap();
+    let gone = fx.store.create(&actor(), new_doc("Old thing")).unwrap();
+    fx.store.archive(&actor(), &gone.id, "done").unwrap();
+
+    let find = |fx: &Fixture, project: &str, target: &str| {
+        fx.store.find_by_title(project, target).unwrap()
+    };
+    assert_eq!(find(&fx, "joedocs", "rollout plan"), Some(plan.id.clone()));
+    assert_eq!(find(&fx, "notes", "ROLLOUT PLAN"), Some(other.id.clone()));
+    assert_eq!(find(&fx, "joedocs", "nickname"), Some(alias.id.clone()));
+    assert_eq!(find(&fx, "notes", "Nickname"), Some(alias.id.clone()));
+    assert_eq!(find(&fx, "nowhere", "Rollout Plan"), Some(plan.id));
+    assert_eq!(find(&fx, "joedocs", "Old thing"), None, "archived");
+    assert_eq!(find(&fx, "joedocs", "Nothing like it"), None);
+}
+
+#[test]
+fn wiki_link_files_resolve_by_path_or_unique_name() {
+    let mut fx = fixture();
+    let mut multi = new_doc("Backlog");
+    multi.multifile = true;
+    let doc = fx.store.create(&actor(), multi).unwrap();
+    for file in ["items/one", "items/two", "other/one"] {
+        let request = NewFile {
+            document_id: doc.id.clone(),
+            file: file.into(),
+            content: "Item\n".into(),
+            front_matter: Fields::new(),
+            expected_revision: None,
+            summary: None,
+        };
+        fx.store.create_file(&actor(), &request).unwrap();
+    }
+    let find = |target: &str| fx.store.find_file(&doc.id, target).unwrap();
+    assert_eq!(find("items/one"), Some("items/one".to_owned()));
+    assert_eq!(find("ITEMS/One.md"), Some("items/one".to_owned()));
+    assert_eq!(find("two"), Some("items/two".to_owned()));
+    assert_eq!(find("one"), None, "two files are called one");
+    assert_eq!(find("nope"), None);
+    assert_eq!(fx.store.find_file("JD-99", "one").unwrap(), None);
+}
+
 // --- Web sessions (JD-32 STEP-02) ---------------------------------------------
 
 #[test]

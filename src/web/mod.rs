@@ -26,7 +26,17 @@
 //! the cookie may change in any release. Scripts use `/admin/v1/`.
 
 mod assets;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the document view (JD-32 STEP-06) uses it")
+)]
+pub(crate) mod markdown;
 mod pages;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the document view (JD-32 STEP-06) uses it")
+)]
+mod plantuml;
 mod session;
 
 use std::sync::Arc;
