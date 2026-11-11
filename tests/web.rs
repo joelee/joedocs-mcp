@@ -280,6 +280,23 @@ async fn the_web_interface_is_absent_when_switched_off() -> TestResult<()> {
     let api = server.get("/admin/v1/status", None).await?;
     assert_eq!(api.status, 401);
     assert!(api.body.contains("\"unauthorized\""), "{}", api.body);
+    server.stop().await?;
+
+    // With the admin API off as well, the pages still answer as an unknown
+    // path does, and only the admin API's own paths answer 404.
+    let server = start_with(|c| {
+        c.admin.enabled = false;
+        c.admin.web_ui = false;
+    })
+    .await?;
+    let unknown = server.get("/no-such-path", None).await?;
+    assert_eq!(unknown.status, 401);
+    for path in ["/admin/", "/admin/login"] {
+        let reply = server.get(path, None).await?;
+        assert_eq!(reply.status, unknown.status, "{path}");
+        assert_eq!(reply.body, unknown.body, "{path}");
+    }
+    assert_eq!(server.get("/admin/v1/status", None).await?.status, 404);
     server.stop().await
 }
 

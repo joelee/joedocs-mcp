@@ -288,7 +288,7 @@ The admin API can also serve pages for a browser under `/admin/`: browse, search
 | --- | --- |
 | `403 Forbidden` | The `Host` the client used is not in `server.allowed_hosts` (or its `Origin` is not in `server.allowed_origins`). Add it and restart. |
 | `401 Unauthorized` | The token is wrong, rotated or revoked. Check with `joedocs key list`. |
-| `/admin/` answers `404` | `admin.enabled` or `admin.web_ui` is off. Turn both on and restart. |
+| `/admin/` answers `401 Unauthorized` in the browser | `admin.enabled` or `admin.web_ui` is off, so `/admin/` is an unknown path, which the MCP endpoint's key check refuses. Turn both on and restart; `joedocs status` says whether the interface is on. |
 | Signing in says "Signing in needs HTTPS" | The page was opened over plain HTTP from another machine. Use `https://` through `tailscale serve` or a TLS proxy (section 6b). |
 | Signing in says the form was "not sent from this site" | The proxy changes the `Host` header. Pass it through, or add the public origin to `server.allowed_origins` (section 6b). |
 | `Failed to connect to bus` from `systemctl --user` | Not a real login session (for example after `su`). Log in over SSH as that user. |

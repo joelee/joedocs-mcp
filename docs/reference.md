@@ -187,7 +187,7 @@ Logins are TOTP codes (RFC 6238: SHA-1, 6 digits, 30 seconds). A code is accepte
 
 ## Admin web interface
 
-With `[admin] enabled = true` and `web_ui = true`, `joedocs serve` also serves pages for administrators under `/admin/`; with either off, `/admin/` and every page under it answer `404`. The pages do what the remote admin commands do:
+With `[admin] enabled = true` and `web_ui = true`, `joedocs serve` also serves pages for administrators under `/admin/`. With either off, the pages are not served: `/admin/` and every page under it answer as any unknown path does, `401` from the MCP endpoint's key check, as in 0.4.3 (only the admin API's own paths, `/admin/v1/...`, answer `404`, and only when `admin.enabled` is off). The pages do what the remote admin commands do:
 
 | Page | What it does |
 | --- | --- |
