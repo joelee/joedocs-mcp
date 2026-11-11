@@ -1,0 +1,116 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head page-head-actions">
+  <div>
+    <h1>API keys</h1>
+    <p class="lede">Keys let MCP clients read or write the projects they are granted.</p>
+  </div>
+  <button type="button" data-dialog-open="create-key"{% if projects.is_empty() %} disabled{% endif %}>Create key</button>
+</div>
+
+{% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
+{% if let Some(message) = error %}<p class="notice error" role="alert">{{ message }}</p>{% endif %}
+
+{% if keys.is_empty() %}
+<p class="empty">No API keys yet.{% if projects.is_empty() %} <a href="/admin/projects">Add a project</a> first, then create a key for it.{% endif %}</p>
+{% else %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th scope="col">Name</th><th scope="col">Grants</th><th scope="col">Created (UTC)</th><th scope="col">Last used (UTC)</th><th scope="col">State</th><th scope="col">Actions</th></tr>
+    </thead>
+    <tbody>
+      {% for key in keys %}
+      <tr data-key="{{ key.name }}">
+        <td><strong>{{ key.name }}</strong> <code class="hint">{{ key.id }}</code></td>
+        <td>
+          {% if key.grants.is_empty() %}<span class="hint">none</span>{% endif %}
+          <ul class="grants">
+            {% for (project, grant) in key.grants %}
+            <li><span class="chip">{{ grant }}</span>{% if key.revoked.is_none() %}
+              <form method="post" action="/admin/keys/{{ key.name }}/ungrant" class="inline">
+                <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+                <input type="hidden" name="project" value="{{ project }}">
+                <button type="submit" class="link" aria-label="Remove the grant on {{ project }} from {{ key.name }}">Remove</button>
+              </form>{% endif %}</li>
+            {% endfor %}
+          </ul>
+        </td>
+        <td class="nowrap">{{ key.created }}</td>
+        <td class="nowrap">{% if let Some(at) = key.last_used %}{{ at }}{% else %}<span class="hint">never</span>{% endif %}</td>
+        <td>{% if let Some(at) = key.revoked %}<span class="badge badge-status-rejected">revoked</span> <span class="hint">{{ at }}</span>{% else %}<span class="badge badge-status-approved">active</span>{% endif %}</td>
+        <td>
+          {% if key.revoked.is_none() %}
+          <details class="key-actions">
+            <summary>Manage</summary>
+            <form method="post" action="/admin/keys/{{ key.name }}/grant" class="filters">
+              <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+              <div><label for="g-{{ key.name }}-project">Project</label>
+                <select id="g-{{ key.name }}-project" name="project">{% for project in projects %}<option value="{{ project }}">{{ project }}</option>{% endfor %}</select></div>
+              <div><label for="g-{{ key.name }}-permission">Permission</label>
+                <select id="g-{{ key.name }}-permission" name="permission"><option value="read">read</option><option value="write">write</option></select></div>
+              <div><button type="submit" class="secondary">Grant</button></div>
+            </form>
+            <p class="key-danger">
+              <button type="button" class="secondary" data-dialog-open="rotate-{{ key.name }}">Rotate</button>
+              <button type="button" class="danger" data-dialog-open="revoke-{{ key.name }}">Revoke</button>
+            </p>
+          </details>
+          <dialog id="rotate-{{ key.name }}" aria-labelledby="rotate-{{ key.name }}-heading">
+            <form method="post" action="/admin/keys/{{ key.name }}/rotate" class="stack">
+              <h2 id="rotate-{{ key.name }}-heading">Rotate API key {{ key.name }}?</h2>
+              <p>A new token is shown once. The old token stops working at once, so every client using it needs the new one.</p>
+              <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+              <div class="dialog-actions">
+                <button type="button" class="secondary" data-dialog-close>Cancel</button>
+                <button type="submit">Rotate {{ key.name }}</button>
+              </div>
+            </form>
+          </dialog>
+          <dialog id="revoke-{{ key.name }}" aria-labelledby="revoke-{{ key.name }}-heading">
+            <form method="post" action="/admin/keys/{{ key.name }}/revoke" class="stack">
+              <h2 id="revoke-{{ key.name }}-heading">Revoke API key {{ key.name }}?</h2>
+              <p>Its token stops working at once. Revoking cannot be undone; create a new key instead.</p>
+              <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+              <div class="dialog-actions">
+                <button type="button" class="secondary" data-dialog-close>Cancel</button>
+                <button type="submit" class="danger">Revoke {{ key.name }}</button>
+              </div>
+            </form>
+          </dialog>
+          {% else %}<span class="hint">none</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<dialog id="create-key" aria-labelledby="create-key-heading"{% if open %} open{% endif %}>
+  <form method="post" action="/admin/keys" class="stack">
+    <h2 id="create-key-heading">Create key</h2>
+    <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+    <label for="k-name">Name <span class="hint">lower-case letters, digits and -, e.g. the client's machine</span></label>
+    <input id="k-name" name="name" value="{{ name }}" required autocomplete="off">
+    <fieldset>
+      <legend>Grants</legend>
+      {% for choice in choices %}
+      <div class="grant-choice">
+        <label for="k-grant-{{ choice.project }}">{{ choice.project }}</label>
+        <select id="k-grant-{{ choice.project }}" name="grant.{{ choice.project }}">
+          <option value=""{% if choice.chosen.is_empty() %} selected{% endif %}>no access</option>
+          <option value="read"{% if choice.chosen == "read" %} selected{% endif %}>read</option>
+          <option value="write"{% if choice.chosen == "write" %} selected{% endif %}>write</option>
+        </select>
+      </div>
+      {% endfor %}
+    </fieldset>
+    <p class="hint">The token is shown once, on the next page.</p>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" data-dialog-close>Cancel</button>
+      <button type="submit">Create key</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}

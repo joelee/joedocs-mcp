@@ -161,8 +161,13 @@ impl Server {
         headers: &str,
         body: &str,
     ) -> TestResult<Reply> {
+        let form_type = if headers.to_ascii_lowercase().contains("content-type:") {
+            ""
+        } else {
+            "content-type: application/x-www-form-urlencoded\r\n"
+        };
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{headers}content-type: application/x-www-form-urlencoded\r\ncontent-length: {}\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{headers}{form_type}content-length: {}\r\n\r\n{body}",
             body.len()
         );
         let mut stream = TcpStream::connect(self.addr).await?;
@@ -1659,4 +1664,443 @@ async fn downloads_hold_the_bytes_the_command_line_writes() -> TestResult<()> {
         old.body
     );
     server.stop().await
+}
+
+// --- STEP-09: projects and API keys ------------------------------------------------
+
+impl Server {
+    /// Posts `fields` (and the CSRF token, when given) from this server's
+    /// own origin with the session `cookie`.
+    async fn post_form(
+        &self,
+        path: &str,
+        cookie: &str,
+        csrf: Option<&str>,
+        fields: &[(&str, &str)],
+    ) -> TestResult<Reply> {
+        let mut pairs: Vec<(&str, &str)> = fields.to_vec();
+        if let Some(csrf) = csrf {
+            pairs.push(("csrf", csrf));
+        }
+        let headers = format!(
+            "Cookie: {cookie}\r\nOrigin: {}\r\nSec-Fetch-Site: same-origin\r\n",
+            self.origin()
+        );
+        self.send("POST", path, &headers, &form(&pairs)).await
+    }
+
+    /// The status `/mcp` gives an `initialize` with `token`.
+    async fn mcp_status(&self, token: &str) -> TestResult<u16> {
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"1"}}}"#;
+        let headers = format!(
+            "Authorization: Bearer {token}\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\n"
+        );
+        Ok(self.send("POST", "/mcp", &headers, init).await?.status)
+    }
+
+    /// Stops the server and keeps its directory, for the command line.
+    async fn stop_keeping(self) -> TestResult<TempDir> {
+        let Self {
+            dir,
+            mut stop,
+            mut task,
+            ..
+        } = self;
+        if let Some(stop) = stop.take() {
+            stop.send(()).ok();
+        }
+        (&mut task).await??;
+        Ok(dir)
+    }
+}
+
+/// What `joedocs <args>` prints on the store in `dir`.
+fn joedocs_cli(dir: &std::path::Path, args: &[&str]) -> TestResult<String> {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_joedocs"));
+    cmd.env_clear()
+        .env("HOME", dir)
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("JOEDOCS__STORAGE__HOME", dir.join("vault"))
+        .env("JOEDOCS__STORAGE__STATE_DIR", dir.join("state"))
+        .current_dir(dir)
+        .args(args);
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
+    let output = cmd.output()?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
+    }
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+/// The table row marked `data-<what>="<name>"`.
+fn row_of<'a>(body: &'a str, what: &str, name: &str) -> &'a str {
+    let marker = format!("<tr data-{what}=\"{name}\"");
+    body.find(&marker).map_or("", |start| {
+        let rest = &body[start..];
+        &rest[..rest.find("</tr>").unwrap_or(rest.len())]
+    })
+}
+
+#[tokio::test]
+async fn projects_are_listed_and_added_with_the_rules_of_project_add() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let page = server.get("/admin/projects", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    let joedocs = row_of(&page.body, "project", "joedocs");
+    for expected in ["JD", "JoeDocs", "<td class=\"num\">3</td>", ">1</a>"] {
+        assert!(joedocs.contains(expected), "{expected}: {joedocs}");
+    }
+    assert!(row_of(&page.body, "project", "notes").contains("NT"));
+
+    let added = server
+        .post_form(
+            "/admin/projects",
+            &cookie,
+            Some(&csrf),
+            &[("name", "alpha"), ("key", "AL"), ("title", "Alpha docs")],
+        )
+        .await?;
+    assert_eq!(added.status, 303, "{}", added.body);
+    let location = added.header("location").ok_or("no location")?.to_owned();
+    assert_eq!(location, "/admin/projects?added=alpha");
+    let after = server.get(&location, Some(&cookie)).await?;
+    assert!(
+        after
+            .body
+            .contains("Added project alpha (key AL): Alpha docs"),
+        "the message `project add` prints: {}",
+        after.body
+    );
+    for (fields, status, message) in [
+        (
+            [("name", "Bad Name"), ("key", "BN"), ("title", "")],
+            400,
+            "must be lower-case letters, digits and &#39;-&#39;, starting with a letter or digit",
+        ),
+        (
+            [("name", "beta"), ("key", "be"), ("title", "")],
+            400,
+            "must be 1 to 10 upper-case letters and digits, starting with a letter",
+        ),
+        (
+            [("name", "joedocs"), ("key", "ZZ"), ("title", "")],
+            409,
+            "project joedocs already exists",
+        ),
+        (
+            [("name", "beta"), ("key", "JD"), ("title", "")],
+            409,
+            "project key JD (used by joedocs) already exists",
+        ),
+    ] {
+        let refused = server
+            .post_form("/admin/projects", &cookie, Some(&csrf), &fields)
+            .await?;
+        assert_eq!(refused.status, status, "{fields:?}: {}", refused.body);
+        assert!(
+            refused.body.contains(message),
+            "{fields:?}: {}",
+            refused.body
+        );
+        assert!(
+            refused
+                .body
+                .contains(&format!("value=\"{}\"", escaped(fields[0].1))),
+            "the form keeps what was typed: {}",
+            refused.body
+        );
+    }
+    let no_csrf = server
+        .post_form(
+            "/admin/projects",
+            &cookie,
+            None,
+            &[("name", "gamma"), ("key", "GA")],
+        )
+        .await?;
+    assert_eq!(no_csrf.status, 403);
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    for tool in ["admin:projects.list", "admin:projects.add"] {
+        assert!(tools.iter().any(|t| t == tool), "{tool}: {tools:?}");
+    }
+
+    let dir = server.stop_keeping().await?;
+    let listed = joedocs_cli(dir.path(), &["project", "list"])?;
+    let alpha = listed
+        .lines()
+        .find(|l| l.starts_with("alpha "))
+        .ok_or("alpha is not listed")?;
+    assert!(
+        alpha.contains("AL") && alpha.contains("Alpha docs"),
+        "{listed}"
+    );
+    assert!(
+        !listed.contains("beta") && !listed.contains("gamma"),
+        "{listed}"
+    );
+    Ok(())
+}
+
+/// Every log line the process writes from now on, as text.
+fn capture_logs() -> Arc<std::sync::Mutex<Vec<u8>>> {
+    #[derive(Clone)]
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if let Ok(mut out) = self.0.lock() {
+                out.extend_from_slice(buf);
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = Sink(Arc::clone(&buffer));
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || sink.clone())
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).ok();
+    buffer
+}
+
+/// The token on a reveal-once page.
+fn revealed(body: &str) -> TestResult<String> {
+    let marker = "<code id=\"new-token\">";
+    let start = body.find(marker).ok_or("no token shown")? + marker.len();
+    let end = body[start..].find('<').ok_or("unterminated token")?;
+    Ok(body[start..start + end].to_owned())
+}
+
+/// Creates key `ci` with write on joedocs and read on notes, and returns
+/// the reply that shows its token.
+async fn create_ci_key(server: &Server, cookie: &str, csrf: &str) -> TestResult<Reply> {
+    server
+        .post_form(
+            "/admin/keys",
+            cookie,
+            Some(csrf),
+            &[
+                ("name", "ci"),
+                ("grant.joedocs", "write"),
+                ("grant.notes", "read"),
+            ],
+        )
+        .await
+}
+
+/// `joedocs key list` on the store in `dir`, and the line of key `name`.
+fn key_list_line(dir: &std::path::Path, name: &str) -> TestResult<(String, String)> {
+    let keys = joedocs_cli(dir, &["key", "list"])?;
+    let line = keys
+        .lines()
+        .find(|l| l.starts_with(&format!("{name} ")))
+        .ok_or("the key is not listed")?
+        .to_owned();
+    Ok((keys, line))
+}
+
+/// Each key action without its CSRF token is refused.
+async fn every_key_action_needs_its_csrf_token(server: &Server, cookie: &str) -> TestResult<()> {
+    for (action, fields) in [
+        ("/admin/keys", vec![("name", "other")]),
+        (
+            "/admin/keys/ci/grant",
+            vec![("project", "notes"), ("permission", "read")],
+        ),
+        ("/admin/keys/ci/ungrant", vec![("project", "notes")]),
+        ("/admin/keys/ci/rotate", vec![]),
+        ("/admin/keys/ci/revoke", vec![]),
+    ] {
+        let refused = server.post_form(action, cookie, None, &fields).await?;
+        assert_eq!(refused.status, 403, "{action} without its CSRF token");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_new_key_is_shown_once_and_its_grants_change_as_the_key_commands_do() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let empty = server.get("/admin/keys", Some(&cookie)).await?;
+    assert_eq!(empty.status, 200, "{}", empty.body);
+
+    let created = create_ci_key(&server, &cookie, &csrf).await?;
+    assert_eq!(
+        created.status, 200,
+        "the token is on this reply: {}",
+        created.body
+    );
+    assert_eq!(created.header("location"), None, "no redirect");
+    assert_eq!(created.header("cache-control"), Some("no-store"));
+    let token = revealed(&created.body)?;
+    assert!(token.starts_with("jd_"), "{token}");
+    assert!(
+        created.body.contains("joedocs:write, notes:read"),
+        "{}",
+        created.body
+    );
+    assert_eq!(server.mcp_status(&token).await?, 200, "the new token works");
+
+    let listed = server.get("/admin/keys", Some(&cookie)).await?;
+    let ci = row_of(&listed.body, "key", "ci");
+    assert!(
+        ci.contains("joedocs:write") && ci.contains("notes:read"),
+        "{ci}"
+    );
+    for needle in [
+        "<dialog id=\"rotate-ci\"",
+        "Rotate API key ci?",
+        "Revoke API key ci?",
+    ] {
+        assert!(listed.body.contains(needle), "{needle}: {}", listed.body);
+    }
+
+    let granted = server
+        .post_form(
+            "/admin/keys/ci/grant",
+            &cookie,
+            Some(&csrf),
+            &[("project", "notes"), ("permission", "write")],
+        )
+        .await?;
+    assert_eq!(granted.status, 303, "{}", granted.body);
+    let ungranted = server
+        .post_form(
+            "/admin/keys/ci/ungrant",
+            &cookie,
+            Some(&csrf),
+            &[("project", "joedocs")],
+        )
+        .await?;
+    assert_eq!(ungranted.status, 303, "{}", ungranted.body);
+    let after = server
+        .get(
+            ungranted.header("location").ok_or("no location")?,
+            Some(&cookie),
+        )
+        .await?;
+    assert!(
+        after.body.contains("API key ci grants: notes:write"),
+        "{}",
+        after.body
+    );
+    let nothing = server
+        .post_form(
+            "/admin/keys/ci/ungrant",
+            &cookie,
+            Some(&csrf),
+            &[("project", "joedocs")],
+        )
+        .await?;
+    assert_eq!(nothing.status, 400, "{}", nothing.body);
+    assert!(
+        nothing.body.contains("API key ci has no grant on joedocs"),
+        "{}",
+        nothing.body
+    );
+    assert!(
+        row_of(&nothing.body, "key", "ci").contains("notes:write"),
+        "unchanged"
+    );
+
+    every_key_action_needs_its_csrf_token(&server, &cookie).await?;
+    assert_eq!(
+        server.mcp_status(&token).await?,
+        200,
+        "nothing rotated or revoked"
+    );
+
+    let dir = server.stop_keeping().await?;
+    let (keys, line) = key_list_line(dir.path(), "ci")?;
+    assert!(
+        line.contains("active") && line.contains("notes:write"),
+        "{keys}"
+    );
+    assert!(!line.contains("joedocs:"), "{keys}");
+    assert!(!keys.contains("other"), "{keys}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn rotate_and_revoke_stop_old_tokens_and_no_token_is_kept() -> TestResult<()> {
+    let logs = capture_logs();
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let token = revealed(&create_ci_key(&server, &cookie, &csrf).await?.body)?;
+    let rotated = server
+        .post_form("/admin/keys/ci/rotate", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(rotated.status, 200, "{}", rotated.body);
+    assert_eq!(rotated.header("location"), None, "no redirect");
+    let new_token = revealed(&rotated.body)?;
+    assert_ne!(new_token, token);
+    assert_eq!(
+        server.mcp_status(&token).await?,
+        401,
+        "the old token stops working"
+    );
+    assert_eq!(server.mcp_status(&new_token).await?, 200);
+    let revoked = server
+        .post_form("/admin/keys/ci/revoke", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(revoked.status, 303, "{}", revoked.body);
+    let after = server
+        .get(
+            revoked.header("location").ok_or("no location")?,
+            Some(&cookie),
+        )
+        .await?;
+    assert!(
+        after.body.contains("API key ci is revoked (since"),
+        "{}",
+        after.body
+    );
+    assert_eq!(
+        server.mcp_status(&new_token).await?,
+        401,
+        "a revoked key stops working"
+    );
+
+    // Neither token is shown again, stored, audited or logged.
+    for path in ["/admin/keys", "/admin/"] {
+        let later = server.get(path, Some(&cookie)).await?;
+        assert!(
+            !later.body.contains(&token) && !later.body.contains(&new_token),
+            "{path}"
+        );
+    }
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    for tool in [
+        "admin:keys.list",
+        "admin:keys.create",
+        "admin:keys.rotate",
+        "admin:keys.revoke",
+    ] {
+        assert!(tools.iter().any(|t| t == tool), "{tool}: {tools:?}");
+    }
+    let dir = server.stop_keeping().await?;
+    let secrets = [&token, &new_token].map(|t| t.rsplit('_').next().unwrap_or("").to_owned());
+    for name in ["joedocs.db", "joedocs.db-wal"] {
+        let bytes = std::fs::read(dir.path().join("state").join(name)).unwrap_or_default();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(secrets.iter().all(|s| !text.contains(s.as_str())), "{name}");
+    }
+    let logged = String::from_utf8_lossy(&logs.lock().map_err(|_| "poisoned")?).into_owned();
+    assert!(
+        secrets.iter().all(|s| !logged.contains(s.as_str())),
+        "a token was logged"
+    );
+
+    let (keys, line) = key_list_line(dir.path(), "ci")?;
+    assert!(line.contains("revoked"), "{keys}");
+    Ok(())
 }

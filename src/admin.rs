@@ -809,7 +809,7 @@ fn key_row(key: &KeyRow) -> Vec<String> {
     ]
 }
 
-fn grant_list(grants: &[Grant]) -> String {
+pub(crate) fn grant_list(grants: &[Grant]) -> String {
     if grants.is_empty() {
         "none".to_owned()
     } else {

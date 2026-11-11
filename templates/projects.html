@@ -1,0 +1,53 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head page-head-actions">
+  <div>
+    <h1>Projects</h1>
+    <p class="lede">Each project is a folder of the vault with its own document key.</p>
+  </div>
+  <button type="button" data-dialog-open="add-project">Add project</button>
+</div>
+
+{% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
+{% if let Some(message) = error %}<p class="notice error" role="alert">{{ message }}</p>{% endif %}
+
+{% if projects.is_empty() %}
+<p class="empty">No projects yet. Add one to start; API keys are then granted on it.</p>
+{% else %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th scope="col">Name</th><th scope="col">Key</th><th scope="col">Title</th><th scope="col" class="num">Documents</th><th scope="col" class="num">Archived</th></tr>
+    </thead>
+    <tbody>
+      {% for project in projects %}
+      <tr data-project="{{ project.name }}">
+        <td><a href="/admin/documents?project={{ project.name }}">{{ project.name }}</a></td>
+        <td><code>{{ project.key }}</code></td>
+        <td>{{ project.title }}</td>
+        <td class="num">{{ project.live }}</td>
+        <td class="num">{% if project.archived > 0 %}<a href="/admin/archive?project={{ project.name }}">{{ project.archived }}</a>{% else %}0{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<dialog id="add-project" aria-labelledby="add-project-heading"{% if open %} open{% endif %}>
+  <form method="post" action="/admin/projects" class="stack">
+    <h2 id="add-project-heading">Add project</h2>
+    <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+    <label for="p-name">Name <span class="hint">lower-case letters, digits and -; also the vault folder</span></label>
+    <input id="p-name" name="name" value="{{ form.name }}" required autocomplete="off">
+    <label for="p-key">Key <span class="hint">1 to 10 upper-case letters and digits, starting with a letter; it cannot change</span></label>
+    <input id="p-key" name="key" value="{{ form.key }}" required autocomplete="off">
+    <label for="p-title">Title <span class="hint">optional; the name if empty</span></label>
+    <input id="p-title" name="title" value="{{ form.title }}" autocomplete="off">
+    <div class="dialog-actions">
+      <button type="button" class="secondary" data-dialog-close>Cancel</button>
+      <button type="submit">Add project</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}

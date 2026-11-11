@@ -4,8 +4,10 @@
 mod document;
 mod documents;
 mod history;
+mod keys;
 pub(crate) mod login;
 mod overview;
+mod projects;
 mod search;
 
 use askama::Template;
@@ -166,6 +168,14 @@ pub(crate) fn page(
         Route::Diff(id) => history::diff(store, request, session, id),
         Route::Download(id) => document::download(store, request, id),
         Route::Search => search::page(store, request, session),
+        Route::ProjectsList => projects::list(store, request, session),
+        Route::ProjectsAdd => projects::add(store, request, session),
+        Route::KeysList => keys::list(store, request, session),
+        Route::KeysCreate => keys::create(store, request, session),
+        Route::KeysGrant(name) => keys::grant(store, request, session, name),
+        Route::KeysUngrant(name) => keys::ungrant(store, request, session, name),
+        Route::KeysRotate(name) => keys::rotate(store, session, name),
+        Route::KeysRevoke(name) => keys::revoke(store, session, name),
         _ => Err(WebError::new(
             StatusCode::NOT_FOUND,
             "not_found",

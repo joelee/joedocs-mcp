@@ -236,6 +236,21 @@ dialog {
   padding: var(--space-6); max-width: min(32rem, calc(100vw - 2rem));
 }
 dialog::backdrop { background: rgb(0 0 0 / 0.45); }
+dialog h2 { margin-top: 0; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-2) var(--space-3); display: grid; gap: var(--space-2); }
+legend { font-weight: 600; padding: 0 var(--space-1); }
+.grant-choice { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); }
+.page-head-actions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: var(--space-3); }
+form.inline { display: inline; }
+button.link { background: none; border: none; padding: 0 var(--space-1); color: var(--accent); font-weight: 400; text-decoration: underline; font-size: var(--text-sm); }
+.grants { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.key-actions summary { cursor: pointer; color: var(--accent); }
+.key-actions .filters { margin: var(--space-2) 0; }
+.key-danger { display: flex; gap: var(--space-2); margin: 0; }
+.token-reveal { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: var(--radius); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4); }
+.token-reveal h2 { margin-top: 0; }
+pre.token { background: var(--surface); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* --- Login and error pages ------------------------------------------- */
 

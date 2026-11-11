@@ -26,6 +26,14 @@
 //! | `GET /admin/documents/{id}/diff` | `admin:documents.diff` |
 //! | `GET /admin/documents/{id}/download` | `admin:documents.get` |
 //! | `GET /admin/search` | `admin:documents.search` |
+//! | `GET /admin/projects` | `admin:projects.list` |
+//! | `POST /admin/projects` | `admin:projects.add` |
+//! | `GET /admin/keys` | `admin:keys.list` |
+//! | `POST /admin/keys` | `admin:keys.create` |
+//! | `POST /admin/keys/{name}/grant` | `admin:keys.grant` |
+//! | `POST /admin/keys/{name}/ungrant` | `admin:keys.ungrant` |
+//! | `POST /admin/keys/{name}/rotate` | `admin:keys.rotate` |
+//! | `POST /admin/keys/{name}/revoke` | `admin:keys.revoke` |
 //! | any other path under `/admin/` | `admin:web.unknown` |
 //!
 //! Only `/admin/` is a stable entry point; other page paths, the HTML and
@@ -134,6 +142,14 @@ pub(crate) enum Route {
     Diff(String),
     Download(String),
     Search,
+    ProjectsList,
+    ProjectsAdd,
+    KeysList,
+    KeysCreate,
+    KeysGrant(String),
+    KeysUngrant(String),
+    KeysRotate(String),
+    KeysRevoke(String),
     Unknown,
 }
 
@@ -169,6 +185,20 @@ impl Route {
                 Self::Download(percent_decode(id))
             }
             ("/admin/search", _) if get => Self::Search,
+            ("/admin/projects", _) if get => Self::ProjectsList,
+            ("/admin/projects", _) if post => Self::ProjectsAdd,
+            ("/admin/keys", _) if get => Self::KeysList,
+            ("/admin/keys", _) if post => Self::KeysCreate,
+            (_, ["keys", name, action]) if post && !name.is_empty() => {
+                let name = percent_decode(name);
+                match *action {
+                    "grant" => Self::KeysGrant(name),
+                    "ungrant" => Self::KeysUngrant(name),
+                    "rotate" => Self::KeysRotate(name),
+                    "revoke" => Self::KeysRevoke(name),
+                    _ => Self::Unknown,
+                }
+            }
             _ => Self::Unknown,
         }
     }
@@ -186,6 +216,14 @@ impl Route {
             Self::History(_) => "admin:documents.history",
             Self::Diff(_) => "admin:documents.diff",
             Self::Search => "admin:documents.search",
+            Self::ProjectsList => "admin:projects.list",
+            Self::ProjectsAdd => "admin:projects.add",
+            Self::KeysList => "admin:keys.list",
+            Self::KeysCreate => "admin:keys.create",
+            Self::KeysGrant(_) => "admin:keys.grant",
+            Self::KeysUngrant(_) => "admin:keys.ungrant",
+            Self::KeysRotate(_) => "admin:keys.rotate",
+            Self::KeysRevoke(_) => "admin:keys.revoke",
             Self::Unknown => "admin:web.unknown",
         }
     }
@@ -194,15 +232,9 @@ impl Route {
         match self {
             Self::LoginPage => Access::Public,
             Self::Login => Access::Login,
-            Self::Logout
-            | Self::Home
-            | Self::DocumentsList
-            | Self::Document(_)
-            | Self::History(_)
-            | Self::Diff(_)
-            | Self::Download(_)
-            | Self::Search
-            | Self::Unknown => Access::Session,
+            // Everything else needs a session, so a new route is closed
+            // until it is made public on purpose.
+            _ => Access::Session,
         }
     }
 }
