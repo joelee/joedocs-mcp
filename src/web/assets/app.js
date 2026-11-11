@@ -80,6 +80,65 @@
     }
   });
 
+  // Mermaid diagrams: the server sends each as its source in a
+  // `.diagram.mermaid` block; Pele draws it beside the source, with links
+  // and images off. If it cannot draw, the source stays shown with the
+  // message (as text: it may quote the diagram).
+  const drawDiagrams = (root) => {
+    if (typeof pele === "undefined") {
+      return;
+    }
+    for (const block of root.querySelectorAll(".diagram.mermaid:not([data-drawn])")) {
+      block.dataset.drawn = "true";
+      const source = block.querySelector(".diagram-source");
+      const text = source ? source.textContent : "";
+      const canvas = document.createElement("div");
+      canvas.className = "diagram-canvas";
+      block.prepend(canvas);
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "secondary diagram-toggle";
+      toggle.textContent = "Show source";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.addEventListener("click", () => {
+        const shown = block.classList.toggle("show-source");
+        toggle.textContent = shown ? "Hide source" : "Show source";
+        toggle.setAttribute("aria-expanded", String(shown));
+      });
+      // Pele also writes its own error line into the canvas; the failed
+      // block hides the canvas so the message is shown once.
+      const failed = (error) => {
+        block.classList.remove("drawn");
+        block.classList.add("diagram-failed");
+        toggle.remove();
+        let note = block.querySelector(".diagram-error");
+        if (!note) {
+          note = document.createElement("p");
+          note.className = "diagram-error";
+          block.append(note);
+        }
+        note.textContent = `This diagram could not be drawn: ${error && error.message ? error.message : error}`;
+      };
+      try {
+        const mounted = pele.mount(canvas, text, {
+          links: false,
+          images: false,
+          onError: failed,
+        });
+        if (mounted && mounted.error) {
+          failed(mounted.error);
+        } else {
+          block.classList.add("drawn");
+          block.append(toggle);
+        }
+      } catch (error) {
+        failed(error);
+      }
+    }
+  };
+
+  drawDiagrams(document);
+
   // After htmx swaps a region in, move focus there so keyboard and
   // screen-reader users land on the new content, and announce it.
   document.addEventListener("htmx:after:swap", (event) => {
@@ -91,6 +150,7 @@
       region.setAttribute("tabindex", "-1");
     }
     region.focus({ preventScroll: false });
+    drawDiagrams(region);
     const label = region.dataset.announce;
     if (label) {
       announce(label);

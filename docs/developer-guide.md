@@ -87,6 +87,7 @@ Third-party browser files sit in `src/web/assets/vendor/`, unmodified, each with
 | File | Version | Source | SHA-256 | Licence |
 | --- | --- | --- | --- | --- |
 | `htmx.min.js` | htmx 4.0.1 | `dist/htmx.min.js` from <https://registry.npmjs.org/htmx.org/-/htmx.org-4.0.1.tgz> (integrity `sha512-oF7JgXhDW9UXCy/k1ZYFUQgzu/rm19ORWPSPNL91vPluB2PB9+MV55tyQdH/w7o2EAbTYUG5SDW1R60mdkdqGg==`) | `a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130` | 0BSD, `htmx.LICENSE` |
+| `pele.global.js` | Pele 1.13.0 (Mermaid diagrams) | `dist/pele.global.js` from <https://registry.npmjs.org/pele/-/pele-1.13.0.tgz> (integrity `sha512-Ie8UKY9x00MsuR3jO6AzUwzK2Z6MIV3Tf4EDdITiuk8Uaz8K7g0R082WqsqNaSU8DdgkrRvZThzhit83mi/uiw==`) | `0b0a46c57a5a6971670c09f5ec4066705bd78505f90fd11adf6260325efa0910` | MIT, with the Lucide ISC notice, `pele.LICENSE` |
 
 ## Running as a service
 

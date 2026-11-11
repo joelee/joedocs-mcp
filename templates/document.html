@@ -1,0 +1,89 @@
+{% extends "layout.html" %}
+{% block scripts %}{% if needs_pele %}<script src="{{ assets.pele|safe }}" defer></script>{% endif %}{% endblock %}
+{% block content %}
+<div class="page-head doc-head">
+  <p class="crumbs"><a href="/admin/documents?project={{ fetched.document.project }}">{{ fetched.document.project }}</a> / <code>{{ fetched.document.id }}</code>{% if let Some(file) = file %} / {{ file }}{% endif %}</p>
+  <h1>{{ fetched.document.title }}</h1>
+  <p class="doc-meta">
+    <span class="badge badge-status-{{ fetched.document.status }}">{{ fetched.document.status }}</span>
+    <span>{{ fetched.document.doc_type }}</span>
+    <span>revision {{ fetched.revision.revision }}{% if fetched.revision.revision != fetched.document.revision %} of {{ fetched.document.revision }}{% endif %}</span>
+    <span class="hint">updated {{ fetched.revision.at }} by {{ fetched.revision.author }} ({{ fetched.revision.client }})</span>
+  </p>
+  {% if fetched.revision.revision != fetched.document.revision %}
+  <p class="notice">You are reading revision {{ fetched.revision.revision }}. <a href="{{ latest_href }}">Read the latest</a>.</p>
+  {% endif %}
+</div>
+
+<nav class="tabs" aria-label="View">
+  <a href="{{ rendered_href }}"{% if !source %} aria-current="page"{% endif %}>Rendered</a>
+  <a href="{{ source_href }}"{% if source %} aria-current="page"{% endif %}>Source</a>
+</nav>
+
+<div class="doc-layout">
+  <article class="doc-body" aria-label="Content">
+    {% if source %}
+    <pre class="source"><code>{{ markdown }}</code></pre>
+    {% else %}
+    <div class="markdown">{{ rendered|safe }}</div>
+    {% endif %}
+  </article>
+
+  <aside class="doc-side">
+    <section class="properties" aria-labelledby="props-heading">
+      <h2 id="props-heading">Properties</h2>
+      <dl class="facts">
+        {% if file.is_none() %}
+        <dt>ID</dt><dd><code>{{ fetched.document.id }}</code></dd>
+        <dt>Type</dt><dd>{{ fetched.document.doc_type }}</dd>
+        <dt>Status</dt><dd><span class="badge badge-status-{{ fetched.document.status }}">{{ fetched.document.status }}</span></dd>
+        <dt>Created</dt><dd>{{ fetched.document.created }} <span class="hint">by {{ fetched.document.created_by }}</span></dd>
+        <dt>Updated</dt><dd>{{ fetched.document.updated }} <span class="hint">by {{ fetched.document.updated_by }} ({{ fetched.document.client }})</span></dd>
+        {% endif %}
+        {% if !tags.is_empty() %}
+        <dt>Tags</dt><dd>{% for tag in tags %}<span class="chip">{{ tag }}</span>{% endfor %}</dd>
+        {% endif %}
+        {% if !aliases.is_empty() %}
+        <dt>Aliases</dt><dd>{% for alias in aliases %}<span class="chip">{{ alias }}</span>{% endfor %}</dd>
+        {% endif %}
+        {% for property in properties %}
+        <dt>{{ property.key }}</dt>
+        <dd>{% for value in property.values %}{% match value %}{% when PropValue::Document(id) %}<a href="/admin/documents/{{ id }}">{{ id }}</a>{% when PropValue::Url(url) %}<a href="{{ url }}" rel="noopener noreferrer">{{ url }}</a>{% when PropValue::Text(text) %}<span class="value">{{ text }}</span>{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %}</dd>
+        {% endfor %}
+      </dl>
+    </section>
+
+    {% if !files.is_empty() %}
+    <section aria-labelledby="files-heading">
+      <h2 id="files-heading">Files</h2>
+      <ul class="side-list">
+        {% for link in files %}
+        <li><a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if !headings.is_empty() %}
+    <section aria-labelledby="toc-heading">
+      <h2 id="toc-heading">On this page</h2>
+      <ul class="side-list toc">
+        {% for heading in headings %}
+        <li class="toc-{{ heading.level }}"><a href="#{{ heading.id }}">{{ heading.text }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <section aria-labelledby="revisions-heading">
+      <h2 id="revisions-heading">Revisions</h2>
+      <ul class="side-list revisions">
+        {% for link in revisions %}
+        <li><a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a></li>
+        {% endfor %}
+      </ul>
+      {% if older %}<p class="hint">Older revisions are in the History.</p>{% endif %}
+    </section>
+  </aside>
+</div>
+{% endblock %}

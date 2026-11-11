@@ -20,22 +20,16 @@
 //! | `POST /admin/login` | `admin:session.create` |
 //! | `POST /admin/logout` | `admin:session.delete` |
 //! | `GET /admin/` | `admin:status` |
+//! | `GET /admin/documents` | `admin:documents.list` |
+//! | `GET /admin/documents/{id}` | `admin:documents.get` |
 //! | any other path under `/admin/` | `admin:web.unknown` |
 //!
 //! Only `/admin/` is a stable entry point; other page paths, the HTML and
 //! the cookie may change in any release. Scripts use `/admin/v1/`.
 
 mod assets;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the document view (JD-32 STEP-06) uses it")
-)]
 pub(crate) mod markdown;
 mod pages;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the document view (JD-32 STEP-06) uses it")
-)]
 mod plantuml;
 mod session;
 
@@ -65,6 +59,10 @@ pub struct WebOptions {
     /// `admin.web_plantuml_url`, or empty.
     pub plantuml_url: String,
 }
+
+/// The extra directive a page that loads Pele needs: Pele sets `style`
+/// attributes on the SVG it draws (no `<style>` elements, no scripts).
+pub(crate) const PELE_STYLE_ATTRIBUTES: &str = "; style-src-attr 'unsafe-inline'";
 
 /// State shared by every page request.
 pub(crate) struct WebState {
@@ -126,6 +124,8 @@ pub(crate) enum Route {
     Login,
     Logout,
     Home,
+    DocumentsList,
+    Document(String),
     Unknown,
 }
 
@@ -143,11 +143,14 @@ impl Route {
     fn of(method: &Method, path: &str) -> Self {
         let get = *method == Method::GET || *method == Method::HEAD;
         let post = *method == Method::POST;
-        match path {
-            "/admin/login" if get => Self::LoginPage,
-            "/admin/login" if post => Self::Login,
-            "/admin/logout" if post => Self::Logout,
-            "/admin/" if get => Self::Home,
+        let parts: Vec<&str> = path.trim_start_matches("/admin/").split('/').collect();
+        match (path, parts.as_slice()) {
+            ("/admin/login", _) if get => Self::LoginPage,
+            ("/admin/login", _) if post => Self::Login,
+            ("/admin/logout", _) if post => Self::Logout,
+            ("/admin/", _) if get => Self::Home,
+            (_, ["documents"]) if get => Self::DocumentsList,
+            (_, ["documents", id]) if get && !id.is_empty() => Self::Document(percent_decode(id)),
             _ => Self::Unknown,
         }
     }
@@ -160,6 +163,8 @@ impl Route {
             Self::Login => "admin:session.create",
             Self::Logout => "admin:session.delete",
             Self::Home => "admin:status",
+            Self::DocumentsList => "admin:documents.list",
+            Self::Document(_) => "admin:documents.get",
             Self::Unknown => "admin:web.unknown",
         }
     }
@@ -168,7 +173,9 @@ impl Route {
         match self {
             Self::LoginPage => Access::Public,
             Self::Login => Access::Login,
-            Self::Logout | Self::Home | Self::Unknown => Access::Session,
+            Self::Logout | Self::Home | Self::DocumentsList | Self::Document(_) | Self::Unknown => {
+                Access::Session
+            }
         }
     }
 }
@@ -227,6 +234,14 @@ impl WebRequest {
             _ => self.path.clone(),
         }
     }
+}
+
+/// A path segment with `%XX` escapes decoded.
+fn percent_decode(segment: &str) -> String {
+    form_urlencoded::parse(format!("x={}", segment.replace('+', "%2B")).as_bytes())
+        .next()
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default()
 }
 
 fn first<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -296,6 +311,7 @@ impl WebError {
             assets: assets::urls(),
             status: self.status.as_u16(),
             message: &self.message,
+            link: None,
         };
         render(self.status, &page)
     }
@@ -502,17 +518,25 @@ fn open_session(store: &Store, request: &WebRequest) -> Result<Session, WebError
     }
 }
 
-/// Adds the headers every reply carries.
+/// Adds the headers every reply carries. A page that set its own policy
+/// (one that loads Pele) keeps it.
+///
+/// The referrer policy is `same-origin`, not `no-referrer`: other sites
+/// still get no referrer, but under `no-referrer` browsers send
+/// `Origin: null` on the interface's own form posts, which the same-origin
+/// check must refuse.
 fn secured(mut response: Response, csp: &HeaderValue) -> Response {
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY, csp.clone());
+    if !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
+        headers.insert(header::CONTENT_SECURITY_POLICY, csp.clone());
+    }
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
     headers.insert(
         header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
+        HeaderValue::from_static("same-origin"),
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response

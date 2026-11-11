@@ -3,6 +3,9 @@
 <main class="error-page" id="main">
   <h1>{{ status }}</h1>
   <p class="notice error" role="alert">{{ message }}</p>
+  {% if let Some((href, label)) = link %}
+  <p><a href="{{ href }}">{{ label }}</a></p>
+  {% endif %}
   <p><a href="/admin/">Back to JoeDocs</a></p>
 </main>
 {% endblock %}

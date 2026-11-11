@@ -32,6 +32,11 @@ const FILES: &[Asset] = &[
         content_type: "text/javascript; charset=utf-8",
         bytes: include_bytes!("assets/vendor/htmx.min.js"),
     },
+    Asset {
+        name: "pele.global.js",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: include_bytes!("assets/vendor/pele.global.js"),
+    },
 ];
 
 /// Where each file is served.
@@ -65,6 +70,8 @@ pub struct Urls {
     pub js: &'static str,
     /// `htmx.min.js`.
     pub htmx: &'static str,
+    /// `pele.global.js`, loaded only by pages with a Mermaid diagram.
+    pub pele: &'static str,
 }
 
 /// The URLs of the files every page links.
@@ -74,6 +81,7 @@ pub fn urls() -> Urls {
         css: url("app.css"),
         js: url("app.js"),
         htmx: url("htmx.min.js"),
+        pele: url("pele.global.js"),
     }
 }
 

@@ -219,7 +219,8 @@ button, .button {
 button.secondary, .button.secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
 button.danger { background: var(--bad); border-color: var(--bad); color: var(--surface); }
 button:disabled, button[aria-busy="true"] { opacity: 0.6; cursor: progress; }
-.icon-button { background: var(--surface); color: var(--text); border-color: var(--border); padding: var(--space-1) var(--space-2); }
+.icon-button { background: var(--surface); color: var(--text); border-color: var(--border); padding: var(--space-2); display: inline-flex; align-items: center; justify-content: center; }
+.icon-button .icon { width: 1.25rem; height: 1.5rem; }
 
 .stack { display: grid; gap: var(--space-2); }
 .filters { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end; margin-bottom: var(--space-4); }
@@ -246,4 +247,99 @@ dialog::backdrop { background: rgb(0 0 0 / 0.45); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+/* --- Document library and view --------------------------------------- */
+
+.pager { display: flex; gap: var(--space-4); align-items: center; margin-top: var(--space-3); }
+.crumbs { color: var(--muted); font-size: var(--text-sm); margin-bottom: var(--space-1); }
+.doc-meta { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+
+.tabs { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--border); margin-bottom: var(--space-4); }
+.tabs a {
+  padding: var(--space-2) var(--space-4); text-decoration: none; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabs a[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.doc-layout { display: grid; grid-template-columns: minmax(0, 1fr) 18rem; gap: var(--space-6); align-items: start; }
+@media (max-width: 1000px) { .doc-layout { grid-template-columns: minmax(0, 1fr); } }
+.doc-body { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-6); min-width: 0; }
+.doc-side section { margin-bottom: var(--space-6); }
+.doc-side h2 { font-size: 1rem; color: var(--muted); }
+.side-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: var(--text-sm); }
+.side-list a { display: block; padding: var(--space-1) var(--space-2); border-radius: var(--radius); text-decoration: none; }
+.side-list a[aria-current="page"] { background: var(--accent-soft); font-weight: 600; }
+.toc-3 { padding-left: var(--space-3); }
+.toc-4, .toc-5, .toc-6 { padding-left: var(--space-6); }
+.revisions { max-height: 16rem; overflow-y: auto; }
+.properties .facts { grid-template-columns: minmax(5rem, auto) 1fr; }
+.properties dd { overflow-wrap: anywhere; }
+
+pre.source { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+
+/* --- Rendered Markdown ----------------------------------------------- */
+
+.markdown { overflow-wrap: break-word; }
+.markdown > :first-child { margin-top: 0; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin-top: var(--space-6); scroll-margin-top: 4rem; }
+.markdown ul, .markdown ol { padding-left: 1.5rem; }
+.markdown li > input[type="checkbox"] { margin-right: var(--space-2); }
+.markdown blockquote { margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-4); border-left: 3px solid var(--border); color: var(--muted); }
+.markdown .table-wrap { margin-bottom: var(--space-4); }
+.markdown figure { margin: 0 0 var(--space-4); }
+.markdown .code { position: relative; }
+.markdown .code-lang { position: absolute; right: var(--space-2); top: var(--space-1); font-size: 0.75rem; color: var(--muted); font-family: var(--mono); }
+.markdown pre.raw-html { white-space: pre-wrap; }
+.markdown .footnote-definition { font-size: var(--text-sm); color: var(--muted); }
+.wikilink { text-decoration-style: dotted; }
+.wikilink.unresolved { color: var(--muted); text-decoration: underline dotted; cursor: help; }
+.docid { font-family: var(--mono); font-size: 0.9em; }
+.image-link::before { content: "\1F5BC\FE0E  "; }
+
+/* Callouts: a coloured box per type, as in Obsidian. */
+.callout {
+  --callout: var(--accent);
+  margin: 0 0 var(--space-4); border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--callout) 35%, transparent);
+  background: color-mix(in srgb, var(--callout) 8%, var(--surface));
+}
+.callout-title { font-weight: 600; color: var(--callout); padding: var(--space-2) var(--space-3); }
+summary.callout-title { cursor: pointer; }
+.callout-body { padding: 0 var(--space-3) var(--space-1); }
+.callout-body > :last-child { margin-bottom: var(--space-2); }
+.callout-abstract, .callout-info, .callout-todo { --callout: light-dark(#0b6bcb, #6fb8ff); }
+.callout-tip, .callout-success { --callout: var(--ok); }
+.callout-question, .callout-warning { --callout: var(--warn); }
+.callout-failure, .callout-danger, .callout-bug { --callout: var(--bad); }
+.callout-example { --callout: light-dark(#7a3fc0, #c19bff); }
+.callout-quote { --callout: var(--muted); }
+
+/* Diagrams: Mermaid drawn by Pele, PlantUML from the configured server. */
+.diagram { margin: 0 0 var(--space-4); }
+.diagram .diagram-source { margin: 0; }
+.diagram.mermaid.drawn .diagram-source { display: none; }
+.diagram.mermaid.drawn.show-source .diagram-source { display: block; margin-top: var(--space-2); }
+.diagram-canvas { display: block; }
+.diagram-toggle { margin-top: var(--space-2); font-size: var(--text-sm); padding: var(--space-1) var(--space-2); }
+.diagram-error { color: var(--bad); font-size: var(--text-sm); }
+.diagram.diagram-failed .diagram-canvas { display: none; }
+td.nowrap { white-space: nowrap; }
+.diagram.plantuml img { max-width: 100%; height: auto; background: #fff; border-radius: var(--radius); }
+.diagram.plantuml figcaption { font-size: var(--text-sm); color: var(--muted); }
+
+/* Pele's colours follow the design tokens. */
+.diagram-canvas {
+  --pele-bg: var(--surface);
+  --pele-surface: var(--surface);
+  --pele-surface-alt: var(--surface-2);
+  --pele-fg: var(--text);
+  --pele-muted: var(--muted);
+  --pele-border: var(--border);
+  --pele-line: var(--muted);
+  --pele-accent: var(--accent);
+  --pele-error: var(--bad);
+  --pele-font: var(--font);
+  --pele-font-mono: var(--mono);
+  --pele-radius: var(--radius);
 }

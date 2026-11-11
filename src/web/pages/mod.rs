@@ -1,6 +1,8 @@
 //! The pages: one module per workspace, each with its handlers and the
 //! Askama structs of its templates.
 
+mod document;
+mod documents;
 pub(crate) mod login;
 mod overview;
 
@@ -20,6 +22,8 @@ pub(crate) struct ErrorPage<'a> {
     pub(crate) assets: Urls,
     pub(crate) status: u16,
     pub(crate) message: &'a str,
+    /// A link to where the thing can be found instead.
+    pub(crate) link: Option<(&'a str, &'a str)>,
 }
 
 /// A workspace in the navigation.
@@ -128,12 +132,14 @@ pub(crate) fn page(
     store: &mut Store,
     state: &WebState,
     route: &Route,
-    _request: &WebRequest,
+    request: &WebRequest,
     session: &Session,
 ) -> Result<Response, WebError> {
     match route {
         Route::Logout => Ok(login::logout(store, session)),
         Route::Home => overview::page(store, state, session),
+        Route::DocumentsList => documents::list(store, request, session),
+        Route::Document(id) => document::view(store, state, request, session, id),
         _ => Err(WebError::new(
             StatusCode::NOT_FOUND,
             "not_found",

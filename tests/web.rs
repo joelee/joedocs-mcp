@@ -416,7 +416,7 @@ async fn replies_carry_the_security_headers_and_assets_are_cached() -> TestResul
     assert_eq!(page.status, 200);
     assert_eq!(page.header("content-security-policy"), Some(CSP));
     assert_eq!(page.header("x-content-type-options"), Some("nosniff"));
-    assert_eq!(page.header("referrer-policy"), Some("no-referrer"));
+    assert_eq!(page.header("referrer-policy"), Some("same-origin"));
     assert_eq!(page.header("cache-control"), Some("no-store"));
     assert!(
         page.header("content-type")
@@ -719,4 +719,339 @@ fn serve_prints_the_web_interface_url_only_when_it_is_on() {
         assert!(!rest.contains("web interface"), "{rest}");
         assert!(child.wait().unwrap().success());
     }
+}
+
+// --- STEP-06: document library and document view ------------------------------
+
+const PLAN_BODY: &str = "# Rollout\n\n> [!warning] Mind the gap\n> Check [[Second doc]] and [[Missing doc]] first.\n\n| Step | Owner |\n|---|---|\n| One | Ana |\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n```plantuml\n@startuml\nBob -> Alice : hello\n@enduml\n```\n";
+
+/// A vault with a plan (two revisions), a second document, a multi-file
+/// document and an archived one.
+fn fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewDocument, NewFile, Update};
+    let actor = Actor::new("laptop-key", "claude-code");
+    store.add_project("joedocs", "JD", Some("JoeDocs"))?;
+    store.add_project("notes", "NT", None)?;
+    let fields = |value: serde_json::Value| match value {
+        serde_json::Value::Object(map) => map.into_iter().collect(),
+        _ => joedocs::document::front_matter::Fields::new(),
+    };
+    let plan = store.create(
+        &actor,
+        NewDocument {
+            project: "joedocs".into(),
+            doc_type: Some("plans".into()),
+            title: "Rollout plan".into(),
+            content: "First draft.\n".into(),
+            front_matter: fields(serde_json::json!({
+                "tags": ["release", "web"],
+                "related": ["JD-2"],
+                "source": "https://example.net/brief",
+                "steps_count": 3,
+            })),
+            ..NewDocument::default()
+        },
+    )?;
+    store.update(
+        &actor,
+        Update {
+            id: plan.id,
+            content: PLAN_BODY.into(),
+            expected_revision: 1,
+            front_matter: joedocs::document::front_matter::Fields::new(),
+            summary: Some("Second draft".into()),
+        },
+    )?;
+    store.create(
+        &actor,
+        NewDocument {
+            project: "joedocs".into(),
+            doc_type: Some("notes".into()),
+            status: Some("approved".into()),
+            title: "Second doc".into(),
+            content: "No diagrams here.\n".into(),
+            ..NewDocument::default()
+        },
+    )?;
+    let backlog = store.create(
+        &actor,
+        NewDocument {
+            project: "joedocs".into(),
+            doc_type: Some("notes".into()),
+            title: "Backlog".into(),
+            content: "The backlog.\n".into(),
+            multifile: true,
+            ..NewDocument::default()
+        },
+    )?;
+    store.create_file(
+        &actor,
+        &NewFile {
+            document_id: backlog.id,
+            file: "items/one".into(),
+            content: "Item one body.\n".into(),
+            front_matter: fields(serde_json::json!({"state": "planned"})),
+            expected_revision: None,
+            summary: None,
+        },
+    )?;
+    let old = store.create(
+        &actor,
+        NewDocument {
+            project: "joedocs".into(),
+            doc_type: Some("notes".into()),
+            title: "Old note".into(),
+            content: "Gone.\n".into(),
+            ..NewDocument::default()
+        },
+    )?;
+    store.archive(&actor, &old.id, "obsolete")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_library_lists_filters_sorts_and_pages_documents() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let all = server
+        .get("/admin/documents?project=joedocs", Some(&cookie))
+        .await?;
+    assert_eq!(all.status, 200, "{}", all.body);
+    for expected in [
+        "JD-1",
+        "Rollout plan",
+        "JD-2",
+        "Second doc",
+        "JD-3",
+        "Backlog",
+    ] {
+        assert!(all.body.contains(expected), "{expected}");
+    }
+    assert!(
+        !all.body.contains("Old note"),
+        "archived documents are not listed"
+    );
+    assert!(all.body.contains("href=\"/admin/documents/JD-1\""));
+    // The default project is the first, and the picker lists them all.
+    let default = server.get("/admin/documents", Some(&cookie)).await?;
+    assert!(default.body.contains("Rollout plan"), "{}", default.body);
+    assert!(
+        default.body.contains("<option value=\"notes\""),
+        "{}",
+        default.body
+    );
+
+    let approved = server
+        .get(
+            "/admin/documents?project=joedocs&status=approved",
+            Some(&cookie),
+        )
+        .await?;
+    assert!(approved.body.contains("Second doc"));
+    assert!(!approved.body.contains("Rollout plan"));
+    let notes = server
+        .get(
+            "/admin/documents?project=joedocs&type=notes&sort=title",
+            Some(&cookie),
+        )
+        .await?;
+    let backlog = notes.body.find("Backlog").ok_or("no Backlog")?;
+    let second = notes.body.find("Second doc").ok_or("no Second doc")?;
+    assert!(backlog < second, "sorted by title");
+    assert!(!notes.body.contains("Rollout plan"));
+
+    let page = server
+        .get(
+            "/admin/documents?project=joedocs&sort=title&limit=1",
+            Some(&cookie),
+        )
+        .await?;
+    assert!(page.body.contains("Backlog"));
+    assert!(!page.body.contains("Second doc"));
+    assert!(
+        page.body.contains(
+            "href=\"/admin/documents?project=joedocs&#38;sort=title&#38;start=2&#38;limit=1\""
+        ),
+        "the next page keeps the filters: {}",
+        page.body
+    );
+
+    let unknown = server
+        .get("/admin/documents?project=nope", Some(&cookie))
+        .await?;
+    assert_eq!(unknown.status, 404);
+    assert!(unknown.body.contains("nope"), "{}", unknown.body);
+    let bad_sort = server
+        .get(
+            "/admin/documents?project=joedocs&sort=sideways",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(bad_sort.status, 400);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_document_view_renders_files_revisions_and_properties() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let view = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert_eq!(view.status, 200, "{}", view.body);
+    assert!(view.body.contains("callout callout-warning"), "rendered");
+    assert!(
+        view.body
+            .contains("href=\"/admin/documents/JD-2\">Second doc</a>"),
+        "wiki link"
+    );
+    assert!(
+        view.body.contains("wikilink unresolved"),
+        "missing link marked"
+    );
+    assert!(view.body.contains("<div class=\"table-wrap\"><table>"));
+    // Properties: tags as chips, a document ID linked, a URL linked out.
+    assert!(view.body.contains("class=\"properties\""), "{}", view.body);
+    assert!(
+        view.body.contains("<span class=\"chip\">release</span>"),
+        "{}",
+        view.body
+    );
+    assert!(
+        view.body
+            .contains("href=\"/admin/documents/JD-2\">JD-2</a>"),
+        "{}",
+        view.body
+    );
+    assert!(
+        view.body
+            .contains("href=\"https://example.net/brief\" rel=\"noopener noreferrer\""),
+        "{}",
+        view.body
+    );
+    assert!(view.body.contains("steps_count"), "custom keys");
+    assert!(view.body.contains("badge-status-draft"), "status badge");
+    assert!(
+        !view.body.contains("tags:\n"),
+        "front matter is not shown as text"
+    );
+    // Mermaid needs Pele; without a PlantUML server the diagram is source.
+    assert!(view.body.contains("/pele.global.js\""), "{}", view.body);
+    assert!(!view.body.contains("<img"), "{}", view.body);
+    assert!(view.body.contains("PlantUML diagram (source)"));
+    // The contents list and the revision picker.
+    assert!(view.body.contains("href=\"#h-rollout\""), "on this page");
+    assert!(
+        view.body
+            .contains("href=\"/admin/documents/JD-1?version=1\""),
+        "{}",
+        view.body
+    );
+    // Pele sets `style` attributes on its SVG: only a page that loads it
+    // allows them, and nothing else is loosened.
+    let csp = view.header("content-security-policy").ok_or("no policy")?;
+    assert_eq!(csp, format!("{CSP}; style-src-attr 'unsafe-inline'"));
+    let second = server.get("/admin/documents/JD-2", Some(&cookie)).await?;
+    assert!(
+        !second.body.contains("pele.global.js"),
+        "no Mermaid, no Pele"
+    );
+    assert_eq!(second.header("content-security-policy"), Some(CSP));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_document_view_shows_the_source_old_revisions_files_and_refusals() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let source = server
+        .get("/admin/documents/JD-1?view=source", Some(&cookie))
+        .await?;
+    assert!(
+        source.body.contains("tags:"),
+        "the stored file: {}",
+        source.body
+    );
+    assert!(
+        source.body.contains("&#62; [!warning] Mind the gap"),
+        "escaped"
+    );
+    let first = server
+        .get("/admin/documents/JD-1?version=1", Some(&cookie))
+        .await?;
+    assert!(first.body.contains("First draft."));
+    assert!(!first.body.contains("Mind the gap"));
+    assert!(first.body.contains("revision 1"), "{}", first.body);
+
+    let multi = server.get("/admin/documents/JD-3", Some(&cookie)).await?;
+    assert!(
+        multi
+            .body
+            .contains("href=\"/admin/documents/JD-3?file=items%2Fone\""),
+        "{}",
+        multi.body
+    );
+    let file = server
+        .get("/admin/documents/JD-3?file=items/one", Some(&cookie))
+        .await?;
+    assert_eq!(file.status, 200, "{}", file.body);
+    assert!(file.body.contains("Item one body."));
+    assert!(file.body.contains("planned"), "the file's own keys");
+    assert!(!file.body.contains("The backlog."));
+
+    let archived = server.get("/admin/documents/JD-4", Some(&cookie)).await?;
+    assert_eq!(archived.status, 409, "{}", archived.body);
+    assert!(archived.body.contains("archived"), "{}", archived.body);
+    assert!(
+        archived.body.contains("href=\"/admin/archive"),
+        "{}",
+        archived.body
+    );
+    let missing = server.get("/admin/documents/JD-99", Some(&cookie)).await?;
+    assert_eq!(missing.status, 404);
+
+    let tools: Vec<String> = server
+        .audit()?
+        .into_iter()
+        .map(|(tool, _, _)| tool)
+        .collect();
+    assert!(
+        tools.iter().any(|t| t == "admin:documents.get"),
+        "{tools:?}"
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn plantuml_diagrams_come_from_the_configured_server_only() -> TestResult<()> {
+    let server = start_full(
+        |c| c.admin.web_plantuml_url = "https://plantuml.example.net/plantuml".into(),
+        fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let view = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert!(
+        view.body
+            .contains("<img src=\"https://plantuml.example.net/plantuml/svg/"),
+        "{}",
+        view.body
+    );
+    let csp = view.header("content-security-policy").ok_or("no policy")?;
+    assert!(
+        csp.contains("img-src 'self' data: https://plantuml.example.net;"),
+        "{csp}"
+    );
+    let list = server
+        .get("/admin/documents?project=joedocs", Some(&cookie))
+        .await?;
+    let tools: Vec<String> = server
+        .audit()?
+        .into_iter()
+        .map(|(tool, _, _)| tool)
+        .collect();
+    assert!(
+        tools.iter().any(|t| t == "admin:documents.list"),
+        "{tools:?}"
+    );
+    assert_eq!(list.status, 200);
+    server.stop().await
 }
