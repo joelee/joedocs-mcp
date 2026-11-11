@@ -71,6 +71,22 @@ impl Config {
                 "must be from 1 to 168 (a week)",
             ));
         }
+        if self.admin.web_ui && !self.admin.enabled {
+            return Err(Violation::new(
+                "admin.web_ui",
+                "needs admin.enabled = true: the web interface is part of the admin API",
+            ));
+        }
+        if !self.admin.web_plantuml_url.is_empty() && !is_service_url(&self.admin.web_plantuml_url)
+        {
+            return Err(Violation::new(
+                "admin.web_plantuml_url",
+                format!(
+                    "\"{}\" must be an https:// URL like https://www.plantuml.com/plantuml (or http:// to localhost, 127.0.0.1 or [::1]), with no query or fragment",
+                    self.admin.web_plantuml_url
+                ),
+            ));
+        }
         if self.documents.max_files == 0 {
             return Err(Violation::new(
                 "documents.max_files",
@@ -200,6 +216,20 @@ pub(crate) fn is_server_url(url: &str) -> bool {
     !host.is_empty() && (secure || matches!(host, "localhost" | "127.0.0.1" | "::1"))
 }
 
+/// Whether `url` is a usable service base URL: what [`is_server_url`]
+/// accepts, optionally followed by a path, with no query or fragment.
+fn is_service_url(url: &str) -> bool {
+    let Some(scheme_end) = url.find("://") else {
+        return false;
+    };
+    let after = scheme_end + 3;
+    let (base, path) = match url[after..].find('/') {
+        Some(slash) => url.split_at(after + slash),
+        None => (url, ""),
+    };
+    is_server_url(base) && !path.contains(['?', '#', ' ', '@'])
+}
+
 fn is_port(port: &str) -> bool {
     !port.is_empty() && port.len() <= 5 && port.bytes().all(|b| b.is_ascii_digit())
 }
@@ -278,6 +308,49 @@ mod tests {
         }
         let v = violation(|c| c.client.server = "http://example.com".into());
         assert_eq!(v.key, "client.server");
+    }
+
+    #[test]
+    fn the_web_interface_needs_the_admin_api() {
+        let v = violation(|c| c.admin.web_ui = true);
+        assert_eq!(v.key, "admin.web_ui");
+        assert!(v.message.contains("admin.enabled"), "{}", v.message);
+        let mut config = Config::default();
+        config.admin.enabled = true;
+        config.admin.web_ui = true;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn plantuml_urls_are_https_or_loopback_http_with_an_optional_path() {
+        for good in [
+            "",
+            "https://plantuml.example.net",
+            "https://plantuml.example.net/",
+            "https://plantuml.example.net:8443/plantuml",
+            "https://www.plantuml.com/plantuml",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080/plantuml/",
+            "http://[::1]:8080",
+        ] {
+            let mut config = Config::default();
+            config.admin.web_plantuml_url = good.into();
+            assert!(config.validate().is_ok(), "{good}");
+        }
+        for bad in [
+            "http://plantuml.example.net",
+            "https://",
+            "https:///plantuml",
+            "https://user@plantuml.example.net",
+            "https://plantuml.example.net/plantuml?x=1",
+            "https://plantuml.example.net/plantuml#top",
+            "https://plantuml.example.net/a b",
+            "ftp://plantuml.example.net",
+            "plantuml.example.net",
+        ] {
+            let v = violation(|c| c.admin.web_plantuml_url = bad.into());
+            assert_eq!(v.key, "admin.web_plantuml_url", "{bad}");
+        }
     }
 
     #[test]

@@ -50,6 +50,13 @@ max_files = 500
 enabled = false
 # How long a session opened by `joedocs login` lasts, in hours (1 to 168).
 session_hours = 8
+# Serve the admin web interface under /admin/ (sign in with an admin token and
+# a TOTP code). Off by default; needs enabled = true.
+web_ui = false
+# A PlantUML server that draws PlantUML diagrams in the web interface, e.g.
+# "https://www.plantuml.com/plantuml". The admin's browser sends the diagram
+# text to it. Empty shows PlantUML diagrams as source.
+web_plantuml_url = ""
 
 [client]
 # The server whose admin API this machine uses, e.g.
