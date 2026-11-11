@@ -82,16 +82,19 @@ pub(crate) fn add(
             "/admin/projects",
             &[("added", Some(&project.name))],
         ))),
+        // The form again with the store's message, kept as the error so
+        // the request is audited with its code.
         Err(error) => {
             let refused = WebError::from_store(&error);
-            page(
+            let shown = page(
                 store,
                 session,
                 refused.status,
                 None,
-                Some(refused.message),
+                Some(refused.message.clone()),
                 form,
-            )
+            )?;
+            Err(refused.with_page(shown))
         }
     }
 }

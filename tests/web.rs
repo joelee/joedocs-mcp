@@ -3050,3 +3050,205 @@ async fn every_page_passes_the_structural_accessibility_checks() -> TestResult<(
     assert!(failures.is_empty(), "{failures:#?}");
     server.stop().await
 }
+
+// --- JD-34 STEP-01: refusals are audited with their code ----------------------------
+
+/// The one audit row written since `before` rows: `(tool, outcome)`.
+fn only_row_since(server: &Server, before: usize) -> TestResult<(String, String)> {
+    let rows = server.audit()?;
+    let new = rows.get(before..).ok_or("rows went missing")?;
+    assert_eq!(new.len(), 1, "one row per request: {new:?}");
+    let (tool, client, outcome) = new[0].clone();
+    assert_eq!(client, "joedocs-web");
+    Ok((tool, outcome))
+}
+
+/// A refused request: path, form fields, status, message and audit code.
+type Refusal<'a> = (&'a str, Vec<(&'a str, &'a str)>, u16, &'a str, &'a str);
+
+/// Whether `/admin/audit?outcome_not=ok` lists each `tool - outcome` entry.
+async fn refusals_list(server: &Server, cookie: &str, entries: &[&str]) -> TestResult<()> {
+    let refusals = server
+        .get(
+            "/admin/audit?outcome_not=ok&key=laptop&limit=50",
+            Some(cookie),
+        )
+        .await?;
+    for entry in entries {
+        assert!(
+            refusals.body.contains(&format!("data-entry=\"{entry}\"")),
+            "{entry}: {}",
+            refusals.body
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn refused_forms_are_audited_with_their_code_and_keep_their_page() -> TestResult<()> {
+    let server = start_full(|_| {}, audit_fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let posts: [Refusal<'_>; 5] = [
+        (
+            "/admin/projects",
+            vec![("name", "Bad Name"), ("key", "BN")],
+            400,
+            "must be lower-case letters",
+            "invalid_argument",
+        ),
+        (
+            "/admin/projects",
+            vec![("name", "joedocs"), ("key", "ZZ")],
+            409,
+            "project joedocs already exists",
+            "already_exists",
+        ),
+        (
+            "/admin/keys",
+            vec![("name", "Bad Name")],
+            400,
+            "must be lower-case letters",
+            "invalid_argument",
+        ),
+        (
+            "/admin/keys/ci/ungrant",
+            vec![("project", "joedocs")],
+            400,
+            "API key ci has no grant on joedocs",
+            "invalid_argument",
+        ),
+        (
+            "/admin/keys/nope/rotate",
+            vec![],
+            404,
+            "API key nope does not exist",
+            "not_found",
+        ),
+    ];
+    for (path, fields, status, message, code) in posts {
+        let before = server.audit()?.len();
+        let reply = server
+            .post_form(path, &cookie, Some(&csrf), &fields)
+            .await?;
+        assert_eq!(reply.status, status, "{path} {fields:?}: {}", reply.body);
+        assert!(reply.body.contains(message), "{path}: {}", reply.body);
+        assert!(
+            reply.body.contains("<form"),
+            "the page stays usable: {path}"
+        );
+        assert_eq!(
+            only_row_since(&server, before)?.1,
+            code,
+            "{path} {fields:?}"
+        );
+    }
+    refusals_list(
+        &server,
+        &cookie,
+        &[
+            "admin:projects.add - already_exists",
+            "admin:keys.create - invalid_argument",
+            "admin:keys.ungrant - invalid_argument",
+            "admin:keys.rotate - not_found",
+        ],
+    )
+    .await?;
+    // Successes and CSRF refusals keep their outcomes.
+    let before = server.audit()?.len();
+    let added = server
+        .post_form(
+            "/admin/projects",
+            &cookie,
+            Some(&csrf),
+            &[("name", "alpha"), ("key", "AL")],
+        )
+        .await?;
+    assert_eq!(added.status, 303);
+    assert_eq!(only_row_since(&server, before)?.1, "ok");
+    let before = server.audit()?.len();
+    let forged = server
+        .post_form(
+            "/admin/projects",
+            &cookie,
+            None,
+            &[("name", "beta"), ("key", "BE")],
+        )
+        .await?;
+    assert_eq!(forged.status, 403);
+    assert_eq!(only_row_since(&server, before)?.1, "forbidden");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn refused_searches_and_audit_filters_are_audited_with_their_code() -> TestResult<()> {
+    let server = start_full(|_| {}, audit_fixture).await?;
+    let cookie = server.login().await?;
+    let fragment = format!("Cookie: {cookie}\r\nHX-Request: true\r\nHX-Request-Type: partial\r\n");
+    for (path, headers, status, message, code) in [
+        (
+            "/admin/search?q=-gap",
+            None,
+            400,
+            "needs at least one word",
+            "invalid_argument",
+        ),
+        (
+            "/admin/search?q=-gap",
+            Some(fragment.as_str()),
+            400,
+            "needs at least one word",
+            "invalid_argument",
+        ),
+        (
+            "/admin/search?project=nope",
+            None,
+            404,
+            "project nope does not exist",
+            "not_found",
+        ),
+        (
+            "/admin/audit?since=yesterday",
+            None,
+            400,
+            "is not a UTC date",
+            "invalid_argument",
+        ),
+        (
+            "/admin/audit?limit=0",
+            None,
+            400,
+            "must be 1 to",
+            "invalid_argument",
+        ),
+    ] {
+        let before = server.audit()?.len();
+        let reply = match headers {
+            Some(headers) => server.send("GET", path, headers, "").await?,
+            None => server.get(path, Some(&cookie)).await?,
+        };
+        assert_eq!(reply.status, status, "{path}: {}", reply.body);
+        assert!(reply.body.contains(message), "{path}: {}", reply.body);
+        assert_eq!(
+            reply.body.contains("<html"),
+            headers.is_none(),
+            "{path}: page or fragment"
+        );
+        assert_eq!(only_row_since(&server, before)?.1, code, "{path}");
+    }
+    refusals_list(
+        &server,
+        &cookie,
+        &[
+            "admin:documents.search - invalid_argument",
+            "admin:documents.search - not_found",
+            "admin:audit.list - invalid_argument",
+        ],
+    )
+    .await?;
+    let before = server.audit()?.len();
+    let found = server.get("/admin/search?q=gap", Some(&cookie)).await?;
+    assert_eq!(found.status, 200);
+    assert_eq!(only_row_since(&server, before)?.1, "ok");
+    server.stop().await
+}

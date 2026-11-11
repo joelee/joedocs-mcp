@@ -199,7 +199,7 @@ pub(crate) fn page(
         Route::KeysUngrant(name) => keys::ungrant(store, request, session, name),
         Route::KeysRotate(name) => keys::rotate(store, session, name),
         Route::KeysRevoke(name) => keys::revoke(store, session, name),
-        Route::Audit => Ok(audit::page(store, request, session)),
+        Route::Audit => audit::page(store, request, session),
         Route::ArchiveList => archive::list(store, request, session),
         Route::ArchiveRestore(id) => archive::restore(store, session, id),
         Route::DocumentConvert(id) => document::convert(store, session, id),

@@ -62,7 +62,13 @@ impl AuditPage<'_> {
 }
 
 /// `GET /admin/audit`.
-pub(crate) fn page(store: &Store, request: &WebRequest, session: &Session) -> Response {
+/// A refused filter shows the page with the store's message and is the
+/// error, so the request is audited with its code.
+pub(crate) fn page(
+    store: &Store,
+    request: &WebRequest,
+    session: &Session,
+) -> Result<Response, WebError> {
     let values: Vec<(&'static str, &str)> = FILTERS
         .iter()
         .map(|key| (*key, request.query(key).unwrap_or("").trim()))
@@ -105,8 +111,9 @@ pub(crate) fn page(store: &Store, request: &WebRequest, session: &Session) -> Re
     let (start, limit) = match numbers {
         Ok(numbers) => numbers,
         Err(refused) => {
-            page.error = Some(refused.message);
-            return render(refused.status, &page);
+            page.error = Some(refused.message.clone());
+            let shown = render(refused.status, &page);
+            return Err(refused.with_page(shown));
         }
     };
     page.limit = (limit != DEFAULT_AUDIT_LIMIT).then_some(limit);
@@ -130,12 +137,13 @@ pub(crate) fn page(store: &Store, request: &WebRequest, session: &Session) -> Re
             page.previous = (start > 1).then(|| url(start.saturating_sub(limit).max(1), limit));
             page.next = found.next_start.map(|next| url(next, limit));
             page.rows = found.items;
-            render(StatusCode::OK, &page)
+            Ok(render(StatusCode::OK, &page))
         }
         Err(error) => {
             let refused = WebError::from_store(&error);
-            page.error = Some(refused.message);
-            render(refused.status, &page)
+            page.error = Some(refused.message.clone());
+            let shown = render(refused.status, &page);
+            Err(refused.with_page(shown))
         }
     }
 }

@@ -160,15 +160,24 @@ pub(crate) fn page(
 ) -> Result<Response, WebError> {
     let asked = Asked::from(request);
     let limit = number(request, "limit", DEFAULT_SEARCH_LIMIT);
-    let start = number(request, "start", 1);
-    let (status, results) = match (&start, &limit) {
-        (Err(refused), _) | (Ok(_), Err(refused)) => {
-            (refused.status, refusal(refused.message.clone()))
-        }
-        (Ok(start), Ok(limit)) => run(store, &asked, *start, *limit),
+    let found = number(request, "start", 1).and_then(|start| match &limit {
+        Ok(limit) => run(store, &asked, start, *limit),
+        Err(refused) => Err(WebError::new(
+            refused.status,
+            refused.code,
+            refused.message.clone(),
+        )),
+    });
+    let (status, results, refused) = match found {
+        Ok(results) => (StatusCode::OK, results, None),
+        Err(refused) => (
+            refused.status,
+            refusal(refused.message.clone()),
+            Some(refused),
+        ),
     };
     if request.wants_fragment() {
-        return Ok(render(status, &results));
+        return answer(refused, render(status, &results));
     }
     let settings = store.settings();
     let projects = store.projects().map_err(|e| WebError::from_store(&e))?;
@@ -199,44 +208,40 @@ pub(crate) fn page(
         limit: limit.ok().filter(|l| *l != DEFAULT_SEARCH_LIMIT),
         results,
     };
-    Ok(render(status, &page))
+    answer(refused, render(status, &page))
+}
+
+/// `response`, or for a refused search the refusal with `response` as its
+/// page, so the request is audited with the refusal's code.
+fn answer(refused: Option<WebError>, response: Response) -> Result<Response, WebError> {
+    match refused {
+        Some(refused) => Err(refused.with_page(response)),
+        None => Ok(response),
+    }
 }
 
 /// Runs the search, or says why it cannot.
-fn run(store: &Store, asked: &Asked<'_>, start: u64, limit: u64) -> (StatusCode, Results) {
+fn run(store: &Store, asked: &Asked<'_>, start: u64, limit: u64) -> Result<Results, WebError> {
     if asked.is_empty() {
-        return (StatusCode::OK, Results::idle());
+        return Ok(Results::idle());
     }
     let found = SearchSpec::from_args(&asked.args(start, limit))
         .and_then(|spec| browse::search_results(store, &spec));
     let results = match found {
         Ok(results) => results,
-        Err(crate::Error::Store(error)) => {
-            let refused = WebError::from_store(&error);
-            return (refused.status, refusal(refused.message));
-        }
-        Err(error) => {
-            tracing::error!(%error, "web search failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                refusal("internal error".to_owned()),
-            );
-        }
+        Err(error) => return Err(WebError::from_crate(&error)),
     };
     let shown = results.items.len() as u64;
-    (
-        StatusCode::OK,
-        Results {
-            searched: true,
-            error: None,
-            total: results.total,
-            start,
-            shown_to: start + shown - u64::from(shown > 0),
-            previous: (start > 1).then(|| asked.url(start.saturating_sub(limit).max(1), limit)),
-            next: results.next_start.map(|next| asked.url(next, limit)),
-            hits: results.items.into_iter().map(hit).collect(),
-        },
-    )
+    Ok(Results {
+        searched: true,
+        error: None,
+        total: results.total,
+        start,
+        shown_to: start + shown - u64::from(shown > 0),
+        previous: (start > 1).then(|| asked.url(start.saturating_sub(limit).max(1), limit)),
+        next: results.next_start.map(|next| asked.url(next, limit)),
+        hits: results.items.into_iter().map(hit).collect(),
+    })
 }
 
 impl Results {

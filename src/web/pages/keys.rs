@@ -130,7 +130,7 @@ pub(crate) fn create(
     };
     let grants = match parse_grants(&chosen) {
         Ok(grants) => grants,
-        Err(message) => return refuse(store, session, StatusCode::BAD_REQUEST, message, form),
+        Err(message) => return refuse(store, session, invalid(message), form),
     };
     match store.create_key(&name, &grants, &OsRandom) {
         Ok(created) => {
@@ -158,13 +158,7 @@ pub(crate) fn grant(
     let grant = match Grant::from_str(&format!("{project}:{permission}")) {
         Ok(grant) => grant,
         Err(message) => {
-            return refuse(
-                store,
-                session,
-                StatusCode::BAD_REQUEST,
-                message,
-                Form::default(),
-            );
+            return refuse(store, session, invalid(message), Form::default());
         }
     };
     match store.grant(name, &[grant]) {
@@ -255,18 +249,31 @@ fn refused(
     error: &store::Error,
     form: Form,
 ) -> Result<Response, WebError> {
-    let refusal = WebError::from_store(error);
-    refuse(store, session, refusal.status, refusal.message, form)
+    refuse(store, session, WebError::from_store(error), form)
 }
 
+/// A request the page refuses itself, as `invalid_argument`.
+fn invalid(message: String) -> WebError {
+    WebError::new(StatusCode::BAD_REQUEST, "invalid_argument", message)
+}
+
+/// The keys page again with `refusal`'s message, kept as the error so the
+/// request is audited with its code.
 fn refuse(
     store: &Store,
     session: &Session,
-    status: StatusCode,
-    message: String,
+    refusal: WebError,
     form: Form,
 ) -> Result<Response, WebError> {
-    page(store, session, status, None, Some(message), form)
+    let shown = page(
+        store,
+        session,
+        refusal.status,
+        None,
+        Some(refusal.message.clone()),
+        form,
+    )?;
+    Err(refusal.with_page(shown))
 }
 
 fn page(
