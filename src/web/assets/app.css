@@ -296,6 +296,16 @@ code.nowrap, .nowrap { white-space: nowrap; }
 
 pre.source { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 
+/* Diff */
+pre.diff { margin: 0; padding: var(--space-2) 0; overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: var(--text-sm); }
+pre.diff code { display: block; min-width: max-content; }
+.diff-line { display: block; padding: 0 var(--space-3); white-space: pre; }
+.diff-add { background: var(--added); }
+.diff-del { background: var(--removed); }
+.diff-hunk { color: var(--accent); background: var(--accent-soft); }
+.diff-file { color: var(--muted); font-weight: 600; }
+.diff-note { color: var(--muted); font-style: italic; }
+
 /* --- Rendered Markdown ----------------------------------------------- */
 
 .markdown { overflow-wrap: break-word; }

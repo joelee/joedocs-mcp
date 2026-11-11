@@ -3,6 +3,7 @@
 
 mod document;
 mod documents;
+mod history;
 pub(crate) mod login;
 mod overview;
 mod search;
@@ -116,6 +117,22 @@ impl<'a> Chrome<'a> {
     }
 }
 
+/// `path` with the query `pairs` that have a non-empty value, in order.
+pub(crate) fn link(path: &str, pairs: &[(&str, Option<&str>)]) -> String {
+    let mut query = form_urlencoded::Serializer::new(String::new());
+    for (key, value) in pairs {
+        if let Some(value) = value.filter(|v| !v.is_empty()) {
+            query.append_pair(key, value);
+        }
+    }
+    let query = query.finish();
+    if query.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{query}")
+    }
+}
+
 /// A route anyone may use.
 pub(crate) fn public(
     state: &WebState,
@@ -145,6 +162,9 @@ pub(crate) fn page(
         Route::Home => overview::page(store, state, session),
         Route::DocumentsList => documents::list(store, request, session),
         Route::Document(id) => document::view(store, state, request, session, id),
+        Route::History(id) => history::history(store, request, session, id),
+        Route::Diff(id) => history::diff(store, request, session, id),
+        Route::Download(id) => document::download(store, request, id),
         Route::Search => search::page(store, request, session),
         _ => Err(WebError::new(
             StatusCode::NOT_FOUND,

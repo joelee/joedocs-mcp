@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::super::assets::{self, Urls};
 use super::super::markdown::{self, Heading, Resolver, Target};
 use super::super::{Session, WebError, WebRequest, WebState, render};
-use super::{Chrome, Section};
+use super::{Chrome, Section, link};
 use crate::document::front_matter::{self, SERVER_OWNED};
 use crate::document::is_project_key;
 use crate::store::{self, Fetched, FileInfo, Store};
@@ -87,25 +87,36 @@ struct DocumentPage<'a> {
     rendered_href: String,
     source_href: String,
     latest_href: String,
+    history_href: String,
+    download_href: String,
+    /// All files as a `.tgz`, for a multi-file document.
+    archive_href: Option<String>,
 }
 
 /// The URL of this page with `file`, `version` and `view`.
 pub(crate) fn href(id: &str, file: Option<&str>, version: Option<u64>, source: bool) -> String {
-    let mut query = form_urlencoded::Serializer::new(String::new());
-    if let Some(file) = file {
-        query.append_pair("file", file);
-    }
-    if let Some(version) = version {
-        query.append_pair("version", &version.to_string());
-    }
-    if source {
-        query.append_pair("view", "source");
-    }
-    let query = query.finish();
-    if query.is_empty() {
-        format!("/admin/documents/{id}")
-    } else {
-        format!("/admin/documents/{id}?{query}")
+    let version = version.map(|v| v.to_string());
+    link(
+        &format!("/admin/documents/{id}"),
+        &[
+            ("file", file),
+            ("version", version.as_deref()),
+            ("view", source.then_some("source")),
+        ],
+    )
+}
+
+/// The `version` the query asks for, if any.
+fn version(request: &WebRequest) -> Result<Option<u64>, WebError> {
+    match request.query("version").filter(|v| !v.is_empty()) {
+        None => Ok(None),
+        Some(v) => v.parse::<u64>().map(Some).map_err(|_| {
+            WebError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                format!("\"{v}\" is not a revision number"),
+            )
+        }),
     }
 }
 
@@ -117,23 +128,14 @@ pub(crate) fn view(
     session: &Session,
     id: &str,
 ) -> Result<Response, WebError> {
-    let version = match request.query("version").filter(|v| !v.is_empty()) {
-        None => None,
-        Some(v) => Some(v.parse::<u64>().map_err(|_| {
-            WebError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_argument",
-                format!("\"{v}\" is not a revision number"),
-            )
-        })?),
-    };
+    let version = version(request)?;
     let file = request.query("file").filter(|f| !f.is_empty());
     let source = request.query("view") == Some("source");
     let fetched = match file {
         Some(file) => store.get_file(id, file, version),
         None => store.get(id, version),
     }
-    .map_err(|e| refused(state, session, &e))?;
+    .map_err(|e| refused(&e))?;
     let document = &fetched.document;
     let files = if document.multifile {
         store
@@ -158,6 +160,7 @@ pub(crate) fn view(
     let shown_version = fetched.revision.revision;
     let latest = document.revision;
     let pinned = (shown_version != latest).then_some(shown_version);
+    let pinned_text = pinned.map(|v| v.to_string());
     let page = DocumentPage {
         title: &document.title,
         assets: assets::urls(),
@@ -188,6 +191,23 @@ pub(crate) fn view(
         rendered_href: href(&document.id, file, pinned, false),
         source_href: href(&document.id, file, pinned, true),
         latest_href: href(&document.id, file, None, source),
+        history_href: link(
+            &format!("/admin/documents/{}/history", document.id),
+            &[("file", file)],
+        ),
+        download_href: link(
+            &format!("/admin/documents/{}/download", document.id),
+            &[("file", file), ("version", pinned_text.as_deref())],
+        ),
+        archive_href: document.multifile.then(|| {
+            link(
+                &format!("/admin/documents/{}/download", document.id),
+                &[
+                    ("archive", Some("true")),
+                    ("version", pinned_text.as_deref()),
+                ],
+            )
+        }),
         fetched: &fetched,
     };
     let needs_pele = page.needs_pele;
@@ -209,7 +229,7 @@ pub(crate) fn view(
 
 /// The refusal for a document that cannot be shown; an archived one links
 /// to the Archive.
-fn refused(_state: &WebState, _session: &Session, error: &store::Error) -> WebError {
+pub(crate) fn refused(error: &store::Error) -> WebError {
     let refusal = WebError::from_store(error);
     if matches!(error, store::Error::Archived(_)) {
         let page = super::ErrorPage {
@@ -223,6 +243,89 @@ fn refused(_state: &WebState, _session: &Session, error: &store::Error) -> WebEr
         return refusal.with_page(page);
     }
     refusal
+}
+
+/// `GET /admin/documents/{id}/download`: the file as `joedocs get -f`
+/// writes it, or with `archive=true` every file as `get --archive` does.
+pub(crate) fn download(
+    store: &Store,
+    request: &WebRequest,
+    id: &str,
+) -> Result<Response, WebError> {
+    let version = version(request)?;
+    let file = request.query("file").filter(|f| !f.is_empty());
+    if request.query("archive") == Some("true") {
+        let bytes = crate::admin::folder_archive(store, id, version).map_err(|e| failed(&e))?;
+        return Ok(attachment(
+            bytes,
+            "application/gzip",
+            &download_name(id, None, version, "tgz"),
+        ));
+    }
+    let markdown = match file {
+        Some(file) => crate::admin::fetch_file(store, id, file, version),
+        None => crate::admin::fetch(store, id, version),
+    }
+    .map_err(|e| failed(&e))?;
+    Ok(attachment(
+        markdown.into_bytes(),
+        "text/markdown; charset=utf-8",
+        &download_name(id, file, version, "md"),
+    ))
+}
+
+/// The refusal for an admin operation that failed.
+fn failed(error: &crate::Error) -> WebError {
+    match error {
+        crate::Error::Store(error) => refused(error),
+        crate::Error::Archived(id) => refused(&store::Error::Archived(id.clone())),
+        other => {
+            tracing::error!(error = %other, "web download failed");
+            WebError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "internal error",
+            )
+        }
+    }
+}
+
+/// `bytes` as a download named `name`.
+fn attachment(bytes: Vec<u8>, content_type: &'static str, name: &str) -> Response {
+    use axum::http::{HeaderValue, header};
+    use axum::response::IntoResponse as _;
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
+        headers.insert(header::CONTENT_DISPOSITION, value);
+    }
+    response
+}
+
+/// A download's file name, ASCII letters, digits, `.`, `_` and `-` only:
+/// `JD-3-items-first-r2.md` for file `items/first` of JD-3 at revision 2.
+fn download_name(id: &str, file: Option<&str>, version: Option<u64>, extension: &str) -> String {
+    let safe = |text: &str| -> String {
+        text.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    };
+    let mut name = safe(id);
+    if let Some(file) = file {
+        name.push('-');
+        name.push_str(&safe(file));
+    }
+    match version {
+        Some(version) => format!("{name}-r{version}.{extension}"),
+        None => format!("{name}.{extension}"),
+    }
 }
 
 /// The files of a multi-file document, main file first.
@@ -311,4 +414,23 @@ fn prop_value(value: &Value, resolver: &dyn Resolver) -> PropValue {
         return PropValue::Url(text);
     }
     PropValue::Text(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::download_name;
+
+    #[test]
+    fn download_names_are_plain_ascii() {
+        assert_eq!(download_name("JD-1", None, None, "md"), "JD-1.md");
+        assert_eq!(
+            download_name("JD-3", Some("items/first"), Some(2), "md"),
+            "JD-3-items-first-r2.md"
+        );
+        assert_eq!(
+            download_name("JD-3", Some("caf\u{e9} \"x\";\r\n"), None, "md"),
+            "JD-3-caf---x----.md"
+        );
+        assert_eq!(download_name("JD-3", None, Some(4), "tgz"), "JD-3-r4.tgz");
+    }
 }

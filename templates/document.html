@@ -18,6 +18,7 @@
 <nav class="tabs" aria-label="View">
   <a href="{{ rendered_href }}"{% if !source %} aria-current="page"{% endif %}>Rendered</a>
   <a href="{{ source_href }}"{% if source %} aria-current="page"{% endif %}>Source</a>
+  <a href="{{ history_href }}">History</a>
 </nav>
 
 <div class="doc-layout">
@@ -74,6 +75,14 @@
       </ul>
     </section>
     {% endif %}
+
+    <section aria-labelledby="downloads-heading">
+      <h2 id="downloads-heading">Download</h2>
+      <ul class="side-list">
+        <li><a href="{{ download_href }}" download>This file (.md)</a></li>
+        {% if let Some(href) = archive_href %}<li><a href="{{ href }}" download>All files (.tgz)</a></li>{% endif %}
+      </ul>
+    </section>
 
     <section aria-labelledby="revisions-heading">
       <h2 id="revisions-heading">Revisions</h2>

@@ -1,0 +1,25 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head doc-head">
+  <p class="crumbs"><a href="/admin/documents?project={{ document.project }}">{{ document.project }}</a> / <a href="{{ view_href }}"><code>{{ document.id }}</code></a>{% if let Some(file) = file %} / {{ file }}{% endif %} / <a href="{{ history_href }}">History</a></p>
+  <h1>{{ document.title }}</h1>
+  <p class="doc-meta"><span>Revision {{ from }} to revision {{ to }}</span></p>
+</div>
+
+<form class="filters" method="get" action="/admin/documents/{{ document.id }}/diff">
+  {% if let Some(file) = file %}<input type="hidden" name="file" value="{{ file }}">{% endif %}
+  <div><label for="d-from">From revision</label><input id="d-from" name="from" type="number" min="1" value="{{ from }}" required></div>
+  <div><label for="d-to">To revision</label><input id="d-to" name="to" type="number" min="1" value="{{ to }}"></div>
+  <div><label for="d-context">Context lines</label><input id="d-context" name="context" type="number" min="0" max="100" value="{{ context }}"></div>
+  <div><button type="submit">Compare</button></div>
+</form>
+
+{% if lines.is_empty() %}
+<p class="empty">No changes between revision {{ from }} and revision {{ to }}.</p>
+{% else %}
+{% if !files.is_empty() %}
+<p class="hint">Files changed: {% for name in files %}<code>{{ name }}</code>{% if !loop.last %}, {% endif %}{% endfor %}</p>
+{% endif %}
+<pre class="diff" aria-label="Changes"><code>{% for line in lines %}<span class="diff-line {{ line.class }}">{{ line.text }}</span>{% endfor %}</code></pre>
+{% endif %}
+{% endblock %}

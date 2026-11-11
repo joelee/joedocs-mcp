@@ -1,0 +1,43 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head doc-head">
+  <p class="crumbs"><a href="/admin/documents?project={{ document.project }}">{{ document.project }}</a> / <a href="{{ view_href }}"><code>{{ document.id }}</code></a>{% if let Some(file) = file %} / {{ file }}{% endif %}</p>
+  <h1>{{ document.title }}</h1>
+  <p class="doc-meta"><span>{{ total }} {% if total == 1 %}revision{% else %}revisions{% endif %}{% if file.is_some() %} changed this file{% endif %}</span></p>
+</div>
+
+<nav class="tabs" aria-label="View">
+  <a href="{{ view_href }}">Rendered</a>
+  <a href="{{ source_href }}">Source</a>
+  <a href="#main" aria-current="page">History</a>
+</nav>
+
+{% if rows.is_empty() %}
+<p class="empty">No revisions on this page.</p>
+{% else %}
+<div class="table-wrap">
+  <table class="history">
+    <thead>
+      <tr><th scope="col" class="num">Revision</th><th scope="col">When (UTC)</th><th scope="col">Action</th><th scope="col">By</th><th scope="col">Summary</th><th scope="col">Changes</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr data-revision="{{ row.revision }}">
+        <td class="num"><a href="{{ row.view }}">{{ row.revision }}</a></td>
+        <td class="nowrap"><time datetime="{{ row.at }}">{{ row.at }}</time></td>
+        <td><code>{{ row.action }}</code>{% if let Some(name) = row.file %} <span class="hint">{{ name }}</span>{% endif %}</td>
+        <td>{{ row.author }} <span class="hint">{{ row.client }}</span></td>
+        <td>{{ row.summary }}</td>
+        <td>{% if let Some(diff) = row.diff %}<a href="{{ diff }}">Diff</a>{% else %}<span class="hint">first</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<nav class="pager" aria-label="Pages">
+  <span class="hint">{{ start }} to {{ shown_to }} of {{ total }}</span>
+  {% if let Some(href) = previous %}<a href="{{ href }}">Newer</a>{% endif %}
+  {% if let Some(href) = next %}<a href="{{ href }}">Older</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

@@ -94,6 +94,8 @@ struct Reply {
     status: u16,
     head: String,
     body: String,
+    /// The body as sent, for downloads.
+    bytes: Vec<u8>,
 }
 
 impl Reply {
@@ -167,13 +169,18 @@ impl Server {
         stream.write_all(request.as_bytes()).await?;
         let mut raw = Vec::new();
         stream.read_to_end(&mut raw).await?;
-        let text = String::from_utf8_lossy(&raw).into_owned();
-        let (head, body) = text.split_once("\r\n\r\n").ok_or("no header end")?;
+        let end = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .ok_or("no header end")?;
+        let head = String::from_utf8_lossy(&raw[..end]).into_owned();
+        let bytes = raw[end + 4..].to_vec();
         let status = head.split(' ').nth(1).ok_or("no status")?.parse()?;
         Ok(Reply {
             status,
-            head: head.to_owned(),
-            body: body.to_owned(),
+            head,
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+            bytes,
         })
     }
 
@@ -1287,5 +1294,369 @@ async fn search_shows_the_store_message_pages_and_answers_htmx_with_a_fragment()
         .send("GET", "/admin/search?q=chase", &headers("full"), "")
         .await?;
     assert!(restore.body.contains("<html"), "{}", restore.body);
+    server.stop().await
+}
+
+// --- STEP-08: history, diff and downloads -----------------------------------------
+
+/// The STEP-06 vault, with the backlog's file edited (with text that needs
+/// escaping) and then renamed: JD-3 revisions 1 create, 2 add `items/one`,
+/// 3 edit it, 4 rename it to `items/first`.
+fn history_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::Actor;
+    fixture(store)?;
+    let actor = Actor::new("laptop-key", "claude-code");
+    store.update_file(
+        &actor,
+        "JD-3",
+        "items/one",
+        "Item one body.\nNow with <b>bold</b> & more.\n",
+        &joedocs::document::front_matter::Fields::new(),
+        None,
+        Some("Edit item one"),
+    )?;
+    store.rename_file(&actor, "JD-3", "items/one", "items/first", None)?;
+    Ok(())
+}
+
+/// What the command line gives on the same store, for comparison.
+#[derive(Default, Clone)]
+struct Cli {
+    /// Revision numbers of each history in [`HISTORIES`].
+    histories: Vec<Vec<u64>>,
+    /// `(added, removed)` lines of each diff in [`DIFFS`].
+    diffs: Vec<(Vec<String>, Vec<String>)>,
+    /// `joedocs get -f` of JD-1, of JD-1 at revision 1 and of
+    /// `items/first`; then `get --archive` of JD-3.
+    files: Vec<Vec<u8>>,
+}
+
+const HISTORIES: [(&[&str], &str); 4] = [
+    (&["JD-1"], "/admin/documents/JD-1/history"),
+    (&["JD-3"], "/admin/documents/JD-3/history"),
+    (
+        &["JD-3", "-P", "items/first"],
+        "/admin/documents/JD-3/history?file=items%2Ffirst",
+    ),
+    (
+        &["JD-3", "--start", "2", "-n", "1"],
+        "/admin/documents/JD-3/history?start=2&limit=1",
+    ),
+];
+
+const DIFFS: [(&[&str], &str); 3] = [
+    (
+        &["JD-1", "--from", "1"],
+        "/admin/documents/JD-1/diff?from=1",
+    ),
+    (
+        &["JD-3", "--from", "2", "--to", "4", "-P", "items/first"],
+        "/admin/documents/JD-3/diff?from=2&to=4&file=items%2Ffirst",
+    ),
+    (
+        &["JD-3", "--from", "1", "--to", "3"],
+        "/admin/documents/JD-3/diff?from=1&to=3",
+    ),
+];
+
+fn cli_json(store: &Store, args: &[&str]) -> TestResult<serde_json::Value> {
+    use clap::Parser as _;
+    let all: Vec<&str> = std::iter::once("joedocs")
+        .chain(args.iter().copied())
+        .collect();
+    Ok(match joedocs::Cli::try_parse_from(all)?.command {
+        joedocs::Command::History(args) => joedocs::browse::history(store, &args)?,
+        joedocs::Command::Diff(args) => joedocs::browse::diff(store, &args)?,
+        _ => return Err("not history or diff".into()),
+    })
+}
+
+fn record_cli(store: &mut Store, out: &std::sync::Mutex<Cli>) -> TestResult<()> {
+    history_fixture(store)?;
+    let mut cli = out.lock().map_err(|_| "poisoned")?;
+    for (args, _) in HISTORIES {
+        let args: Vec<&str> = std::iter::once("history")
+            .chain(args.iter().copied())
+            .collect();
+        let reply = cli_json(store, &args)?;
+        let revisions = reply["revisions"].as_array().ok_or("no revisions")?;
+        cli.histories.push(
+            revisions
+                .iter()
+                .map(|r| r["revision"].as_u64().unwrap_or(0))
+                .collect(),
+        );
+    }
+    for (args, _) in DIFFS {
+        let args: Vec<&str> = std::iter::once("diff")
+            .chain(args.iter().copied())
+            .collect();
+        let reply = cli_json(store, &args)?;
+        let diff = reply["diff"].as_str().ok_or("no diff")?;
+        let lines = |sign: char, header: &str| {
+            diff.lines()
+                .filter(|l| l.starts_with(sign) && !l.starts_with(header))
+                .map(|l| l[1..].to_owned())
+                .collect::<Vec<_>>()
+        };
+        cli.diffs.push((lines('+', "+++"), lines('-', "---")));
+    }
+    cli.files
+        .push(joedocs::admin::fetch(store, "JD-1", None)?.into_bytes());
+    cli.files
+        .push(joedocs::admin::fetch(store, "JD-1", Some(1))?.into_bytes());
+    cli.files
+        .push(joedocs::admin::fetch_file(store, "JD-3", "items/first", None)?.into_bytes());
+    cli.files
+        .push(joedocs::admin::folder_archive(store, "JD-3", None)?);
+    Ok(())
+}
+
+async fn start_history() -> TestResult<(Server, Cli)> {
+    let cli = Arc::new(std::sync::Mutex::new(Cli::default()));
+    let record = Arc::clone(&cli);
+    let server = start_full(|_| {}, move |store| record_cli(store, &record)).await?;
+    let cli = cli.lock().map_err(|_| "poisoned")?.clone();
+    Ok((server, cli))
+}
+
+/// The revision numbers of a history page's rows, in order.
+fn rows(body: &str) -> Vec<u64> {
+    body.split("<tr data-revision=\"")
+        .skip(1)
+        .filter_map(|part| part.split('"').next()?.parse().ok())
+        .collect()
+}
+
+/// `text` as Askama escapes it.
+fn escaped(text: &str) -> String {
+    text.replace('&', "&#38;")
+        .replace('<', "&#60;")
+        .replace('>', "&#62;")
+        .replace('"', "&#34;")
+        .replace('\'', "&#39;")
+}
+
+#[tokio::test]
+async fn history_lists_revisions_as_the_command_line_does() -> TestResult<()> {
+    let (server, cli) = start_history().await?;
+    let cookie = server.login().await?;
+    for ((args, path), want) in HISTORIES.iter().zip(&cli.histories) {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}: {}", page.body);
+        assert_eq!(&rows(&page.body), want, "{args:?} / {path}");
+    }
+    assert_eq!(cli.histories[1], [4, 3, 2, 1], "newest first");
+    assert_eq!(cli.histories[2], [4, 3, 2], "the file across its rename");
+    assert_eq!(cli.histories[3], [3]);
+
+    let page = server
+        .get("/admin/documents/JD-3/history", Some(&cookie))
+        .await?;
+    for expected in [
+        "Edit item one",
+        "laptop-key",
+        "claude-code",
+        "<code>rename</code>",
+        // Each row opens that revision and its diff with the one before.
+        "href=\"/admin/documents/JD-3?version=3\"",
+        "href=\"/admin/documents/JD-3/diff?from=2&#38;to=3\"",
+        "href=\"/admin/documents/JD-3\"",
+    ] {
+        assert!(page.body.contains(expected), "{expected}: {}", page.body);
+    }
+    assert!(
+        !page.body.contains("diff?from=0"),
+        "the first revision has nothing before it"
+    );
+    let file = server
+        .get(
+            "/admin/documents/JD-3/history?file=items%2Ffirst",
+            Some(&cookie),
+        )
+        .await?;
+    assert!(
+        file.body
+            .contains("href=\"/admin/documents/JD-3?file=items%2Fone&#38;version=3\""),
+        "a row opens the file by its name at that revision: {}",
+        file.body
+    );
+    assert!(
+        file.body
+            .contains("href=\"/admin/documents/JD-3/diff?from=3&#38;to=4&#38;file=items%2Ffirst\""),
+        "{}",
+        file.body
+    );
+    let first = server
+        .get("/admin/documents/JD-3/history?limit=1", Some(&cookie))
+        .await?;
+    assert_eq!(rows(&first.body), [4]);
+    assert!(
+        first
+            .body
+            .contains("href=\"/admin/documents/JD-3/history?start=2&#38;limit=1\""),
+        "{}",
+        first.body
+    );
+    let missing = server
+        .get("/admin/documents/JD-3/history?file=nope", Some(&cookie))
+        .await?;
+    assert_eq!(missing.status, 404, "{}", missing.body);
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    assert!(
+        tools.iter().any(|t| t == "admin:documents.history"),
+        "{tools:?}"
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn diffs_mark_the_lines_the_command_line_shows() -> TestResult<()> {
+    let (server, cli) = start_history().await?;
+    let cookie = server.login().await?;
+    for ((args, path), (added, removed)) in DIFFS.iter().zip(&cli.diffs) {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}: {}", page.body);
+        assert!(!added.is_empty() || !removed.is_empty(), "{args:?}");
+        for line in added {
+            let html = format!(
+                "<span class=\"diff-line diff-add\">+{}</span>",
+                escaped(line)
+            );
+            assert!(page.body.contains(&html), "{args:?}: {html}\n{}", page.body);
+        }
+        for line in removed {
+            let html = format!(
+                "<span class=\"diff-line diff-del\">-{}</span>",
+                escaped(line)
+            );
+            assert!(page.body.contains(&html), "{args:?}: {html}\n{}", page.body);
+        }
+        assert!(page.body.contains("diff-hunk"), "{path}");
+        assert!(!page.body.contains("<b>bold</b>"), "never raw: {path}");
+    }
+    assert!(
+        cli.diffs[1]
+            .0
+            .iter()
+            .any(|l| l.contains("<b>bold</b> & more")),
+        "the fixture has text to escape: {:?}",
+        cli.diffs[1]
+    );
+    let same = server
+        .get("/admin/documents/JD-1/diff?from=2&to=2", Some(&cookie))
+        .await?;
+    assert_eq!(same.status, 200);
+    assert!(same.body.contains("No changes"), "{}", same.body);
+    let missing = server
+        .get("/admin/documents/JD-1/diff?from=99", Some(&cookie))
+        .await?;
+    assert_eq!(missing.status, 400, "{}", missing.body);
+    assert!(
+        missing.body.contains("JD-1 has revisions 1 to 2"),
+        "the store's message: {}",
+        missing.body
+    );
+    let no_from = server
+        .get("/admin/documents/JD-1/diff", Some(&cookie))
+        .await?;
+    assert_eq!(no_from.status, 400, "{}", no_from.body);
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    assert!(
+        tools.iter().any(|t| t == "admin:documents.diff"),
+        "{tools:?}"
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn downloads_hold_the_bytes_the_command_line_writes() -> TestResult<()> {
+    let (server, cli) = start_history().await?;
+    let cookie = server.login().await?;
+    for (path, name, bytes) in [
+        ("/admin/documents/JD-1/download", "JD-1.md", &cli.files[0]),
+        (
+            "/admin/documents/JD-1/download?version=1",
+            "JD-1-r1.md",
+            &cli.files[1],
+        ),
+        (
+            "/admin/documents/JD-3/download?file=items%2Ffirst",
+            "JD-3-items-first.md",
+            &cli.files[2],
+        ),
+    ] {
+        let reply = server.get(path, Some(&cookie)).await?;
+        assert_eq!(reply.status, 200, "{path}: {}", reply.body);
+        assert_eq!(
+            reply.header("content-disposition"),
+            Some(format!("attachment; filename=\"{name}\"").as_str()),
+            "{path}"
+        );
+        assert_eq!(
+            reply.header("content-type"),
+            Some("text/markdown; charset=utf-8"),
+            "{path}"
+        );
+        assert_eq!(&reply.bytes, bytes, "{path}");
+    }
+    let archive = server
+        .get("/admin/documents/JD-3/download?archive=true", Some(&cookie))
+        .await?;
+    assert_eq!(archive.status, 200, "{}", archive.body);
+    assert_eq!(archive.header("content-type"), Some("application/gzip"));
+    assert_eq!(
+        archive.header("content-disposition"),
+        Some("attachment; filename=\"JD-3.tgz\"")
+    );
+    joedocs::admin::check_folder_archive(&archive.bytes)?;
+    assert_eq!(archive.bytes, cli.files[3]);
+    let single = server
+        .get("/admin/documents/JD-1/download?archive=true", Some(&cookie))
+        .await?;
+    assert_eq!(single.status, 400);
+    assert!(
+        single.body.contains("single-file document"),
+        "{}",
+        single.body
+    );
+
+    // The document view offers the downloads and the History tab.
+    let view = server.get("/admin/documents/JD-3", Some(&cookie)).await?;
+    for link in [
+        "href=\"/admin/documents/JD-3/download\"",
+        "href=\"/admin/documents/JD-3/download?archive=true\"",
+        "href=\"/admin/documents/JD-3/history\"",
+    ] {
+        assert!(view.body.contains(link), "{link}: {}", view.body);
+    }
+    let old = server
+        .get(
+            "/admin/documents/JD-3?file=items%2Ffirst&version=3",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(
+        old.status, 404,
+        "items/first did not exist yet at revision 3"
+    );
+    let old = server
+        .get(
+            "/admin/documents/JD-3?file=items%2Fone&version=3",
+            Some(&cookie),
+        )
+        .await?;
+    assert!(
+        old.body
+            .contains("href=\"/admin/documents/JD-3/download?file=items%2Fone&#38;version=3\""),
+        "{}",
+        old.body
+    );
+    assert!(
+        old.body
+            .contains("href=\"/admin/documents/JD-3/history?file=items%2Fone\""),
+        "{}",
+        old.body
+    );
     server.stop().await
 }

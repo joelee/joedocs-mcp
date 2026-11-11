@@ -22,6 +22,9 @@
 //! | `GET /admin/` | `admin:status` |
 //! | `GET /admin/documents` | `admin:documents.list` |
 //! | `GET /admin/documents/{id}` | `admin:documents.get` |
+//! | `GET /admin/documents/{id}/history` | `admin:documents.history` |
+//! | `GET /admin/documents/{id}/diff` | `admin:documents.diff` |
+//! | `GET /admin/documents/{id}/download` | `admin:documents.get` |
 //! | `GET /admin/search` | `admin:documents.search` |
 //! | any other path under `/admin/` | `admin:web.unknown` |
 //!
@@ -127,6 +130,9 @@ pub(crate) enum Route {
     Home,
     DocumentsList,
     Document(String),
+    History(String),
+    Diff(String),
+    Download(String),
     Search,
     Unknown,
 }
@@ -153,6 +159,15 @@ impl Route {
             ("/admin/", _) if get => Self::Home,
             (_, ["documents"]) if get => Self::DocumentsList,
             (_, ["documents", id]) if get && !id.is_empty() => Self::Document(percent_decode(id)),
+            (_, ["documents", id, "history"]) if get && !id.is_empty() => {
+                Self::History(percent_decode(id))
+            }
+            (_, ["documents", id, "diff"]) if get && !id.is_empty() => {
+                Self::Diff(percent_decode(id))
+            }
+            (_, ["documents", id, "download"]) if get && !id.is_empty() => {
+                Self::Download(percent_decode(id))
+            }
             ("/admin/search", _) if get => Self::Search,
             _ => Self::Unknown,
         }
@@ -167,7 +182,9 @@ impl Route {
             Self::Logout => "admin:session.delete",
             Self::Home => "admin:status",
             Self::DocumentsList => "admin:documents.list",
-            Self::Document(_) => "admin:documents.get",
+            Self::Document(_) | Self::Download(_) => "admin:documents.get",
+            Self::History(_) => "admin:documents.history",
+            Self::Diff(_) => "admin:documents.diff",
             Self::Search => "admin:documents.search",
             Self::Unknown => "admin:web.unknown",
         }
@@ -181,6 +198,9 @@ impl Route {
             | Self::Home
             | Self::DocumentsList
             | Self::Document(_)
+            | Self::History(_)
+            | Self::Diff(_)
+            | Self::Download(_)
             | Self::Search
             | Self::Unknown => Access::Session,
         }
