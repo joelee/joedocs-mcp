@@ -140,14 +140,21 @@
     }
   };
 
-  // A form marked `data-busy` shows it is working: its button is disabled
-  // and says so until the next page arrives.
+  // A form marked `data-busy` shows it is working: the button that sent it
+  // is disabled and says so until the next page arrives. A submission that
+  // only closes a dialog (Cancel, `formmethod="dialog"`) is not work.
   document.addEventListener("submit", (event) => {
     const form = event.target instanceof HTMLFormElement ? event.target : null;
     if (!form || !form.dataset.busy) {
       return;
     }
-    const button = form.querySelector("button[type=submit]");
+    const button = event.submitter instanceof HTMLButtonElement ? event.submitter : null;
+    const closesDialog =
+      form.getAttribute("method") === "dialog" ||
+      (button && button.getAttribute("formmethod") === "dialog");
+    if (closesDialog) {
+      return;
+    }
     if (button) {
       button.setAttribute("aria-busy", "true");
       button.textContent = form.dataset.busy;
