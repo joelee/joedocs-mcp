@@ -20,8 +20,8 @@ use serde_json::{Value, json};
 
 use super::{ServerOptions, Shared, with_default_port};
 use crate::auth::OsRandom;
-use crate::db::AdminTokenRow;
-use crate::store::{self, Actor, AdminRefusal, Store};
+use crate::store::Admin;
+use crate::store::{self, AdminRefusal, Store};
 
 /// The header that carries an admin session token.
 pub const SESSION_HEADER: &str = "joedocs-session";
@@ -254,7 +254,7 @@ pub(crate) fn strip_port(authority: &str) -> &str {
 /// audit row for the call whatever happens.
 async fn authorized<F>(state: Arc<ApiState>, call: Call, work: F) -> Response
 where
-    F: FnOnce(&mut Store, &ApiState, &AdminTokenRow) -> Result<Response, ApiError> + Send + 'static,
+    F: FnOnce(&mut Store, &ApiState, &Admin) -> Result<Response, ApiError> + Send + 'static,
 {
     run(state, call, move |store, state, call| {
         match authenticate(store, call) {
@@ -270,17 +270,17 @@ where
 
 /// A refused call, and who made it when the admin token is valid.
 struct Refused {
-    who: Option<AdminTokenRow>,
+    who: Option<Admin>,
     error: ApiError,
 }
 
-fn refused(who: Option<AdminTokenRow>, error: ApiError) -> Box<Refused> {
+fn refused(who: Option<Admin>, error: ApiError) -> Box<Refused> {
     Box::new(Refused { who, error })
 }
 
 /// The admin token and session of `call`, or the refusal and who called
 /// (when the token is valid).
-fn authenticate(store: &Store, call: &Call) -> Result<AdminTokenRow, Box<Refused>> {
+fn authenticate(store: &Store, call: &Call) -> Result<Admin, Box<Refused>> {
     let token = call
         .token
         .as_ref()
@@ -300,25 +300,21 @@ fn authenticate(store: &Store, call: &Call) -> Result<AdminTokenRow, Box<Refused
         });
     // A session can only be renewed by logging in, so say at once that the
     // token is locked rather than inviting a code.
-    checked.map_err(|error| refused(Some(admin.clone()), locked(store, &admin).unwrap_or(error)))
+    checked.map(Admin::Token).map_err(|error| {
+        let lock = locked(store, &admin).unwrap_or(error);
+        refused(Some(Admin::Token(admin.clone())), lock)
+    })
 }
 
 /// Writes the audit row for `call`.
-fn write_audit(store: &Store, who: Option<&AdminTokenRow>, call: &Call, outcome: &str) {
-    let (id, name) = who.map_or(("unknown", "unknown"), |w| (w.id.as_str(), w.name.as_str()));
-    if let Err(error) = store.audit(
-        id,
-        &Actor::new(name, &call.client),
-        call.operation,
-        None,
-        outcome,
-    ) {
+fn write_audit(store: &Store, who: Option<&Admin>, call: &Call, outcome: &str) {
+    if let Err(error) = store.audit_admin(who, &call.client, call.operation, outcome) {
         tracing::error!(%error, "cannot write the admin audit entry");
     }
 }
 
 /// The lock refusal for `admin`, when it is locked now.
-fn locked(store: &Store, admin: &AdminTokenRow) -> Option<ApiError> {
+fn locked(store: &Store, admin: &crate::db::AdminTokenRow) -> Option<ApiError> {
     let until = admin.locked_until.as_ref()?;
     let now = store.now();
     if *until <= now {
@@ -348,7 +344,7 @@ where
             &mut Store,
             &ApiState,
             &Call,
-        ) -> Result<(Option<AdminTokenRow>, Result<Response, ApiError>), ApiError>
+        ) -> Result<(Option<Admin>, Result<Response, ApiError>), ApiError>
         + Send
         + 'static,
 {
@@ -367,7 +363,8 @@ where
                 let who = call
                     .token
                     .as_ref()
-                    .and_then(|t| store.admin_token_for(t).ok().flatten());
+                    .and_then(|t| store.admin_token_for(t).ok().flatten())
+                    .map(Admin::Token);
                 (who, Err(refused.clone()))
             }
             Ok(()) => match work(&mut store, &state, &call) {
@@ -560,7 +557,8 @@ async fn refuse(state: Arc<ApiState>, call: Call, error: ApiError) -> Response {
         let who = call
             .token
             .as_ref()
-            .and_then(|t| store.admin_token_for(t).ok().flatten());
+            .and_then(|t| store.admin_token_for(t).ok().flatten())
+            .map(Admin::Token);
         Ok((who, Err(error)))
     })
     .await
@@ -572,7 +570,8 @@ async fn login(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
         let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
         let who = store
             .admin_token_for(token)
-            .map_err(|e| ApiError::from(&e))?;
+            .map_err(|e| ApiError::from(&e))?
+            .map(Admin::Token);
         let code = serde_json::from_slice::<Value>(&body)
             .ok()
             .and_then(|v| v.get("code").and_then(Value::as_str).map(str::to_owned));
@@ -607,7 +606,8 @@ async fn logout(state: Arc<ApiState>, call: Call) -> Response {
         let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
         let who = store
             .admin_token_for(token)
-            .map_err(|e| ApiError::from(&e))?;
+            .map_err(|e| ApiError::from(&e))?
+            .map(Admin::Token);
         if who.is_none() {
             return Err(ApiError::unauthorized());
         }
@@ -1131,7 +1131,8 @@ fn backup_blocking(state: &ApiState, call: &Call) -> Response {
                     let who = call
                         .token
                         .as_ref()
-                        .and_then(|t| store.admin_token_for(t).ok().flatten());
+                        .and_then(|t| store.admin_token_for(t).ok().flatten())
+                        .map(Admin::Token);
                     Err(refused(who, forbidden.clone()))
                 }
                 Ok(()) => authenticate(store, call),

@@ -318,6 +318,43 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Records an admin API or web interface call in the audit log: the
+    /// caller's ID and name in the key columns (`unknown` when the
+    /// credential was not valid), and, for a signed-in user, the user's ID
+    /// and name in the user columns. MCP calls use [`Store::audit`].
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors.
+    pub fn audit_admin(
+        &self,
+        who: Option<&super::Admin>,
+        client: &str,
+        tool: &str,
+        outcome: &str,
+    ) -> Result<(), Error> {
+        let at = self.now();
+        let (id, name) = who.map_or(("unknown", "unknown"), |w| (w.id(), w.name()));
+        let actor = Actor::new(name, client);
+        db::insert_admin_audit(
+            &self.conn,
+            &AuditEntry {
+                at: &at,
+                api_key_id: id,
+                key_name: actor.name(),
+                client: actor.client(),
+                tool,
+                document_id: None,
+                outcome,
+            },
+            who.and_then(super::Admin::user)
+                .map(|u| (u.id.as_str(), u.name.as_str())),
+        )?;
+        Ok(())
+    }
+}
+
 fn apply_grants(conn: &Connection, key_id: &str, grants: &[Grant]) -> Result<(), Error> {
     for grant in grants {
         let project = db::find_project(conn, &grant.project)?

@@ -106,7 +106,7 @@ impl<'a> Chrome<'a> {
     /// The layout for `session`, with `section` marked as the current page.
     pub(crate) fn new(session: &'a Session, section: Section, query: &'a str) -> Self {
         Self {
-            admin: &session.admin.name,
+            admin: session.admin.name(),
             expires_at: &session.expires_at,
             csrf: &session.csrf,
             query,
@@ -138,10 +138,10 @@ pub(crate) fn link(path: &str, pairs: &[(&str, Option<&str>)]) -> String {
     }
 }
 
-/// The signed-in admin as the author of a change: the admin token's name,
-/// from the web interface.
+/// The signed-in admin as the author of a change: the admin token's or the
+/// user's name, from the web interface.
 pub(crate) fn actor(session: &Session) -> crate::store::Actor {
-    crate::store::Actor::new(&session.admin.name, super::CLIENT)
+    crate::store::Actor::new(session.admin.name(), super::CLIENT)
 }
 
 /// The refusal for a store error, shown with a link back to `href`.

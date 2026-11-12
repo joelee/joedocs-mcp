@@ -9,8 +9,7 @@ use super::super::assets::{self, Urls};
 use super::super::session::{self, safe_next};
 use super::super::{Session, WebError, WebRequest, WebState, redirect, render};
 use crate::auth::OsRandom;
-use crate::db::AdminTokenRow;
-use crate::store::{AdminRefusal, Error, Store};
+use crate::store::{Admin, AdminRefusal, Error, Store};
 
 #[derive(Template)]
 #[template(path = "login.html")]
@@ -45,7 +44,7 @@ pub(crate) fn submit(
     store: &mut Store,
     state: &WebState,
     request: &WebRequest,
-) -> (Option<AdminTokenRow>, Result<Response, WebError>) {
+) -> (Option<Admin>, Result<Response, WebError>) {
     if !session::same_origin(&request.headers, &state.allowed_origins) {
         let refused = WebError::forbidden("this form was not sent from this site");
         return (None, Err(refused));
@@ -58,7 +57,11 @@ pub(crate) fn submit(
         return (None, Err(refused.with_page(page)));
     }
     let token = SecretString::from(request.form("token").unwrap_or("").trim().to_owned());
-    let who = store.admin_token_for(&token).ok().flatten();
+    let who = store
+        .admin_token_for(&token)
+        .ok()
+        .flatten()
+        .map(Admin::Token);
     let code = request.form("code").unwrap_or("").trim();
     let hours = state.options.session_hours;
     match store.web_login(&token, code, hours, &OsRandom) {
@@ -69,7 +72,7 @@ pub(crate) fn submit(
             if let Ok(value) = HeaderValue::from_str(cookie.expose_secret()) {
                 reply.headers_mut().insert(header::SET_COOKIE, value);
             }
-            (Some(opened.admin), Ok(reply))
+            (Some(Admin::Token(opened.admin)), Ok(reply))
         }
         Err(error) => (who, Err(refused(state, request, &error))),
     }

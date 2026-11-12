@@ -66,9 +66,8 @@ use axum::response::{IntoResponse as _, Response};
 use axum::routing::any;
 use secrecy::SecretString;
 
-use crate::db::AdminTokenRow;
 use crate::mcp::{BODY_LIMIT, ServerOptions, Shared, classify, host_allowed};
-use crate::store::{self, Actor, AdminRefusal, Store};
+use crate::store::{self, Admin, AdminRefusal, Store};
 
 /// The client name on the web interface's audit rows.
 pub const CLIENT: &str = "joedocs-web";
@@ -375,8 +374,8 @@ fn first<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 /// The signed-in admin of a page request.
 pub(crate) struct Session {
-    /// The admin token that opened the session.
-    pub(crate) admin: AdminTokenRow,
+    /// Who signed in: an admin token, or (from 0.5.1) a user.
+    pub(crate) admin: Admin,
     /// When the session expires.
     pub(crate) expires_at: String,
     /// The CSRF token forms carry.
@@ -629,7 +628,7 @@ fn handle(
     state: &WebState,
     route: &Route,
     request: &WebRequest,
-) -> (Option<AdminTokenRow>, Result<Response, WebError>) {
+) -> (Option<Admin>, Result<Response, WebError>) {
     match route.access() {
         Access::Public => (None, pages::public(state, route, request)),
         Access::Login => pages::login::submit(store, state, request),
@@ -653,7 +652,7 @@ fn signed_in(
     store: &Store,
     state: &WebState,
     request: &WebRequest,
-) -> Result<Session, Box<(Option<AdminTokenRow>, WebError)>> {
+) -> Result<Session, Box<(Option<Admin>, WebError)>> {
     let session = open_session(store, request).map_err(|refused| Box::new((None, refused)))?;
     if request.method == Method::POST {
         let who = Some(session.admin.clone());
@@ -686,7 +685,7 @@ fn open_session(store: &Store, request: &WebRequest) -> Result<Session, WebError
     match (checked, cookie) {
         (Ok(web), Some(token)) => Ok(Session {
             csrf: session::csrf_token(&token),
-            admin: web.admin,
+            admin: Admin::Token(web.admin),
             expires_at: web.expires_at,
             token,
         }),
@@ -746,9 +745,8 @@ fn secured(mut response: Response, csp: &HeaderValue) -> Response {
 }
 
 /// Writes the audit row for a page request.
-fn write_audit(store: &Store, who: Option<&AdminTokenRow>, tool: &str, outcome: &str) {
-    let (id, name) = who.map_or(("unknown", "unknown"), |w| (w.id.as_str(), w.name.as_str()));
-    if let Err(error) = store.audit(id, &Actor::new(name, CLIENT), tool, None, outcome) {
+fn write_audit(store: &Store, who: Option<&Admin>, tool: &str, outcome: &str) {
+    if let Err(error) = store.audit_admin(who, CLIENT, tool, outcome) {
         tracing::error!(%error, "cannot write the web interface audit entry");
     }
 }

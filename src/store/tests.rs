@@ -1854,3 +1854,58 @@ fn a_failed_folder_restore_leaves_the_tree_as_it_was() {
         6
     );
 }
+
+/// An audit row's key and user columns.
+type AuditColumns = (String, String, String, Option<String>, Option<String>);
+
+#[test]
+fn admin_audit_rows_name_tokens_in_the_key_columns_and_leave_the_user_columns_empty() {
+    let mut fx = fixture();
+    let created = fx
+        .store
+        .create_admin_token("ops", &crate::auth::CountingRandom(1))
+        .unwrap();
+    let who = super::Admin::Token(created.row.clone());
+    fx.store
+        .audit_admin(Some(&who), "joedocs/0.5.1", "admin:status", "ok")
+        .unwrap();
+    fx.store
+        .audit_admin(None, "curl", "admin:status", "unauthorized")
+        .unwrap();
+    let mut stmt = fx
+        .store
+        .conn
+        .prepare(
+            "SELECT api_key_id, key_name, outcome, user_id, user_name FROM audit_log ORDER BY rowid",
+        )
+        .unwrap();
+    let rows: Vec<AuditColumns> = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (
+                created.row.id.clone(),
+                "ops".to_owned(),
+                "ok".to_owned(),
+                None,
+                None
+            ),
+            (
+                "unknown".to_owned(),
+                "unknown".to_owned(),
+                "unauthorized".to_owned(),
+                None,
+                None
+            ),
+        ]
+    );
+    assert_eq!(who.name(), "ops");
+    assert_eq!(who.token(), Some(&created.row));
+    assert_eq!(who.user(), None);
+}
