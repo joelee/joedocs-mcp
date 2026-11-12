@@ -123,6 +123,13 @@ pub enum Command {
         #[command(subcommand)]
         command: UserCommand,
     },
+    /// Sign in to a server's admin API as a user (`--user`, or
+    /// `client.user`), and manage your own sign-in.
+    Auth {
+        /// What to do.
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
     /// Log in to the server's admin API with `JOEDOCS_ADMIN_TOKEN` and a
     /// TOTP code, and keep the session for later commands.
     Login {
@@ -448,6 +455,7 @@ impl Command {
                 command: KeyCommand::Revoke { .. },
             } => "key revoke",
             Self::User { command } => command.name(),
+            Self::Auth { command } => command.name(),
             Self::AdminToken {
                 command: AdminTokenCommand::Create { .. },
             } => "admin-token create",
@@ -694,6 +702,65 @@ impl UserCommand {
             Self::Remove { .. } => "user remove",
         }
     }
+}
+
+/// `auth` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum AuthCommand {
+    /// Sign in: the first time on this machine with your password and a
+    /// TOTP code (setting up an authenticator and your own password at
+    /// your very first sign-in), then with a code only.
+    Login {
+        /// A 6-digit code from your authenticator, instead of asking for
+        /// one (renews a session without a terminal).
+        #[arg(long)]
+        code: Option<String>,
+        /// This machine's name on the server (default: its host name).
+        #[arg(long, value_name = "NAME")]
+        device: Option<String>,
+    },
+    /// End the session with the server.
+    Logout {
+        /// Also revoke this machine's sign-in and forget it here.
+        #[arg(long)]
+        forget_device: bool,
+    },
+    /// Show who you are signed in as, on which device, until when.
+    Status,
+    /// Change your password: asks for the current one, a code, and the new
+    /// one twice. Your other devices and sessions end.
+    Password,
+    /// List your devices, or revoke one.
+    Devices {
+        /// What to do (list when left out).
+        #[command(subcommand)]
+        command: Option<DevicesCommand>,
+    },
+}
+
+impl AuthCommand {
+    /// The command's name, for logs.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Login { .. } => "auth login",
+            Self::Logout { .. } => "auth logout",
+            Self::Status => "auth status",
+            Self::Password => "auth password",
+            Self::Devices { command: None } => "auth devices",
+            Self::Devices { command: Some(_) } => "auth devices revoke",
+        }
+    }
+}
+
+/// `auth devices` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum DevicesCommand {
+    /// Revoke one of your devices: its sign-in ends at once.
+    Revoke {
+        /// Device name, as `joedocs auth devices` lists it.
+        name: String,
+    },
 }
 
 /// `config` subcommands.

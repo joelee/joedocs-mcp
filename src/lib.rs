@@ -41,8 +41,8 @@ use std::sync::Arc;
 
 pub use app_id::AppId;
 pub use cli::{
-    ArchiveCommand, Cli, Command, ConfigCommand, DocumentCommand, KeyCommand, ProjectCommand,
-    SystemdCommand,
+    ArchiveCommand, AuthCommand, Cli, Command, ConfigCommand, DevicesCommand, DocumentCommand,
+    KeyCommand, ProjectCommand, SystemdCommand, UserCommand,
 };
 pub use config::{Config, ConfigError, Resolved};
 
@@ -291,7 +291,7 @@ pub fn execute(
             let report = status::collect(&store, loaded, ctx.services)?;
             status::render(&report, out)?;
         }
-        Command::Login { .. } | Command::Logout => {}
+        Command::Login { .. } | Command::Logout | Command::Auth { .. } => {}
         command @ Command::Get { .. } => {
             if let Some((request, file)) = GetRequest::of(command) {
                 local_get(&open_store(loaded, ctx)?, &request, file, out)?;
@@ -350,13 +350,24 @@ fn remote(
 ) -> Option<Result<(), Error>> {
     let server = loaded.config().client.server.as_str();
     if server.is_empty() {
-        if matches!(cli.command, Command::Login { .. }) && ctx.prompt.interactive() {
+        let signs_in = matches!(
+            cli.command,
+            Command::Login { .. }
+                | Command::Auth {
+                    command: AuthCommand::Login { .. }
+                }
+        );
+        if signs_in && ctx.prompt.interactive() {
             return Some(
                 set_up_server(loaded, ctx, out)
                     .and_then(|server| run_remote(cli, &server, loaded, ctx, out)),
             );
         }
-        return matches!(cli.command, Command::Login { .. } | Command::Logout).then(|| {
+        return matches!(
+            cli.command,
+            Command::Login { .. } | Command::Logout | Command::Auth { .. }
+        )
+        .then(|| {
             Err(client::Error::Usage(
                 "set client.server, or pass --server URL, to log in to a server's admin API".into(),
             )
@@ -369,9 +380,9 @@ fn remote(
         Command::Serve => Some("serve"),
         Command::Systemd { .. } => Some("systemd"),
         Command::AdminToken { .. } => Some("admin-token"),
-        // Remote `user` commands arrive with the admin API's user routes
-        // (JD-37 STEP-10); until then `user` runs only on the server.
-        Command::User { command } => Some(command.name()),
+        Command::User {
+            command: UserCommand::Remove { .. },
+        } => Some("user remove"),
         Command::Agents => Some("agents"),
         Command::Backup { restore: true, .. } => Some("backup --restore"),
         _ => None,
@@ -412,13 +423,10 @@ fn run_remote(
     ctx: &Context<'_>,
     out: &mut dyn Write,
 ) -> Result<(), Error> {
-    let remote = client::Remote::new(
-        server,
-        loaded.secrets.admin_token.as_ref(),
-        ctx.env,
-        ctx.prompt,
-    )?;
+    let remote = remote_for(cli, server, loaded, ctx)?;
     match &cli.command {
+        Command::Auth { command } => remote_auth(&remote, command, ctx, out)?,
+        Command::User { command } => remote_user(&remote, command, out)?,
         Command::Login { code } => {
             let (name, saved) = remote.login(code.as_deref())?;
             writeln!(
@@ -451,6 +459,174 @@ fn run_remote(
         command => remote_admin(&remote, command, out)?,
     }
     Ok(())
+}
+
+/// The connection for `cli`'s remote command, proving who it is as P-05 of
+/// JD-37 says: `login` and `logout` use the admin token; `auth` and every
+/// other command use the user `client.user` (or `--user`) when set, else
+/// `JOEDOCS_ADMIN_TOKEN` when set, else the only user with a device stored
+/// for this server.
+fn remote_for<'a>(
+    cli: &Cli,
+    server: &str,
+    loaded: &Loaded,
+    ctx: &Context<'a>,
+) -> Result<client::Remote<'a>, Error> {
+    let token = loaded.secrets.admin_token.as_ref();
+    if matches!(cli.command, Command::Login { .. } | Command::Logout) {
+        return Ok(client::Remote::new(server, token, ctx.env, ctx.prompt)?);
+    }
+    let configured = loaded.config().client.user.as_str();
+    let user = if configured.is_empty() {
+        let stored = client::Devices::locate(ctx.env)?.users(server)?;
+        match (stored.as_slice(), token, &cli.command) {
+            (_, Some(_), command) if !matches!(command, Command::Auth { .. }) => None,
+            ([only], _, _) => Some(only.clone()),
+            (_, _, Command::Auth { .. }) => {
+                return Err(client::Error::Usage(
+                    "pass --user NAME (or set client.user) to sign in as that user".into(),
+                )
+                .into());
+            }
+            _ => {
+                return Err(client::Error::Auth(format!(
+                    "sign in to {server} first with `joedocs auth login --user NAME` (or export JOEDOCS_ADMIN_TOKEN, deprecated)"
+                ))
+                .into());
+            }
+        }
+    } else {
+        Some(configured.to_owned())
+    };
+    Ok(match user {
+        Some(user) => client::Remote::for_user(server, &user, ctx.env, ctx.prompt)?,
+        None => client::Remote::new(server, token, ctx.env, ctx.prompt)?,
+    })
+}
+
+/// `joedocs auth ...` on the server of `remote`.
+fn remote_auth(
+    remote: &client::Remote<'_>,
+    command: &AuthCommand,
+    ctx: &Context<'_>,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    use reqwest::Method;
+    match command {
+        AuthCommand::Login { code, device } => {
+            let device = device
+                .clone()
+                .or_else(|| ctx.services.host_name().ok())
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "device".to_owned());
+            let signed = remote.auth_login(code.as_deref(), &device)?;
+            writeln!(
+                out,
+                "Signed in to {} as {} on the device {}; the session expires at {}.",
+                remote.server(),
+                signed.user,
+                signed.device,
+                signed.expires_at
+            )?;
+        }
+        AuthCommand::Logout { forget_device } => {
+            let ended = remote.auth_logout(*forget_device)?;
+            let what = match (ended, forget_device) {
+                (false, _) => "Not signed in",
+                (true, true) => "Signed out and forgot this device on",
+                (true, false) => "Signed out of",
+            };
+            writeln!(out, "{what} {}.", remote.server())?;
+        }
+        AuthCommand::Status => {
+            let me = remote.call(&Method::GET, "me", None)?.json();
+            let text = |key: &str| me[key].as_str().unwrap_or("-").to_owned();
+            writeln!(
+                out,
+                "Signed in to {} as {}\n  device: {}\n  session expires: {}\n  authenticator set up: {}\n  last sign-in: {}",
+                remote.server(),
+                text("user"),
+                text("device"),
+                text("expires_at"),
+                text("totp_enrolled_at"),
+                text("last_login_at"),
+            )?;
+        }
+        AuthCommand::Password => {
+            let output = remote.change_password()?;
+            write!(out, "{output}")?;
+        }
+        AuthCommand::Devices { command: None } => {
+            remote_text(remote, &Method::GET, "me/devices", None, out)?;
+        }
+        AuthCommand::Devices {
+            command: Some(DevicesCommand::Revoke { name }),
+        } => {
+            let output = remote.revoke_device(name)?;
+            write!(out, "{output}")?;
+        }
+    }
+    Ok(())
+}
+
+/// `joedocs user ...` on the server of `remote` (all but `remove`).
+fn remote_user(
+    remote: &client::Remote<'_>,
+    command: &UserCommand,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    use reqwest::Method;
+    use serde_json::json;
+    let action = |name: &str, action: &str| format!("users/{}/{action}", percent_encode(name));
+    match command {
+        UserCommand::List => remote_text(remote, &Method::GET, "users", None, out),
+        UserCommand::Create { name } => {
+            let body = json!({"name": name});
+            remote_text(remote, &Method::POST, "users", Some(&body), out)
+        }
+        UserCommand::Disable { name } => {
+            remote_text(remote, &Method::POST, &action(name, "disable"), None, out)
+        }
+        UserCommand::Enable { name } => {
+            remote_text(remote, &Method::POST, &action(name, "enable"), None, out)
+        }
+        UserCommand::Unlock { name } => {
+            remote_text(remote, &Method::POST, &action(name, "unlock"), None, out)
+        }
+        UserCommand::ResetPassword { name } => remote_text(
+            remote,
+            &Method::POST,
+            &action(name, "reset-password"),
+            None,
+            out,
+        ),
+        UserCommand::ResetTotp { name } => remote_text(
+            remote,
+            &Method::POST,
+            &action(name, "reset-totp"),
+            None,
+            out,
+        ),
+        // Refused by `remote` before it gets here: it runs on the server only.
+        UserCommand::Remove { .. } => Ok(()),
+    }
+}
+
+/// The warning `command` prints on standard error, when it is deprecated:
+/// admin tokens give way to users (0.5.1). Standard output is unchanged, so
+/// scripts that read it keep working.
+#[must_use]
+pub fn deprecation_warning(command: &Command) -> Option<&'static str> {
+    match command {
+        Command::Login { .. } => Some(
+            "warning: `joedocs login` with an admin token is deprecated and will be removed; sign in as a user with `joedocs auth login --user NAME`",
+        ),
+        Command::AdminToken { .. } => Some(
+            "warning: admin tokens are deprecated and will be removed; create users with `joedocs user create NAME`, who sign in with `joedocs auth login --user NAME`",
+        ),
+        _ => None,
+    }
 }
 
 /// Prints the `output` of an admin API call, as the local command would,
@@ -893,7 +1069,7 @@ fn remote_get(
 
 /// `text` with every byte but unreserved characters percent-encoded, for a
 /// query value.
-fn percent_encode(text: &str) -> String {
+pub(crate) fn percent_encode(text: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(text.len());
     for byte in text.bytes() {

@@ -20,6 +20,10 @@ use serde_json::{Value, json};
 use crate::env::Env;
 use crate::mcp::SESSION_HEADER;
 
+#[path = "client_user.rs"]
+mod user;
+pub use user::{DeviceEntry, Devices, SignedIn};
+
 /// Exit code when the admin API refuses the credentials (`EX_NOPERM`).
 pub const EXIT_NOPERM: u8 = 77;
 
@@ -41,6 +45,21 @@ pub trait Prompt {
     ///
     /// Returns an error when the terminal cannot be read.
     fn ask(&self, message: &str) -> io::Result<String>;
+
+    /// Shows `message` and reads one line without echoing it (a password).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the terminal cannot be read.
+    fn ask_secret(&self, message: &str) -> io::Result<String> {
+        self.ask(message)
+    }
+
+    /// Shows `text` to the person at the terminal, on standard error (TOTP
+    /// setup instructions; never a command's result).
+    fn show(&self, text: &str) {
+        let _ = writeln!(io::stderr(), "{text}");
+    }
 }
 
 /// The real prompt, on standard error and standard input.
@@ -59,6 +78,10 @@ impl Prompt for TerminalPrompt {
         let mut line = String::new();
         io::stdin().lock().read_line(&mut line)?;
         Ok(line.trim().to_owned())
+    }
+
+    fn ask_secret(&self, message: &str) -> io::Result<String> {
+        rpassword::prompt_password(message)
     }
 }
 
@@ -101,6 +124,9 @@ pub enum Error {
     /// The server's reply was not understood.
     #[error("unexpected reply from the server: {0}")]
     Protocol(String),
+    /// The server is too busy checking other sign-ins: try again shortly.
+    #[error("{0}")]
+    Busy(String),
 }
 
 impl Error {
@@ -110,7 +136,7 @@ impl Error {
     #[must_use]
     pub fn exit_code(&self) -> u8 {
         match self {
-            Self::Unreachable { .. } => crate::EXIT_UNAVAILABLE,
+            Self::Unreachable { .. } | Self::Busy(_) => crate::EXIT_UNAVAILABLE,
             Self::Auth(_) => EXIT_NOPERM,
             Self::Usage(_) => crate::EXIT_DATA,
             Self::Remote { code, .. } => match code.as_str() {
@@ -210,31 +236,12 @@ impl Sessions {
     }
 
     fn save(&self, file: &SessionsFile) -> Result<(), Error> {
-        let dir = self.path.parent().unwrap_or_else(|| Path::new("."));
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(Error::io("create", dir))?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-            .map_err(Error::io("protect", dir))?;
         let text = toml::to_string(file).map_err(|e| Error::Io {
             action: "write",
             path: self.path.clone(),
             source: io::Error::other(e),
         })?;
-        let temp = dir.join(format!(".sessions.toml.{}.tmp", std::process::id()));
-        let _ = fs::remove_file(&temp);
-        let mut out = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp)
-            .map_err(Error::io("create", &temp))?;
-        out.write_all(text.as_bytes())
-            .map_err(Error::io("write", &temp))?;
-        drop(out);
-        fs::rename(&temp, &self.path).map_err(Error::io("write", &self.path))
+        write_private(&self.path, &text)
     }
 
     /// The saved session for `server`, if any.
@@ -269,6 +276,34 @@ impl Sessions {
         }
         Ok(())
     }
+}
+
+/// Writes `text` to `path` through a new temporary file in the same
+/// directory: the directory is made `0700`, the file `0600`.
+fn write_private(path: &Path, text: &str) -> Result<(), Error> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(Error::io("create", dir))?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        .map_err(Error::io("protect", dir))?;
+    let name = path
+        .file_name()
+        .map_or_else(|| "state".into(), |n| n.to_string_lossy().into_owned());
+    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let _ = fs::remove_file(&temp);
+    let mut out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp)
+        .map_err(Error::io("create", &temp))?;
+    out.write_all(text.as_bytes())
+        .map_err(Error::io("write", &temp))?;
+    drop(out);
+    fs::rename(&temp, path).map_err(Error::io("write", path))
 }
 
 /// A reply from the admin API.
@@ -356,9 +391,31 @@ impl Reply {
         }
         let message = self.error_message();
         match (self.status, self.error_code()) {
+            (429, Some(code)) if code == "busy" => Err(Error::Busy(message)),
             (401 | 429, _) => Err(Error::Auth(message)),
+            (403, Some(code)) if code == "user_required" => Err(Error::Auth(message)),
             (_, Some(code)) => Err(Error::Remote { code, message }),
             (status, None) => Err(Error::Protocol(format!("HTTP {status}"))),
+        }
+    }
+}
+
+/// What a remote call proves who it is with.
+#[derive(Clone)]
+pub enum Credential {
+    /// An admin token (`JOEDOCS_ADMIN_TOKEN`, deprecated since 0.5.1), with
+    /// its sessions in `sessions.toml`.
+    Token(SecretString),
+    /// A user, with the device credential and session `joedocs auth login`
+    /// stored in `devices.toml`.
+    User(String),
+}
+
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Token(_) => f.write_str("Token([REDACTED])"),
+            Self::User(name) => f.debug_tuple("User").field(name).finish(),
         }
     }
 }
@@ -366,8 +423,9 @@ impl Reply {
 /// A connection to one server's admin API.
 pub struct Remote<'a> {
     server: String,
-    token: SecretString,
+    credential: Credential,
     sessions: Sessions,
+    devices: Devices,
     prompt: &'a dyn Prompt,
     runtime: tokio::runtime::Runtime,
     http: reqwest::Client,
@@ -413,18 +471,47 @@ impl<'a> Remote<'a> {
     ) -> Result<Self, Error> {
         let token = token.cloned().ok_or_else(|| {
             Error::Auth(
-                "export JOEDOCS_ADMIN_TOKEN with your admin token (printed once by `joedocs admin-token create` on the server)"
+                "export JOEDOCS_ADMIN_TOKEN with your admin token (printed once by `joedocs admin-token create` on the server), or sign in as a user with `joedocs auth login --user NAME`"
                     .into(),
             )
         })?;
+        Self::with_credential(server, Credential::Token(token), env, prompt, read_timeout)
+    }
+
+    /// Prepares calls to `server` with `credential`, giving up when the
+    /// server sends nothing for `read_timeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Usage`] when the state files have no home.
+    pub fn with_credential(
+        server: &str,
+        credential: Credential,
+        env: &dyn Env,
+        prompt: &'a dyn Prompt,
+        read_timeout: Duration,
+    ) -> Result<Self, Error> {
         let (http, runtime) = http_client(read_timeout)?;
         Ok(Self {
             server: server.trim_end_matches('/').to_owned(),
-            token,
+            credential,
             sessions: Sessions::locate(env)?,
+            devices: Devices::locate(env)?,
             prompt,
             runtime,
             http,
+        })
+    }
+
+    /// The bearer credential of every call: the admin token, or the user's
+    /// device credential when one is stored.
+    fn bearer(&self) -> Result<Option<String>, Error> {
+        Ok(match &self.credential {
+            Credential::Token(token) => Some(token.expose_secret().to_owned()),
+            Credential::User(user) => self
+                .devices
+                .get(&self.server, user)?
+                .map(|entry| entry.credential),
         })
     }
 
@@ -440,7 +527,15 @@ impl<'a> Remote<'a> {
     ///
     /// Returns [`Error::Io`] when the session file cannot be read.
     pub fn saved(&self) -> Result<Option<Saved>, Error> {
-        self.sessions.get(&self.server)
+        match &self.credential {
+            Credential::Token(_) => self.sessions.get(&self.server),
+            Credential::User(user) => Ok(self.devices.get(&self.server, user)?.and_then(|e| {
+                Some(Saved {
+                    token: e.session?,
+                    expires_at: e.expires_at.unwrap_or_default(),
+                })
+            })),
+        }
     }
 
     /// Sends one request.
@@ -456,10 +551,10 @@ impl<'a> Remote<'a> {
         body: Option<&Value>,
     ) -> Result<Reply, Error> {
         let url = format!("{}/admin/v1/{path}", self.server);
-        let mut request = self
-            .http
-            .request(method, &url)
-            .bearer_auth(self.token.expose_secret());
+        let mut request = self.http.request(method, &url);
+        if let Some(bearer) = self.bearer()? {
+            request = request.bearer_auth(bearer);
+        }
         if let Some(session) = session {
             request = request.header(SESSION_HEADER, session);
         }
@@ -493,6 +588,9 @@ impl<'a> Remote<'a> {
     /// Returns [`Error::Auth`] when the code is refused or the token is
     /// locked, or when no code is given and nobody can be asked.
     pub fn login(&self, code: Option<&str>) -> Result<(String, Saved), Error> {
+        if let Credential::User(_) = self.credential {
+            return self.renew(code);
+        }
         match code {
             Some(code) => self.try_code(code),
             None => self.login_with_prompts(&format!("Code for {}: ", self.server)),
@@ -577,7 +675,10 @@ impl<'a> Remote<'a> {
             return Ok(false);
         };
         let reply = self.send(reqwest::Method::DELETE, "session", Some(&saved.token), None)?;
-        self.sessions.remove(&self.server)?;
+        match &self.credential {
+            Credential::Token(_) => self.sessions.remove(&self.server)?,
+            Credential::User(user) => self.devices.forget_session(&self.server, user)?,
+        }
         if reply.is_session_refusal() || (200..300).contains(&reply.status) {
             Ok(true)
         } else {
@@ -607,6 +708,12 @@ impl<'a> Remote<'a> {
             saved.as_ref().map(|s| s.token.as_str()),
             body,
         )?;
+        if self.device_refused(&reply)? {
+            let fresh = self.sign_in_again()?;
+            return self
+                .send(method.clone(), path, Some(&fresh.token), body)?
+                .into_result();
+        }
         if !reply.is_session_refusal() {
             return reply.into_result();
         }
@@ -615,9 +722,18 @@ impl<'a> Remote<'a> {
         } else {
             format!("Code for {}: ", self.server)
         };
-        let (_, fresh) = self.login_with_prompts(&message)?;
+        let fresh = self.relogin(&message)?;
         self.send(method.clone(), path, Some(&fresh.token), body)?
             .into_result()
+    }
+
+    /// Opens a new session after the server refused the saved one: with a
+    /// TOTP code for the admin token, or the device credential for a user.
+    fn relogin(&self, message: &str) -> Result<Saved, Error> {
+        match &self.credential {
+            Credential::Token(_) => self.login_with_prompts(message).map(|(_, saved)| saved),
+            Credential::User(_) => self.renew_with_prompts(message).map(|(_, saved)| saved),
+        }
     }
 }
 
@@ -653,7 +769,7 @@ impl Remote<'_> {
         };
         drop(refused);
         let message = format!("Session expired. Code for {}: ", self.server);
-        let (_, fresh) = self.login_with_prompts(&message)?;
+        let fresh = self.relogin(&message)?;
         match self.download_once(path, Some(&fresh.token), dest)? {
             Ok(done) => Ok(done),
             Err(reply) => Err(reply
@@ -670,7 +786,10 @@ impl Remote<'_> {
         dest: &Path,
     ) -> Result<Result<Downloaded, Reply>, Error> {
         let url = format!("{}/admin/v1/{path}", self.server);
-        let mut request = self.http.get(&url).bearer_auth(self.token.expose_secret());
+        let mut request = self.http.get(&url);
+        if let Some(bearer) = self.bearer()? {
+            request = request.bearer_auth(bearer);
+        }
         if let Some(session) = session {
             request = request.header(SESSION_HEADER, session);
         }
