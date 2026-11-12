@@ -467,12 +467,27 @@ pub fn devices_of(conn: &Connection, user_id: &str) -> rusqlite::Result<Vec<Devi
     stmt.query_map([user_id], device_from_row)?.collect()
 }
 
-/// Records a device's use, clearing its renewal failures.
+/// Records a device's use. Its renewal failures and lock stay: only
+/// [`renew_device`] clears them.
 ///
 /// # Errors
 ///
 /// Returns an error when the statement fails.
 pub fn touch_device(conn: &Connection, id: &str, at: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE devices SET last_used_at = ?2 WHERE id = ?1",
+        params![id, at],
+    )?;
+    Ok(())
+}
+
+/// Records a successful renewal of a device: its use, and a fresh count
+/// of renewal failures with no lock.
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn renew_device(conn: &Connection, id: &str, at: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE devices SET last_used_at = ?2, failed_codes = 0, locked_until = NULL WHERE id = ?1",
         params![id, at],
@@ -894,9 +909,17 @@ mod tests {
             (0, Some("later"))
         );
         touch_device(&conn, "d1", "t1").unwrap();
+        let d = find_device(&conn, "d1").unwrap().unwrap();
         assert_eq!(
-            find_device(&conn, "d1").unwrap().unwrap().locked_until,
-            None
+            (d.last_used_at.as_deref(), d.locked_until.as_deref()),
+            (Some("t1"), Some("later")),
+            "use alone keeps the lock"
+        );
+        renew_device(&conn, "d1", "t2").unwrap();
+        let d = find_device(&conn, "d1").unwrap().unwrap();
+        assert_eq!(
+            (d.failed_codes, d.locked_until, d.last_used_at.as_deref()),
+            (0, None, Some("t2"))
         );
     }
 

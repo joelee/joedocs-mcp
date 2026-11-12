@@ -639,3 +639,47 @@ fn a_password_change_checked_against_an_old_password_is_refused() {
     );
     fx.store.user_web_session(&session).unwrap();
 }
+
+#[test]
+fn ordinary_use_does_not_lift_a_device_renewal_lock() {
+    let mut fx = fixture();
+    let secret = active_user(&mut fx, "alice");
+    let code = now_code(&fx, &secret);
+    let SignedIn::Session {
+        session, device, ..
+    } = sign_in(&mut fx, "alice", &with_code(&code, Some("laptop"))).unwrap()
+    else {
+        panic!("a session");
+    };
+    let device = device.unwrap();
+    for _ in 0..5 {
+        let _ = fx
+            .store
+            .device_session(&device.credential, "000000", &web(), 30, &OsRandom);
+    }
+    // The session still works (as `GET /admin/v1/me` uses it) ...
+    fx.store
+        .user_api_session(&device.credential, &session, 30)
+        .unwrap();
+    // ... and the renewal lock stays.
+    fx.clock.advance(30);
+    let code = now_code(&fx, &secret);
+    assert!(matches!(
+        refused(
+            fx.store
+                .device_session(&device.credential, &code, &web(), 30, &OsRandom)
+        ),
+        AdminRefusal::Locked { .. }
+    ));
+    // Once it ends, a right code renews and starts the count again.
+    fx.clock.advance(16 * 60);
+    let code = now_code(&fx, &secret);
+    fx.store
+        .device_session(&device.credential, &code, &web(), 30, &OsRandom)
+        .unwrap();
+    let row = &fx
+        .store
+        .devices_of(&fx.store.user("alice").unwrap())
+        .unwrap()[0];
+    assert_eq!((row.failed_codes, row.locked_until.as_deref()), (0, None));
+}

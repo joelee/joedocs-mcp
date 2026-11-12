@@ -538,7 +538,7 @@ impl Store {
             db::record_device_failure(&self.conn, &device.id, lock.as_deref())?;
             return Err(AdminRefusal::Unauthorized.into());
         };
-        db::touch_device(&self.conn, &device.id, &now_text)?;
+        db::renew_device(&self.conn, &device.id, &now_text)?;
         db::record_user_login(&self.conn, &user.id, step, &now_text)?;
         let expires_at = later(now, i64::from(request.session_hours) * 3600);
         let session = generate_prefixed(USER_SESSION_PREFIX, random)?;
@@ -609,7 +609,8 @@ impl Store {
         Ok(db::find_user_by_id(&self.conn, &device.user_id)?)
     }
 
-    /// Checks an API session of a device credential, and records its use.
+    /// Checks an API session of a device credential, and records its use
+    /// (its renewal failures and lock stay).
     ///
     /// # Errors
     ///
