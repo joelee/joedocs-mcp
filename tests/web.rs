@@ -3408,3 +3408,296 @@ async fn an_older_revision_shows_its_own_title_status_type_and_facts() -> TestRe
     assert!(!file_now.body.contains("data-facts=\"current\""));
     server.stop().await
 }
+
+// --- User sign-in and TOTP setup (0.5.1, JD-37 STEP-11) -------------------
+
+const USER_PASSWORD: &str = "a long passphrase of my own";
+
+/// Starts a server with `edit` applied and the user `alice` created;
+/// returns her one-time password too.
+async fn start_with_user(edit: impl FnOnce(&mut Config)) -> TestResult<(Server, String)> {
+    let initial = Arc::new(std::sync::Mutex::new(String::new()));
+    let keep = Arc::clone(&initial);
+    let server = start_full(edit, move |store| {
+        let password = joedocs::password::initial_password(&joedocs::auth::OsRandom)?;
+        let hash = joedocs::password::hash(&password, &joedocs::auth::OsRandom)?;
+        store.create_user("alice", &hash, &joedocs::auth::OsRandom)?;
+        if let Ok(mut slot) = keep.lock() {
+            password.expose_secret().clone_into(&mut slot);
+        }
+        Ok(())
+    })
+    .await?;
+    let password = initial.lock().map(|p| p.clone()).unwrap_or_default();
+    Ok((server, password))
+}
+
+impl Server {
+    /// Posts `fields` from this server's own origin, with `cookie` if any.
+    async fn post_public(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+        fields: &[(&str, &str)],
+    ) -> TestResult<Reply> {
+        let cookie = cookie.map_or_else(String::new, |c| format!("Cookie: {c}\r\n"));
+        let headers = format!(
+            "{cookie}Origin: {}\r\nSec-Fetch-Site: same-origin\r\n",
+            self.origin()
+        );
+        self.send("POST", path, &headers, &form(fields)).await
+    }
+}
+
+/// The `name=value` part of the first cookie `reply` sets named `name`.
+fn set_cookie(reply: &Reply, name: &str) -> Option<String> {
+    reply
+        .cookies()
+        .into_iter()
+        .find(|c| c.starts_with(&format!("{name}=")) && !c.contains("Max-Age=0"))
+        .and_then(|c| c.split(';').next())
+        .map(str::to_owned)
+}
+
+/// The TOTP secret shown on a setup page.
+fn shown_secret(body: &str) -> Option<Vec<u8>> {
+    let start = body.find("id=\"totp-secret\">")? + "id=\"totp-secret\">".len();
+    let end = body[start..].find('<')?;
+    joedocs::totp::base32_decode(&body[start..start + end])
+}
+
+fn code_for(server: &Server, secret: &[u8]) -> String {
+    joedocs::totp::code(
+        secret,
+        joedocs::totp::step_at(server.clock.now().as_second()),
+    )
+}
+
+#[tokio::test]
+async fn a_user_signs_in_on_the_web_after_setting_up_totp_with_a_qr_code() -> TestResult<()> {
+    let (server, initial) = start_with_user(|_| {}).await?;
+    let page = server.get("/admin/login", None).await?;
+    assert!(
+        page.body.contains("action=\"/admin/sign-in\""),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body.contains("name=\"token\""),
+        "the token form while token_login is on"
+    );
+    assert_eq!(html_problems(&page.body), Vec::<String>::new());
+    let signed = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[("user", "alice"), ("password", &initial)],
+        )
+        .await?;
+    assert_eq!(signed.status, 303, "{}", signed.body);
+    assert_eq!(signed.header("location"), Some("/admin/setup"));
+    let ticket = set_cookie(&signed, "joedocs_setup").ok_or("no setup cookie")?;
+    assert!(ticket.contains("=jdt_"), "{ticket}");
+    assert!(
+        set_cookie(&signed, "joedocs_session").is_none(),
+        "no session before setup"
+    );
+    let setup = server.get("/admin/setup", Some(&ticket)).await?;
+    assert_eq!(setup.status, 200, "{}", setup.body);
+    assert!(setup.body.contains("<svg"), "an inline QR code");
+    assert!(
+        setup.body.contains("otpauth://totp/JoeDocs:alice?"),
+        "{}",
+        setup.body
+    );
+    assert_eq!(setup.header("content-security-policy"), Some(CSP));
+    assert_eq!(html_problems(&setup.body), Vec::<String>::new());
+    let secret = shown_secret(&setup.body).ok_or("no secret on the page")?;
+    let done = server
+        .post_public(
+            "/admin/setup",
+            Some(&ticket),
+            &[
+                ("code", &code_for(&server, &secret)),
+                ("password", USER_PASSWORD),
+                ("password_again", USER_PASSWORD),
+            ],
+        )
+        .await?;
+    assert_eq!(done.status, 303, "{}", done.body);
+    let cookie = set_cookie(&done, "joedocs_session").ok_or("no session cookie")?;
+    assert!(cookie.contains("=jdv_"), "{cookie}");
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    assert_eq!(home.status, 200, "{}", home.body);
+    assert!(home.body.contains("alice"), "the chrome names the user");
+    // Later sign-ins take the password and a code.
+    server.clock.advance(30);
+    let again = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[
+                ("user", "alice"),
+                ("password", USER_PASSWORD),
+                ("code", &code_for(&server, &secret)),
+            ],
+        )
+        .await?;
+    assert_eq!(again.status, 303, "{}", again.body);
+    assert!(set_cookie(&again, "joedocs_session").is_some());
+    let audit = server.audit()?;
+    for tool in [
+        "admin:auth.login",
+        "admin:web.setup_page",
+        "admin:auth.setup",
+    ] {
+        assert!(
+            audit
+                .iter()
+                .any(|(t, c, o)| t == tool && c == "joedocs-web" && o == "ok"),
+            "{tool}: {audit:?}"
+        );
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn setup_re_shows_its_page_for_a_weak_or_mismatched_password_or_a_wrong_code()
+-> TestResult<()> {
+    let (server, initial) = start_with_user(|_| {}).await?;
+    let signed = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[("user", "alice"), ("password", &initial)],
+        )
+        .await?;
+    let ticket = set_cookie(&signed, "joedocs_setup").ok_or("no setup cookie")?;
+    let setup = server.get("/admin/setup", Some(&ticket)).await?;
+    let secret = shown_secret(&setup.body).ok_or("no secret")?;
+    let code = code_for(&server, &secret);
+    let mismatched = server
+        .post_public(
+            "/admin/setup",
+            Some(&ticket),
+            &[
+                ("code", &code),
+                ("password", USER_PASSWORD),
+                ("password_again", "something else entirely"),
+            ],
+        )
+        .await?;
+    assert_eq!(mismatched.status, 400);
+    assert!(mismatched.body.contains("differ"), "{}", mismatched.body);
+    let weak = server
+        .post_public(
+            "/admin/setup",
+            Some(&ticket),
+            &[
+                ("code", &code),
+                ("password", "alice"),
+                ("password_again", "alice"),
+            ],
+        )
+        .await?;
+    assert_eq!(weak.status, 400);
+    assert!(weak.body.contains("too short"), "{}", weak.body);
+    let wrong = server
+        .post_public(
+            "/admin/setup",
+            Some(&ticket),
+            &[
+                ("code", "000000"),
+                ("password", USER_PASSWORD),
+                ("password_again", USER_PASSWORD),
+            ],
+        )
+        .await?;
+    assert_eq!(wrong.status, 401);
+    assert!(wrong.body.contains("not accepted"), "{}", wrong.body);
+    assert!(wrong.body.contains("<svg"), "the same QR code again");
+    // Without the ticket, the sign-in form.
+    let lapsed = server.get("/admin/setup", None).await?;
+    assert_eq!(lapsed.status, 401);
+    assert!(lapsed.body.contains("action=\"/admin/sign-in\""));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn sign_in_refusals_are_the_same_whatever_was_wrong_and_need_the_same_origin()
+-> TestResult<()> {
+    let (server, _initial) = start_with_user(|_| {}).await?;
+    let mut bodies = Vec::new();
+    for (user, password) in [
+        ("alice", "not the password"),
+        ("nobody", "not the password"),
+    ] {
+        let reply = server
+            .post_public(
+                "/admin/sign-in",
+                None,
+                &[("user", user), ("password", password), ("code", "123456")],
+            )
+            .await?;
+        assert_eq!(reply.status, 401);
+        bodies.push(reply.body);
+    }
+    assert_eq!(bodies[0], bodies[1]);
+    let foreign = server
+        .send(
+            "POST",
+            "/admin/sign-in",
+            "Origin: https://evil.example\r\nSec-Fetch-Site: cross-site\r\n",
+            &form(&[("user", "alice"), ("password", "x")]),
+        )
+        .await?;
+    assert_eq!(foreign.status, 403);
+    let audit = server.audit()?;
+    let refused: Vec<_> = audit
+        .iter()
+        .filter(|(t, _, _)| t == "admin:auth.login")
+        .collect();
+    assert_eq!(refused.len(), 3, "{audit:?}");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn switching_token_login_off_hides_and_refuses_the_token_form_and_its_sessions()
+-> TestResult<()> {
+    // A token web session opened in the store before the server starts.
+    let opened = Arc::new(std::sync::Mutex::new(String::new()));
+    let keep = Arc::clone(&opened);
+    let server = start_full(
+        |c| c.admin.token_login = false,
+        move |store| {
+            let token = store.create_admin_token("old", &joedocs::auth::OsRandom)?;
+            let secret = joedocs::totp::base32_decode(token.totp_secret.expose_secret())
+                .ok_or("bad base32")?;
+            let code = joedocs::totp::code(&secret, joedocs::totp::step_at(1_793_000_000));
+            let session = store.web_login(&token.token, &code, 8, &joedocs::auth::OsRandom)?;
+            if let Ok(mut slot) = keep.lock() {
+                session.token.expose_secret().clone_into(&mut slot);
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    let session = opened.lock().map(|s| s.clone()).unwrap_or_default();
+    assert!(session.starts_with("jdw_"));
+    let page = server.get("/admin/login", None).await?;
+    assert!(!page.body.contains("name=\"token\""), "{}", page.body);
+    let posted = server.post_login(&server.code(), "/admin/").await?;
+    assert_eq!(posted.status, 401);
+    assert!(posted.body.contains("admin.token_login"), "{}", posted.body);
+    let refused = server
+        .get("/admin/", Some(&format!("joedocs_session={session}")))
+        .await?;
+    assert_eq!(refused.status, 303, "a token session no longer opens pages");
+    assert!(
+        refused
+            .header("location")
+            .unwrap_or_default()
+            .starts_with("/admin/login")
+    );
+    server.stop().await
+}

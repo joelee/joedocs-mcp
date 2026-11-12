@@ -403,3 +403,10 @@ summary.callout-title { cursor: pointer; }
   --pele-font-mono: var(--mono);
   --pele-radius: var(--radius);
 }
+
+/* User sign-in and TOTP setup (0.5.1) */
+.token-sign-in { margin-top: var(--space-4); }
+.setup { max-width: 32rem; }
+.qr { margin: var(--space-3) 0; max-width: 16rem; background: #fff; padding: var(--space-2); border-radius: var(--radius); }
+.qr svg { display: block; width: 100%; height: auto; }
+code.break { overflow-wrap: anywhere; }

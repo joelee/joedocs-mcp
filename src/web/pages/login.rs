@@ -18,11 +18,13 @@ struct LoginPage<'a> {
     assets: Urls,
     next: &'a str,
     error: Option<&'a str>,
+    /// Whether the admin-token form is shown (`admin.token_login`).
+    token_login: bool,
 }
 
 /// The login form, with `error` shown above it.
 pub(crate) fn form(
-    _state: &WebState,
+    state: &WebState,
     request: &WebRequest,
     status: StatusCode,
     error: Option<&str>,
@@ -35,6 +37,7 @@ pub(crate) fn form(
             assets: assets::urls(),
             next: &next,
             error,
+            token_login: state.token_login,
         },
     )
 }
@@ -54,6 +57,12 @@ pub(crate) fn submit(
         let message = "Signing in needs HTTPS: open this site with https://, or on the server itself with http://localhost.";
         let page = form(state, request, StatusCode::BAD_REQUEST, Some(message));
         let refused = WebError::new(StatusCode::BAD_REQUEST, "invalid_argument", message);
+        return (None, Err(refused.with_page(page)));
+    }
+    if !state.token_login {
+        let message = "Admin tokens are switched off on this server (admin.token_login = false); sign in as a user.";
+        let page = form(state, request, StatusCode::UNAUTHORIZED, Some(message));
+        let refused = WebError::new(StatusCode::UNAUTHORIZED, "unauthorized", message);
         return (None, Err(refused.with_page(page)));
     }
     let token = SecretString::from(request.form("token").unwrap_or("").trim().to_owned());
@@ -92,7 +101,11 @@ fn refused(state: &WebState, request: &WebRequest, error: &Error) -> WebError {
 
 /// `POST /admin/logout`: ends the session and clears the cookie.
 pub(crate) fn logout(store: &Store, session: &Session) -> Response {
-    if let Err(error) = store.end_web_session(&session.token) {
+    let ended = match &session.admin {
+        Admin::User(_) => store.end_user_session(&session.token, false).map(|_| ()),
+        Admin::Token(_) => store.end_web_session(&session.token).map(|_| ()),
+    };
+    if let Err(error) = ended {
         tracing::warn!(%error, "cannot end a web session");
     }
     let mut reply = redirect("/admin/login");

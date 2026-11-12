@@ -147,6 +147,17 @@ pub struct UserSession {
     pub session_id: String,
 }
 
+/// What the web setup page shows for a ticket.
+#[derive(Debug)]
+pub struct SetupView {
+    /// The user.
+    pub user: UserRow,
+    /// The TOTP secret being set up, if one is.
+    pub totp: Option<NewTotp>,
+    /// When the ticket lapses.
+    pub expires_at: String,
+}
+
 /// What [`Store::setup_begin`] found: the user, and whether a TOTP code is
 /// due as well as the new password.
 #[derive(Debug, Clone)]
@@ -392,6 +403,31 @@ impl Store {
     pub fn setup_begin(&self, ticket: &SecretString) -> Result<SetupBegin, Error> {
         let (user, totp) = self.ticket_user(ticket)?;
         Ok(SetupBegin { user, totp })
+    }
+
+    /// What the web setup page shows for a ticket: the user and, when an
+    /// authenticator is being set up, its secret and URI again (the page
+    /// can be reloaded within the ticket's ten minutes).
+    ///
+    /// # Errors
+    ///
+    /// As [`Store::setup_begin`].
+    pub fn setup_view(&self, ticket: &SecretString) -> Result<SetupView, Error> {
+        let (user, _) = self.ticket_user(ticket)?;
+        let secrets = db::user_secrets(&self.conn, &user.id)?
+            .ok_or_else(|| Error::UserNotFound(user.name.clone()))?;
+        let totp = secrets.totp_pending_secret.map(|secret| {
+            let base32 = totp::base32_encode(&secret);
+            NewTotp {
+                uri: SecretString::from(totp::otpauth_uri(&user.name, &base32)),
+                secret: SecretString::from(base32),
+            }
+        });
+        Ok(SetupView {
+            user,
+            totp,
+            expires_at: secrets.totp_pending_until.unwrap_or_default(),
+        })
     }
 
     fn ticket_user(&self, ticket: &SecretString) -> Result<(UserRow, bool), Error> {

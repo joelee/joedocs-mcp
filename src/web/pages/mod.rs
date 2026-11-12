@@ -12,6 +12,7 @@ pub(crate) mod maintenance;
 mod overview;
 mod projects;
 mod search;
+pub(crate) mod setup;
 
 use askama::Template;
 use axum::http::StatusCode;

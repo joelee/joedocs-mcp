@@ -19,6 +19,65 @@ pub const SECURE_COOKIE: &str = "__Host-joedocs_session";
 /// The cookie name over loopback HTTP.
 pub const PLAIN_COOKIE: &str = "joedocs_session";
 
+/// The setup ticket cookie over HTTPS (TOTP setup at the first sign-in).
+pub const SECURE_SETUP_COOKIE: &str = "__Host-joedocs_setup";
+/// The setup ticket cookie over loopback HTTP.
+pub const PLAIN_SETUP_COOKIE: &str = "joedocs_setup";
+
+/// The setup ticket in the request's cookies, preferring the `__Host-`
+/// cookie.
+#[must_use]
+pub fn setup_cookie(headers: &HeaderMap) -> Option<SecretString> {
+    named_cookie(headers, SECURE_SETUP_COOKIE, PLAIN_SETUP_COOKIE)
+}
+
+/// The `Set-Cookie` value that stores a setup `ticket` for `max_age`
+/// seconds. A `__Host-` cookie must have `Path=/`.
+#[must_use]
+pub fn set_setup_cookie(ticket: &SecretString, secure: bool, max_age: u64) -> SecretString {
+    let name = if secure {
+        SECURE_SETUP_COOKIE
+    } else {
+        PLAIN_SETUP_COOKIE
+    };
+    let secure = if secure { "; Secure" } else { "" };
+    SecretString::from(format!(
+        "{name}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{secure}",
+        ticket.expose_secret()
+    ))
+}
+
+/// The `Set-Cookie` values that clear both setup cookie names.
+#[must_use]
+pub fn clear_setup_cookies() -> [&'static str; 2] {
+    [
+        "__Host-joedocs_setup=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Secure",
+        "joedocs_setup=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+    ]
+}
+
+fn named_cookie(headers: &HeaderMap, secure: &str, plain_name: &str) -> Option<SecretString> {
+    let mut plain = None;
+    for value in headers.get_all(header::COOKIE) {
+        let Ok(value) = value.to_str() else { continue };
+        for pair in value.split(';') {
+            let Some((name, token)) = pair.trim().split_once('=') else {
+                continue;
+            };
+            if token.is_empty() {
+                continue;
+            }
+            if name == secure {
+                return Some(SecretString::from(token.to_owned()));
+            }
+            if name == plain_name {
+                plain = Some(SecretString::from(token.to_owned()));
+            }
+        }
+    }
+    plain
+}
+
 /// What the CSRF token is derived for, so the HMAC of the session secret
 /// cannot be confused with any other use of it.
 const CSRF_LABEL: &[u8] = b"joedocs-web-csrf-v1";
