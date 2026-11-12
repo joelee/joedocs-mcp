@@ -471,26 +471,37 @@ impl<'a> Remote<'a> {
     /// also revokes this device and forgets it. Returns whether there was
     /// anything to end.
     ///
+    /// The device is forgotten here only once the server has revoked it,
+    /// or says it is no longer valid; an expired session is renewed first
+    /// with a code (never a full sign-in).
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::Unreachable`] and [`Error::Io`].
+    /// Returns [`Error::Auth`] when the session cannot be renewed (no
+    /// terminal, or the code refused), [`Error::Unreachable`],
+    /// [`Error::Io`], and the server's refusal; the device then stays.
     pub fn auth_logout(&self, forget_device: bool) -> Result<bool, Error> {
         let user = self.user()?.to_owned();
         let Some(entry) = self.devices.get(&self.server, &user)? else {
             return Ok(false);
         };
-        if forget_device {
-            let path = format!("me/devices/{}/revoke", crate::percent_encode(&entry.device));
-            let reply = self.send(reqwest::Method::POST, &path, entry.session.as_deref(), None)?;
-            self.devices.remove(&self.server, &user)?;
-            if !(200..300).contains(&reply.status) && !self.device_refused(&reply)? {
-                // Revoked on the server, or not: either way the device is
-                // forgotten here; `auth devices` lists what is left.
-                tracing::debug!(status = reply.status, "device revocation reply");
-            }
-            return Ok(true);
+        if !forget_device {
+            return self.logout();
         }
-        self.logout()
+        let path = format!("me/devices/{}/revoke", crate::percent_encode(&entry.device));
+        let mut reply = self.send(reqwest::Method::POST, &path, entry.session.as_deref(), None)?;
+        if reply.is_session_refusal() {
+            let message = format!("Session expired. Code for {}: ", self.server);
+            let (_, fresh) = self.renew_with_prompts(&message)?;
+            reply = self.send(reqwest::Method::POST, &path, Some(&fresh.token), None)?;
+        }
+        let invalid =
+            reply.status == 401 && reply.json()["error"]["code"].as_str() == Some("device_invalid");
+        if !invalid {
+            reply.into_result()?;
+        }
+        self.devices.remove(&self.server, &user)?;
+        Ok(true)
     }
 
     /// `joedocs auth password`: asks for the current password, a code and

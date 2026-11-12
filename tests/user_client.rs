@@ -93,6 +93,17 @@ impl Server {
     /// Runs `args` through the library with `prompt`, as the binary would,
     /// with `JOEDOCS_ADMIN_TOKEN` set when `token`.
     fn run(&self, prompt: &Terminal, token: bool, args: &[&str]) -> Result<String, joedocs::Error> {
+        self.run_at(&self.url, prompt, token, args)
+    }
+
+    /// As [`Server::run`], against the server at `url`.
+    fn run_at(
+        &self,
+        url: &str,
+        prompt: &Terminal,
+        token: bool,
+        args: &[&str],
+    ) -> Result<String, joedocs::Error> {
         use clap::Parser as _;
         let mut env = joedocs::env::MapEnv::new()
             .with("HOME", self.root.path().to_str().unwrap_or_default())
@@ -113,7 +124,7 @@ impl Server {
             services: &Host,
             prompt,
         };
-        let mut full = vec!["joedocs", "--server", self.url.as_str()];
+        let mut full = vec!["joedocs", "--server", url];
         full.extend_from_slice(args);
         let cli = joedocs::Cli::try_parse_from(full)
             .map_err(|e| joedocs::Error::Output(std::io::Error::other(e.to_string())))?;
@@ -475,4 +486,161 @@ fn signing_in_never_logs_a_password_code_or_credential() {
             "{secret}"
         );
     }
+}
+
+// --- Review fixes (0.5.1, JD-39) --------------------------------------------
+
+/// A server that answers every request with `status` and the JSON `body`.
+fn fake_server(status: &'static str, body: &'static str) -> TestResult<String> {
+    use std::io::{Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}", listener.local_addr()?);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut seen = Vec::new();
+            let mut buf = [0_u8; 4096];
+            while let Ok(n) = stream.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                seen.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&seen);
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if seen.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let reply = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
+    Ok(url)
+}
+
+/// Stores a made-up device of alice's for the server at `url`.
+fn store_device(server: &Server, url: &str) -> TestResult<PathBuf> {
+    let dir = server.state_home().join("joedocs");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("devices.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[[device]]\nserver = \"{url}\"\nuser = \"alice\"\ndevice = \"phoenix\"\ncredential = \"jdd_0011_2233\"\nsession = \"jdu_4455_6677\"\nexpires_at = \"2099-01-01T00:00:00Z\"\n"
+        ),
+    )?;
+    Ok(path)
+}
+
+#[test]
+fn forgetting_a_device_with_an_expired_session_renews_it_then_revokes_the_device() {
+    let server = Server::start().unwrap();
+    let terminal = server.first_sign_in().unwrap();
+    let devices = server.state_home().join("joedocs/devices.toml");
+    let saved = std::fs::read_to_string(&devices).unwrap();
+    server.clock.advance(9 * 3600);
+    terminal.asked.borrow_mut().clear();
+    let out = server
+        .run(
+            &terminal,
+            false,
+            &["--user", "alice", "auth", "logout", "--forget-device"],
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        format!("Signed out and forgot this device on {}.\n", server.url)
+    );
+    assert!(!std::fs::read_to_string(&devices).unwrap().contains("jdd_"));
+    let asked = terminal.asked.borrow().join("\n");
+    assert!(asked.contains("Session expired. Code for"), "{asked}");
+    assert!(!asked.contains("Password"), "never a full sign-in: {asked}");
+    // The server revoked it: the old credential is refused as a device.
+    std::fs::write(&devices, saved).unwrap();
+    let quiet = Terminal::quiet(Arc::clone(&server.clock));
+    let refused = server
+        .run(&quiet, false, &["--user", "alice", "auth", "status"])
+        .unwrap_err();
+    assert!(refused.to_string().contains("has ended"), "{refused}");
+}
+
+#[test]
+fn forgetting_a_device_without_a_terminal_or_on_a_server_error_keeps_it() {
+    let server = Server::start().unwrap();
+    server.first_sign_in().unwrap();
+    let devices = server.state_home().join("joedocs/devices.toml");
+    server.clock.advance(9 * 3600);
+    let quiet = Terminal::quiet(Arc::clone(&server.clock));
+    let refused = server
+        .run(
+            &quiet,
+            false,
+            &["--user", "alice", "auth", "logout", "--forget-device"],
+        )
+        .unwrap_err();
+    assert_eq!(refused.exit_code(), 77, "{refused}");
+    assert!(std::fs::read_to_string(&devices).unwrap().contains("jdd_"));
+    // A server error is reported, and the device stays.
+    let url = fake_server(
+        "500 Internal Server Error",
+        r#"{"error": {"code": "internal", "message": "something broke"}}"#,
+    )
+    .unwrap();
+    let path = store_device(&server, &url).unwrap();
+    let failed = server
+        .run_at(
+            &url,
+            &quiet,
+            false,
+            &["--user", "alice", "auth", "logout", "--forget-device"],
+        )
+        .unwrap_err();
+    assert_ne!(failed.exit_code(), 0);
+    assert!(failed.to_string().contains("something broke"), "{failed}");
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("jdd_0011_2233")
+    );
+}
+
+#[test]
+fn forgetting_a_device_the_server_already_refuses_succeeds() {
+    let server = Server::start().unwrap();
+    let terminal = server.first_sign_in().unwrap();
+    let devices = server.state_home().join("joedocs/devices.toml");
+    let saved = std::fs::read_to_string(&devices).unwrap();
+    server
+        .run(
+            &terminal,
+            false,
+            &["--user", "alice", "auth", "devices", "revoke", "phoenix"],
+        )
+        .unwrap();
+    std::fs::write(&devices, saved).unwrap();
+    let quiet = Terminal::quiet(Arc::clone(&server.clock));
+    let out = server
+        .run(
+            &quiet,
+            false,
+            &["--user", "alice", "auth", "logout", "--forget-device"],
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        format!("Signed out and forgot this device on {}.\n", server.url)
+    );
+    assert!(!std::fs::read_to_string(&devices).unwrap().contains("jdd_"));
 }
