@@ -683,3 +683,90 @@ fn ordinary_use_does_not_lift_a_device_renewal_lock() {
         .unwrap()[0];
     assert_eq!((row.failed_codes, row.locked_until.as_deref()), (0, None));
 }
+
+/// Five failed sign-ins of `name`.
+fn fail_five_times(fx: &mut Fixture, name: &str) {
+    for _ in 0..5 {
+        let begin = fx.store.sign_in_begin(name).unwrap();
+        let _ = fx
+            .store
+            .sign_in_finish(&begin, WRONG, None, &web(), &OsRandom);
+    }
+}
+
+fn locked_now(fx: &Fixture, name: &str) -> bool {
+    fx.store.sign_in_begin(name).unwrap().locked().is_some()
+}
+
+#[test]
+fn a_flood_of_unknown_names_never_moves_a_real_users_count() {
+    let mut fx = fixture();
+    active_user(&mut fx, "alice");
+    active_user(&mut fx, "bob");
+    fx.store.cap_unknown_names(50);
+    fail_five_times(&mut fx, "alice");
+    for _ in 0..2 {
+        fx.store.record_sign_in_failure("bob").unwrap();
+    }
+    for i in 0..500 {
+        fx.store
+            .record_sign_in_failure(&format!("made-up-{i}"))
+            .unwrap();
+        assert!(fx.store.unknown_names_held() <= 50);
+    }
+    assert!(locked_now(&fx, "alice"), "alice's lock stays");
+    let bob = fx.store.user("bob").unwrap();
+    assert_eq!(
+        crate::db::throttle_of(&fx.store.conn, &bob.id)
+            .unwrap()
+            .unwrap()
+            .failures,
+        2,
+        "bob's count stays"
+    );
+    // Three more for bob still lock him: his count was not reset.
+    for _ in 0..3 {
+        fx.store.record_sign_in_failure("bob").unwrap();
+    }
+    assert!(locked_now(&fx, "bob"));
+    // No row holds a typed name; there is one row per real user.
+    assert_eq!(crate::db::throttle_rows(&fx.store.conn).unwrap(), 2);
+}
+
+#[test]
+fn reopening_keeps_real_users_locks_and_forgets_unknown_names() {
+    let mut fx = fixture();
+    active_user(&mut fx, "alice");
+    fail_five_times(&mut fx, "alice");
+    fail_five_times(&mut fx, "nobody");
+    assert!(locked_now(&fx, "alice") && locked_now(&fx, "nobody"));
+    let reopened = super::reopen_with_index_file(&fx, false);
+    fx.store = reopened;
+    assert!(
+        locked_now(&fx, "alice"),
+        "a real user's lock is in the database"
+    );
+    assert!(
+        !locked_now(&fx, "nobody"),
+        "unknown names live in memory only"
+    );
+}
+
+#[test]
+fn unlock_and_remove_clear_a_real_users_lock_and_a_removed_name_counts_in_memory() {
+    let mut fx = fixture();
+    active_user(&mut fx, "alice");
+    active_user(&mut fx, "bob");
+    fail_five_times(&mut fx, "alice");
+    fx.store.unlock_user("alice").unwrap();
+    assert!(!locked_now(&fx, "alice"));
+    fail_five_times(&mut fx, "bob");
+    fx.store.remove_user("bob").unwrap();
+    assert_eq!(crate::db::throttle_rows(&fx.store.conn).unwrap(), 0);
+    assert!(!locked_now(&fx, "bob"));
+    // A removed user's name is now an unknown one, counted in memory.
+    fail_five_times(&mut fx, "bob");
+    assert!(locked_now(&fx, "bob"));
+    assert_eq!(crate::db::throttle_rows(&fx.store.conn).unwrap(), 0);
+    assert_eq!(fx.store.unknown_names_held(), 1);
+}

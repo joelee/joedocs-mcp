@@ -1,4 +1,6 @@
-//! User, device, user session and sign-in throttle queries (migration 7).
+//! User, device, user session and sign-in throttle queries (migrations 7
+//! and 8). The throttle here holds real users only, by user ID; other names
+//! are counted in memory (`crate::store`'s `throttle` module).
 //!
 //! Rows that callers pass around ([`UserRow`], [`DeviceRow`],
 //! [`UserSessionRow`]) never hold a secret; what a sign-in checks is read
@@ -7,9 +9,6 @@
 use rusqlite::{Connection, OptionalExtension as _, Row, params};
 
 use super::SessionKind;
-
-/// Most rows the sign-in throttle keeps; the least recently touched go first.
-pub const THROTTLE_CAP: usize = 10_000;
 
 /// A stored user (never its password hash or TOTP secret).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -681,15 +680,15 @@ pub fn revoke_user_session(conn: &Connection, id: &str, at: &str) -> rusqlite::R
     Ok(())
 }
 
-/// The throttle's record for `name`, if any.
+/// The throttle's record for the user `user_id`, if any.
 ///
 /// # Errors
 ///
 /// Returns an error when the query fails.
-pub fn throttle_of(conn: &Connection, name: &str) -> rusqlite::Result<Option<ThrottleRow>> {
+pub fn throttle_of(conn: &Connection, user_id: &str) -> rusqlite::Result<Option<ThrottleRow>> {
     conn.query_row(
-        "SELECT failures, locked_until FROM sign_in_throttle WHERE name = ?1",
-        [name],
+        "SELECT failures, locked_until FROM sign_in_throttle WHERE user_id = ?1",
+        [user_id],
         |row| {
             Ok(ThrottleRow {
                 failures: row.get(0)?,
@@ -700,17 +699,17 @@ pub fn throttle_of(conn: &Connection, name: &str) -> rusqlite::Result<Option<Thr
     .optional()
 }
 
-/// Records a failed sign-in for `name`: counts it, and locks the name until
-/// `lock_until` when given (resetting the count). Rows not touched since
-/// `prune_before` are deleted first, and the table is kept to
-/// [`THROTTLE_CAP`] rows.
+/// Records a failed sign-in for the user `user_id`: counts it, and locks
+/// the user's sign-ins until `lock_until` when given (resetting the count).
+/// Rows not touched since `prune_before` whose lock has ended are deleted
+/// first. Rows are never deleted for room: there is one per user at most.
 ///
 /// # Errors
 ///
 /// Returns an error when a statement fails.
 pub fn throttle_failure(
     conn: &Connection,
-    name: &str,
+    user_id: &str,
     lock_until: Option<&str>,
     at: &str,
     prune_before: &str,
@@ -723,33 +722,27 @@ pub fn throttle_failure(
     let (failures, locked) = match lock_until {
         Some(until) => (0, Some(until)),
         None => (
-            throttle_of(conn, name)?.map_or(0, |row| row.failures) + 1,
+            throttle_of(conn, user_id)?.map_or(0, |row| row.failures) + 1,
             None,
         ),
     };
     conn.execute(
-        "INSERT INTO sign_in_throttle (name, failures, locked_until, updated_at)
+        "INSERT INTO sign_in_throttle (user_id, failures, locked_until, updated_at)
          VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (name) DO UPDATE SET failures = ?2, locked_until = ?3, updated_at = ?4",
-        params![name, failures, locked, at],
-    )?;
-    let cap = i64::try_from(THROTTLE_CAP).unwrap_or(i64::MAX);
-    conn.execute(
-        "DELETE FROM sign_in_throttle WHERE name IN (
-             SELECT name FROM sign_in_throttle ORDER BY updated_at DESC, name LIMIT -1 OFFSET ?1)",
-        [cap],
+         ON CONFLICT (user_id) DO UPDATE SET failures = ?2, locked_until = ?3, updated_at = ?4",
+        params![user_id, failures, locked, at],
     )?;
     Ok(())
 }
 
-/// Forgets the throttle's record for `name` (a success or an admin's
-/// `unlock`).
+/// Forgets the throttle's record for the user `user_id` (a success, an
+/// admin's `unlock`, or a removal).
 ///
 /// # Errors
 ///
 /// Returns an error when the statement fails.
-pub fn throttle_clear(conn: &Connection, name: &str) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM sign_in_throttle WHERE name = ?1", [name])?;
+pub fn throttle_clear(conn: &Connection, user_id: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM sign_in_throttle WHERE user_id = ?1", [user_id])?;
     Ok(())
 }
 
@@ -953,52 +946,57 @@ mod tests {
     }
 
     #[test]
-    fn the_throttle_counts_locks_prunes_and_is_capped() {
+    fn the_throttle_counts_locks_and_prunes_only_ended_locks() {
         let (_dir, conn) = db();
-        throttle_failure(&conn, "alice", None, "2026-01-01T00:00:00Z", "2000").unwrap();
-        throttle_failure(&conn, "alice", None, "2026-01-01T00:00:01Z", "2000").unwrap();
-        assert_eq!(throttle_of(&conn, "alice").unwrap().unwrap().failures, 2);
+        for (id, name) in [
+            ("u1", "alice"),
+            ("u2", "bob"),
+            ("u3", "carol"),
+            ("u4", "dave"),
+        ] {
+            insert_user(&conn, id, name, "h", "u", "t").unwrap();
+        }
+        throttle_failure(&conn, "u1", None, "2026-01-01T00:00:00Z", "2000").unwrap();
+        throttle_failure(&conn, "u1", None, "2026-01-01T00:00:01Z", "2000").unwrap();
+        assert_eq!(throttle_of(&conn, "u1").unwrap().unwrap().failures, 2);
         throttle_failure(
             &conn,
-            "alice",
+            "u1",
             Some("2026-01-01T00:15:00Z"),
             "2026-01-01T00:00:02Z",
             "2000",
         )
         .unwrap();
-        let row = throttle_of(&conn, "alice").unwrap().unwrap();
+        let row = throttle_of(&conn, "u1").unwrap().unwrap();
         assert_eq!(
             (row.failures, row.locked_until.as_deref()),
             (0, Some("2026-01-01T00:15:00Z"))
         );
-        throttle_failure(&conn, "nobody", None, "2026-01-01T00:00:03Z", "2000").unwrap();
-        // A write at 00:20 prunes rows untouched since 00:05 whose lock has
-        // ended: both.
+        throttle_failure(&conn, "u2", None, "2026-01-01T00:00:03Z", "2000").unwrap();
         throttle_failure(
             &conn,
-            "carol",
+            "u4",
+            Some("2026-01-01T09:00:00Z"),
+            "2026-01-01T00:00:04Z",
+            "2000",
+        )
+        .unwrap();
+        // A write at 00:20 prunes rows untouched since 00:16 whose lock has
+        // ended: alice's and bob's, not dave's, locked until 09:00.
+        throttle_failure(
+            &conn,
+            "u3",
             None,
             "2026-01-01T00:20:00Z",
             "2026-01-01T00:16:00Z",
         )
         .unwrap();
-        assert_eq!(throttle_of(&conn, "alice").unwrap(), None);
-        assert_eq!(throttle_of(&conn, "nobody").unwrap(), None);
-        assert_eq!(throttle_rows(&conn).unwrap(), 1);
-        throttle_clear(&conn, "carol").unwrap();
+        assert_eq!(throttle_of(&conn, "u1").unwrap(), None);
+        assert_eq!(throttle_of(&conn, "u2").unwrap(), None);
+        assert!(throttle_of(&conn, "u4").unwrap().is_some());
+        assert_eq!(throttle_rows(&conn).unwrap(), 2);
+        throttle_clear(&conn, "u3").unwrap();
+        throttle_clear(&conn, "u4").unwrap();
         assert_eq!(throttle_rows(&conn).unwrap(), 0);
-
-        let tx = conn.unchecked_transaction().unwrap();
-        for i in 0..THROTTLE_CAP {
-            tx.execute(
-                "INSERT INTO sign_in_throttle (name, failures, updated_at) VALUES (?1, 1, ?2)",
-                params![format!("n{i}"), format!("2026-01-01T00:{:02}:00Z", i % 60)],
-            )
-            .unwrap();
-        }
-        tx.commit().unwrap();
-        throttle_failure(&conn, "newest", None, "2026-01-01T01:00:00Z", "2000").unwrap();
-        assert_eq!(throttle_rows(&conn).unwrap(), THROTTLE_CAP);
-        assert!(throttle_of(&conn, "newest").unwrap().is_some());
     }
 }

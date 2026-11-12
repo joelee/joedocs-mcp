@@ -116,7 +116,7 @@ impl Store {
         let now = self.now();
         let mut listed = Vec::new();
         for row in db::list_users(&self.conn)? {
-            let locked = db::throttle_of(&self.conn, &row.name)?
+            let locked = db::throttle_of(&self.conn, &row.id)?
                 .and_then(|t| t.locked_until)
                 .filter(|until| *until > now);
             let devices = db::devices_of(&self.conn, &row.id)?
@@ -183,7 +183,7 @@ impl Store {
     /// As [`Store::user`].
     pub fn unlock_user(&mut self, name: &str) -> Result<UserRow, Error> {
         let row = live_user(&self.conn, name)?;
-        db::throttle_clear(&self.conn, name)?;
+        db::throttle_clear(&self.conn, &row.id)?;
         Ok(row)
     }
 
@@ -238,7 +238,7 @@ impl Store {
         let row = live_user(&tx, name)?;
         db::set_user_removed(&tx, &row.id, &now)?;
         db::revoke_all_of(&tx, &row.id, None, &now)?;
-        db::throttle_clear(&tx, name)?;
+        db::throttle_clear(&tx, &row.id)?;
         let row = db::find_user_by_id(&tx, &row.id)?
             .ok_or_else(|| Error::UserNotFound(name.to_owned()))?;
         tx.commit()?;

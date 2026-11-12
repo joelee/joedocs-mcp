@@ -211,6 +211,40 @@ impl Server {
         Ok(std::fs::read(self.dir.path().join("state/joedocs.db"))?)
     }
 
+    /// The bytes of the database's write-ahead log, if it has one.
+    fn database_wal(&self) -> TestResult<Vec<u8>> {
+        let path = self.dir.path().join("state/joedocs.db-wal");
+        Ok(if path.exists() {
+            std::fs::read(path)?
+        } else {
+            Vec::new()
+        })
+    }
+
+    /// Every text value in every table of the database, read through SQL
+    /// (so pages still in the write-ahead log count too).
+    fn database_text(&self) -> TestResult<Vec<String>> {
+        let conn = rusqlite::Connection::open(self.dir.path().join("state/joedocs.db"))?;
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        let mut texts = Vec::new();
+        for table in tables {
+            let mut stmt = conn.prepare(&format!("SELECT * FROM \"{table}\""))?;
+            let columns = stmt.column_count();
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                for i in 0..columns {
+                    if let rusqlite::types::ValueRef::Text(text) = row.get_ref(i)? {
+                        texts.push(String::from_utf8_lossy(text).into_owned());
+                    }
+                }
+            }
+        }
+        Ok(texts)
+    }
+
     async fn stop(mut self) -> TestResult<()> {
         if let Some(stop) = self.stop.take() {
             stop.send(()).ok();
@@ -555,6 +589,21 @@ async fn no_password_code_ticket_or_credential_reaches_the_audit_log() -> TestRe
     assert!(
         !database.contains(PASSWORD),
         "no password in the database file"
+    );
+    let wal = String::from_utf8_lossy(&server.database_wal()?).into_owned();
+    assert!(
+        !wal.contains(PASSWORD),
+        "no password in the write-ahead log"
+    );
+    let typed: Vec<_> = server
+        .database_text()?
+        .into_iter()
+        .filter(|text| text.contains(PASSWORD))
+        .collect();
+    assert_eq!(
+        typed,
+        Vec::<String>::new(),
+        "no column holds the typed name"
     );
     server.stop().await
 }

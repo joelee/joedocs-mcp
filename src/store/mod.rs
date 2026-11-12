@@ -39,6 +39,7 @@ mod revisions;
 mod search;
 mod sign_in;
 mod summary;
+mod throttle;
 mod users;
 mod vault;
 
@@ -429,6 +430,8 @@ pub struct Store {
     conn: Connection,
     history: Box<dyn History>,
     clock: Arc<dyn Clock>,
+    /// Failed sign-ins of names that are not users, in memory only.
+    unknown_names: std::sync::Mutex<throttle::UnknownNames>,
 }
 
 impl std::fmt::Debug for Store {
@@ -573,12 +576,14 @@ impl Store {
         if let Err(error) = index_file::exclude_from_history(&paths.git_dir()) {
             tracing::warn!(%error, "could not add INDEX.md to the history's exclude file");
         }
+        let unknown_names = throttle::UnknownNames::new(&crate::auth::OsRandom)?;
         Ok(Self {
             paths,
             settings,
             conn,
             history,
             clock,
+            unknown_names: std::sync::Mutex::new(unknown_names),
         })
     }
 

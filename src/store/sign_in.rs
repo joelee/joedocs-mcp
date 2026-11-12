@@ -1,5 +1,7 @@
 //! Signing users in: the store's half of password sign-in, TOTP setup,
-//! device renewal, user sessions and the per-name sign-in throttle.
+//! device renewal, user sessions and the per-name sign-in throttle (real
+//! users' counts in the database by user ID, other names' in memory: see
+//! the `throttle` module).
 //!
 //! The store never sees a password. A sign-in runs in three phases so the
 //! store lock is never held while a password is hashed (about 12 ms and
@@ -23,13 +25,14 @@
 use secrecy::SecretString;
 
 use super::admin_tokens::{LOCK_SECONDS, MAX_FAILED_LOGINS, later, seconds_until};
+use super::throttle::UnknownNames;
 use super::{AdminRefusal, Error, Store};
 use crate::auth::{
     DEVICE_PREFIX, RandomSource, SETUP_PREFIX, USER_SESSION_PREFIX, USER_WEB_SESSION_PREFIX,
     generate_prefixed, parse_prefixed, secret_for, verify_secret,
 };
 use crate::clock::format_timestamp;
-use crate::db::{self, SessionKind, UserRow};
+use crate::db::{self, SessionKind, ThrottleRow, UserRow};
 use crate::password::Verified;
 use crate::totp;
 
@@ -37,8 +40,7 @@ use crate::totp;
 pub const SETUP_MINUTES: i64 = 10;
 /// Bytes in a TOTP secret (160 bits, as RFC 4226 recommends).
 const TOTP_SECRET_BYTES: usize = 20;
-/// Longest name the throttle records; longer names are cut, so a stream of
-/// long names cannot grow its rows.
+/// Longest name the throttle hashes; longer names are cut.
 const THROTTLE_NAME_CHARS: usize = 64;
 
 /// What phase 1 of a sign-in found, for phase 3.
@@ -222,7 +224,7 @@ impl Store {
         let Some(totp_secret) = secrets.totp_secret else {
             // No authenticator: only a one-time password gets here, and it
             // may only start setup.
-            db::throttle_clear(&self.conn, &begin.name)?;
+            db::throttle_clear(&self.conn, &user.id)?;
             return self.start_setup(user, true, random);
         };
         let now = self.clock.now();
@@ -233,7 +235,7 @@ impl Store {
             return self.refuse_sign_in(&begin.name);
         };
         let now_text = format_timestamp(now);
-        db::throttle_clear(&self.conn, &begin.name)?;
+        db::throttle_clear(&self.conn, &user.id)?;
         db::record_user_login(&self.conn, &user.id, step, &now_text)?;
         if let Some(hash) = rehash {
             db::rehash_password(&self.conn, &user.id, hash)?;
@@ -276,31 +278,78 @@ impl Store {
     ///
     /// Returns database errors.
     pub fn record_sign_in_failure(&self, name: &str) -> Result<(), Error> {
-        let name = throttle_name(name);
+        let counted = self.counted(name)?;
         let now = self.clock.now();
-        let failures = db::throttle_of(&self.conn, &name)?.map_or(0, |t| t.failures);
+        let failures = self.throttle_row(&counted)?.map_or(0, |t| t.failures);
         let lock = (failures + 1 >= MAX_FAILED_LOGINS).then(|| later(now, LOCK_SECONDS));
-        db::throttle_failure(
-            &self.conn,
-            &name,
-            lock.as_deref(),
-            &format_timestamp(now),
-            &later(now, -LOCK_SECONDS),
-        )?;
+        let (at, prune_before) = (format_timestamp(now), later(now, -LOCK_SECONDS));
+        match counted {
+            Counted::User(id) => {
+                db::throttle_failure(&self.conn, &id, lock.as_deref(), &at, &prune_before)?;
+            }
+            Counted::Unknown(name) => {
+                self.unknown_names()
+                    .failure(&name, lock.as_deref(), &at, &prune_before);
+            }
+        }
         Ok(())
     }
 
     /// The lock refusal for `name`, when it is locked now.
     fn name_locked(&self, name: &str) -> Result<Option<AdminRefusal>, Error> {
+        let counted = self.counted(name)?;
         let now = self.clock.now();
         let now_text = format_timestamp(now);
-        Ok(db::throttle_of(&self.conn, name)?
+        Ok(self
+            .throttle_row(&counted)?
             .and_then(|t| t.locked_until)
             .filter(|until| *until > now_text)
             .map(|until| AdminRefusal::Locked {
                 retry_after: seconds_until(now, &until),
                 until,
             }))
+    }
+
+    /// Whose count a sign-in of `name` goes to: the user's (by ID), or, for
+    /// a name that is no user's or a removed user's, the name's in memory.
+    fn counted(&self, name: &str) -> Result<Counted, Error> {
+        let name = throttle_name(name);
+        Ok(
+            match db::find_user_by_name(&self.conn, &name)?.filter(|u| u.removed_at.is_none()) {
+                Some(user) => Counted::User(user.id),
+                None => Counted::Unknown(name),
+            },
+        )
+    }
+
+    fn throttle_row(&self, counted: &Counted) -> Result<Option<ThrottleRow>, Error> {
+        Ok(match counted {
+            Counted::User(id) => db::throttle_of(&self.conn, id)?,
+            Counted::Unknown(name) => self.unknown_names().get(name),
+        })
+    }
+
+    /// The in-memory throttle of unknown names. A panic while it was held
+    /// leaves nothing half-done in it, so a poisoned lock is used as is.
+    fn unknown_names(&self) -> std::sync::MutexGuard<'_, UnknownNames> {
+        self.unknown_names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Holds at most `cap` unknown names from now on, forgetting those held
+    /// (for tests of a full throttle).
+    #[cfg(test)]
+    pub(crate) fn cap_unknown_names(&mut self, cap: usize) {
+        if let Ok(names) = UnknownNames::with_cap(&crate::auth::OsRandom, cap) {
+            self.unknown_names = std::sync::Mutex::new(names);
+        }
+    }
+
+    /// How many unknown names the throttle holds.
+    #[cfg(test)]
+    pub(crate) fn unknown_names_held(&self) -> usize {
+        self.unknown_names().len()
     }
 
     /// Starts setup: a ticket, and a new TOTP secret when `totp`.
@@ -494,7 +543,7 @@ impl Store {
         }
         db::set_password(&self.conn, &user.id, new_hash, &now_text)?;
         db::end_setup(&self.conn, &user.id, &now_text)?;
-        db::throttle_clear(&self.conn, &user.name)?;
+        db::throttle_clear(&self.conn, &user.id)?;
         let user = db::find_user_by_id(&self.conn, &user.id)?
             .ok_or_else(|| Error::UserNotFound(user.name.clone()))?;
         self.open_session(&user, request, random)
@@ -795,6 +844,14 @@ fn can_hold_sessions(user: &UserRow) -> bool {
         && user.disabled_at.is_none()
         && user.totp_enrolled_at.is_some()
         && !user.must_change_password
+}
+
+/// Whose count a failed sign-in goes to.
+enum Counted {
+    /// A user's, by user ID, in the database.
+    User(String),
+    /// A name that is no user's (or a removed user's), in memory.
+    Unknown(String),
 }
 
 /// The throttle's key for a submitted name: trimmed and cut to

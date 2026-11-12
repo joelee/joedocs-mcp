@@ -45,13 +45,13 @@ pub use search::{
     search_documents, unindex_document, unindex_file,
 };
 pub use users::{
-    DeviceRow, THROTTLE_CAP, ThrottleRow, UserRow, UserSecrets, UserSessionRow, clear_totp,
-    confirm_totp, devices_of, end_setup, find_device, find_user_by_id, find_user_by_name,
-    find_user_session, insert_device, insert_user, insert_user_session, list_users,
-    record_device_failure, record_user_login, rehash_password, renew_device, revoke_all_of,
-    revoke_device, revoke_others, revoke_user_session, set_initial_password, set_password,
-    set_user_disabled, set_user_removed, start_setup, throttle_clear, throttle_failure,
-    throttle_of, throttle_rows, touch_device, touch_user_session, user_secrets,
+    DeviceRow, ThrottleRow, UserRow, UserSecrets, UserSessionRow, clear_totp, confirm_totp,
+    devices_of, end_setup, find_device, find_user_by_id, find_user_by_name, find_user_session,
+    insert_device, insert_user, insert_user_session, list_users, record_device_failure,
+    record_user_login, rehash_password, renew_device, revoke_all_of, revoke_device, revoke_others,
+    revoke_user_session, set_initial_password, set_password, set_user_disabled, set_user_removed,
+    start_setup, throttle_clear, throttle_failure, throttle_of, throttle_rows, touch_device,
+    touch_user_session, user_secrets,
 };
 
 /// Schema migrations, applied in order. The schema version
@@ -64,6 +64,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0005_files.sql"),
     include_str!("migrations/0006_web_sessions.sql"),
     include_str!("migrations/0007_users.sql"),
+    include_str!("migrations/0008_sign_in_lock.sql"),
 ];
 
 /// The schema version this build expects.
@@ -521,7 +522,7 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 7);
+        assert_eq!(SCHEMA_VERSION, 8);
         assert_eq!(find_key_by_name(&conn, "laptop").unwrap().unwrap().id, "k1");
         assert_eq!(
             find_admin_token_by_name(&conn, "ops").unwrap().unwrap().id,
@@ -544,6 +545,54 @@ mod tests {
             .unwrap();
         assert_eq!(audit, ("laptop".to_owned(), None, None));
         assert_eq!(list_users(&conn).unwrap(), []);
+    }
+
+    #[test]
+    fn a_version_7_database_keys_its_sign_in_lock_by_user_and_keeps_its_users() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("joedocs.db");
+        let mut conn = Connection::open(&path).unwrap();
+        let tx = conn.transaction().unwrap();
+        for sql in &MIGRATIONS[..7] {
+            tx.execute_batch(sql).unwrap();
+        }
+        tx.pragma_update(None, "user_version", 7).unwrap();
+        tx.execute_batch(
+            "INSERT INTO users (id, name, password_hash, created_at, updated_at)
+                 VALUES ('u1', 'alice', 'h', 't', 't');
+             INSERT INTO sign_in_throttle (name, failures, locked_until, updated_at)
+                 VALUES ('alice', 0, 'later', 't'), ('a typed password', 3, NULL, 't');",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        drop(conn);
+
+        let conn = open(&path).unwrap();
+        let version: usize = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 8);
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('sign_in_throttle') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            columns,
+            ["user_id", "failures", "locked_until", "updated_at"]
+        );
+        assert_eq!(throttle_rows(&conn).unwrap(), 0, "old rows are dropped");
+        assert_eq!(list_users(&conn).unwrap()[0].name, "alice");
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'sign_in_throttle_updated'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
     }
 
     #[test]
