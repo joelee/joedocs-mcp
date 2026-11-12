@@ -111,6 +111,9 @@ pub(crate) fn classify(error: &store::Error) -> (StatusCode, &'static str) {
     match error {
         E::AdminRefused(AdminRefusal::Unauthorized) => (StatusCode::UNAUTHORIZED, "unauthorized"),
         E::AdminRefused(AdminRefusal::NoSession) => (StatusCode::UNAUTHORIZED, "no_session"),
+        E::AdminRefused(AdminRefusal::DeviceInvalid) => {
+            (StatusCode::UNAUTHORIZED, "device_invalid")
+        }
         E::AdminRefused(AdminRefusal::SessionExpired) => {
             (StatusCode::UNAUTHORIZED, "session_expired")
         }

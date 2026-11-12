@@ -49,9 +49,9 @@ pub use users::{
     confirm_totp, devices_of, end_setup, find_device, find_user_by_id, find_user_by_name,
     find_user_session, insert_device, insert_user, insert_user_session, list_users,
     record_device_failure, record_user_login, rehash_password, revoke_all_of, revoke_device,
-    revoke_user_session, set_initial_password, set_password, set_user_disabled, set_user_removed,
-    start_setup, throttle_clear, throttle_failure, throttle_of, throttle_rows, touch_device,
-    touch_user_session, user_secrets,
+    revoke_others, revoke_user_session, set_initial_password, set_password, set_user_disabled,
+    set_user_removed, start_setup, throttle_clear, throttle_failure, throttle_of, throttle_rows,
+    touch_device, touch_user_session, user_secrets,
 };
 
 /// Schema migrations, applied in order. The schema version

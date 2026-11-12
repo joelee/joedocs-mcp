@@ -37,6 +37,7 @@ mod registry;
 mod reindex;
 mod revisions;
 mod search;
+mod sign_in;
 mod summary;
 mod users;
 mod vault;
@@ -67,6 +68,10 @@ pub use registry::CreatedKey;
 pub use reindex::Reindexed;
 pub use revisions::{Diff, HistoryPage, MAX_DIFF_CONTEXT, MAX_HISTORY_LIMIT};
 pub use search::{MAX_SEARCH_LIMIT, SearchHit, SearchRequest, SearchResults};
+pub use sign_in::{
+    NewDevice, NewTotp, SETUP_MINUTES, SetupBegin, SignInBegin, SignInRequest, SignedIn,
+    UserSession,
+};
 pub use summary::{ProjectCount, Summary};
 pub use users::{CreatedUser, INITIAL_PASSWORD_HOURS, UserListing, UserState};
 

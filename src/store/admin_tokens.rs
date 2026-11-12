@@ -46,6 +46,12 @@ pub enum AdminRefusal {
     /// The session is missing, ended, or belongs to another token.
     #[error("there is no valid admin session; run `joedocs login`")]
     NoSession,
+    /// The device credential is revoked or has not been used for too long:
+    /// sign in again with the password.
+    #[error(
+        "this device's sign-in has ended; sign in again with your password (`joedocs auth login`)"
+    )]
+    DeviceInvalid,
 }
 
 /// A newly created admin token. The token and the TOTP secret are shown to

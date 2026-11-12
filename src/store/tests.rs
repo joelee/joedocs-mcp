@@ -12,6 +12,9 @@ use crate::clock::FixedClock;
 use crate::document::front_matter::Fields;
 use crate::history::{Commit, GitCli, Logged};
 
+#[path = "sign_in_tests.rs"]
+mod sign_in;
+
 /// A history that delegates to git but can be told to fail commits.
 struct Flaky {
     git: GitCli,

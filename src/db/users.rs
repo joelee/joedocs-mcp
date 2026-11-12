@@ -548,6 +548,33 @@ pub fn revoke_all_of(
     Ok(())
 }
 
+/// Revokes every device and session of a user except the device
+/// `keep_device` and the session `keep_session` (a password change made in
+/// that session).
+///
+/// # Errors
+///
+/// Returns an error when a statement fails.
+pub fn revoke_others(
+    conn: &Connection,
+    user_id: &str,
+    keep_device: Option<&str>,
+    keep_session: &str,
+    at: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE devices SET revoked_at = ?2
+         WHERE user_id = ?1 AND revoked_at IS NULL AND id <> ?3",
+        params![user_id, at, keep_device.unwrap_or("")],
+    )?;
+    conn.execute(
+        "UPDATE user_sessions SET revoked_at = ?2
+         WHERE user_id = ?1 AND revoked_at IS NULL AND id <> ?3",
+        params![user_id, at, keep_session],
+    )?;
+    Ok(())
+}
+
 /// Inserts a user session.
 ///
 /// # Errors
