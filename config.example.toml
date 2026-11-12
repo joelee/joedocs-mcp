@@ -45,13 +45,15 @@ max_files = 500
 
 [admin]
 # Serve the remote admin API under /admin/v1/ so `joedocs` on another
-# machine can run admin commands. Off by default. Callers need an admin token
-# (`joedocs admin-token create`) and a TOTP code from their authenticator.
+# machine can run admin commands. Off by default. Callers sign in as a user
+# (`joedocs user create` on the server, then `joedocs auth login --user NAME`)
+# with a password and a TOTP code; admin tokens are deprecated.
 enabled = false
-# How long a session opened by `joedocs login` lasts, in hours (1 to 168).
+# How long a session (`joedocs auth login`, the web sign-in) lasts, in hours
+# (1 to 168).
 session_hours = 8
-# Serve the admin web interface under /admin/ (sign in with an admin token and
-# a TOTP code). Off by default; needs enabled = true.
+# Serve the admin web interface under /admin/ (sign in as a user with a
+# password and a TOTP code). Off by default; needs enabled = true.
 web_ui = false
 # A PlantUML server that draws PlantUML diagrams in the web interface, e.g.
 # "https://www.plantuml.com/plantuml". The admin's browser sends the diagram
@@ -69,8 +71,8 @@ token_login = true
 # The server whose admin API this machine uses, e.g.
 # "https://docs.example.ts.net". When set, admin commands (project, key,
 # archive, check, reindex, status, get, backup) run on that server after
-# `joedocs login`. Empty means the local store. The admin token comes from
-# JOEDOCS_ADMIN_TOKEN, never from this file.
+# `joedocs auth login`. Empty means the local store. Passwords, device
+# credentials and admin tokens never go in this file.
 server = ""
 # The user `joedocs auth login` signs in as, and whose device credential
 # admin commands use (or pass --user NAME). Passwords and device credentials

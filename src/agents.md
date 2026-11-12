@@ -43,7 +43,8 @@ These change the store or what clients can do. Explain what you intend and why, 
 - `joedocs document convert`, `document move-file` and `document restore-file` (multi-file documents).
 - `joedocs project add`, `joedocs key create`, `key grant`, `key ungrant`, `key rotate` and `key revoke`. A rotated or revoked key stops working at once, on every machine that uses it, and an ungranted project is out of reach on the key's next request.
 - `joedocs backup --restore`, which needs empty target directories and a stopped service.
-- `joedocs admin-token create`, `list` and `revoke`, and turning the remote admin API on or off.
+- `joedocs user create`, `disable`, `enable`, `unlock`, `reset-password`, `reset-totp` and `remove` (`create` and the resets print a one-time password for a person; never keep it), and turning the remote admin API on or off or `admin.token_login` off.
+- `joedocs admin-token create`, `list` and `revoke` (admin tokens are deprecated since 0.5.1).
 - Upgrading, restarting or stopping the service, and `joedocs systemd install` or `remove`.
 - Any change to the config file.
 

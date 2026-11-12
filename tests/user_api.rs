@@ -737,3 +737,35 @@ async fn switching_token_login_off_refuses_every_admin_token_request() -> TestRe
     assert_eq!(user.status, 200);
     server.stop().await
 }
+
+#[tokio::test]
+async fn the_audit_json_names_the_user_of_a_users_calls_only() -> TestResult<()> {
+    let server = start(&["alice"]).await?;
+    let (_, done) = server.set_up("alice", PASSWORD).await?;
+    let headers = Server::user_headers(&done);
+    let read = server
+        .send("GET", "/admin/v1/audit?limit=100", &headers, "")
+        .await?;
+    assert_eq!(read.status, 200, "{}", read.body);
+    let items = read.json["items"].as_array().ok_or("no items")?;
+    let setup = items
+        .iter()
+        .find(|i| i["tool"] == "admin:auth.setup")
+        .ok_or("no setup row")?;
+    assert_eq!(setup["user"], "alice");
+    let token = format!(
+        "Authorization: Bearer {}\r\nJoeDocs-Session: {}\r\n",
+        server.token, server.token_session
+    );
+    server.send("GET", "/admin/v1/status", &token, "").await?;
+    let read = server
+        .send("GET", "/admin/v1/audit?limit=100", &headers, "")
+        .await?;
+    let items = read.json["items"].as_array().ok_or("no items")?;
+    let by_token = items
+        .iter()
+        .find(|i| i["tool"] == "admin:status" && i["key_name"] == "ops")
+        .ok_or("no token row")?;
+    assert!(by_token.get("user").is_none(), "{by_token}");
+    server.stop().await
+}

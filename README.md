@@ -60,7 +60,8 @@ One server holds the documents. Each agent connects with its own API key, scoped
 - **Scoped API keys.** Each key gets `read` or `write` access to specific projects. Tokens are shown once and stored hashed, and can be rotated or revoked at once.
 - **Multi-file documents.** A document can be a folder of files under one ID, such as a roadmap and its backlog items, each with its own front matter, searched and filtered on its own, and changed by different agents without conflicts between files.
 - **Obsidian-friendly.** Titles are file names, so `[[wiki links]]` work; renamed documents keep their old titles as `aliases`; Mermaid and PlantUML blocks are stored as written.
-- **Admin web interface.** Optional pages under `/admin/` for the server's administrators: browse, search and read documents with Obsidian-style rendering (callouts, wiki links, Mermaid diagrams), follow their history and diffs, manage projects and API keys, read the audit log, restore archived documents, and check, reindex or back up the store.
+- **Admin web interface.** Optional pages under `/admin/` for the server's administrators: browse, search and read documents with Obsidian-style rendering (callouts, wiki links, Mermaid diagrams), follow their history and diffs, manage projects, API keys and users, read the audit log, restore archived documents, and check, reindex or back up the store.
+- **User accounts with two-factor sign-in.** Administrators sign in to the web interface and the admin command line with a password and a TOTP code; the authenticator is set up at the first sign-in, and passwords are hashed with Argon2id.
 - **Easy to run.** One binary with SQLite built in. It runs as a systemd service on Linux, under `brew services` on macOS, or in Docker. Reach it from anywhere over Tailscale or behind your own TLS proxy.
 
 ## Use cases
@@ -148,11 +149,11 @@ To use one server from several machines, run it on a server and publish it over 
 | Write | `new_document`, `update_document`, `edit_document`, `append_to_document`, `change_document_front_matter` |
 | Organise | `rename_document`, `move_document`, `restore_document_version`, `archive_document` |
 
-Administration is not an MCP tool, so a leaked client key cannot create keys or delete history: `joedocs project`, `key create|grant|ungrant|rotate|revoke`, `archive list|restore`, `reindex`, `check`, `status`, `get` and `backup` run on the server's command line, and so do `list`, `search`, `history`, `diff` and `audit`, which view and find documents and read the audit log (`--json` prints what the admin API returns). To run them from another machine, turn on the server's admin API: it needs a separate admin token and a code from an authenticator app (`joedocs login`). `joedocs backup` writes a consistent backup while the server runs, and `joedocs agents` prints instructions for an AI agent that maintains the server. The [reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md) lists every command, tool, parameter and error code.
+Administration is not an MCP tool, so a leaked client key cannot create keys or delete history: `joedocs project`, `key create|grant|ungrant|rotate|revoke`, `archive list|restore`, `reindex`, `check`, `status`, `get` and `backup` run on the server's command line, and so do `list`, `search`, `history`, `diff` and `audit`, which view and find documents and read the audit log (`--json` prints what the admin API returns). To run them from another machine, turn on the server's admin API and sign in as a user with a password and a code from an authenticator app (`joedocs user create` on the server, then `joedocs auth login --user NAME`). `joedocs backup` writes a consistent backup while the server runs, and `joedocs agents` prints instructions for an AI agent that maintains the server. The [reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md) lists every command, tool, parameter and error code.
 
 ## Admin web interface
 
-Turn on the admin API and its web interface in the server's `config.toml`, create an admin token, and restart the server:
+Turn on the admin API and its web interface in the server's `config.toml`, create a user, and restart the server:
 
 ```toml
 [admin]
@@ -161,10 +162,10 @@ web_ui = true
 ```
 
 ```bash
-joedocs admin-token create laptop   # prints a TOTP secret for your authenticator app, then the token
+joedocs user create alice   # prints a one-time password for alice's first sign-in
 ```
 
-Then open `http://127.0.0.1:8750/admin/` and sign in with the token and a code from the authenticator. Over anything but `localhost` the interface needs HTTPS, such as `tailscale serve`; the [deployment guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/deployment.md#6b-admin-web-interface) covers proxies and drawing PlantUML diagrams. Document content is read-only in the browser; the changes it offers are the admin commands'.
+Then open `http://127.0.0.1:8750/admin/` and sign in as `alice` with the one-time password: the first sign-in sets up an authenticator app (with a QR code) and your own password, and later sign-ins take the password and a code. The Users page manages users, and Your account changes your password. Over anything but `localhost` the interface needs HTTPS, such as `tailscale serve`; the [deployment guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/deployment.md#6b-admin-web-interface) covers proxies and drawing PlantUML diagrams. Document content is read-only in the browser; the changes it offers are the admin commands'.
 
 ## Skills for agents
 
@@ -189,7 +190,7 @@ flowchart LR
 
 Planned:
 
-- Admin users who sign in to the web interface with their own credentials instead of an admin token (0.5.1).
+- Members and key ownership for user accounts: users who manage only their own MCP keys, within the projects an admin grants them, and keys stopped with their owner.
 - More agent skills: research notes, decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
 

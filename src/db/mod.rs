@@ -246,6 +246,8 @@ pub struct AuditRow {
     pub document_id: Option<String>,
     /// `ok` or an error code.
     pub outcome: String,
+    /// The signed-in user who made an admin call, if one did (0.5.1).
+    pub user_name: Option<String>,
 }
 
 /// A page of audit entries, newest first, and how many match.
@@ -278,7 +280,7 @@ pub fn list_audit(
         |row| row.get(0),
     )?;
     let mut stmt = conn.prepare(&format!(
-        "SELECT at, api_key_id, key_name, client, tool, document_id, outcome
+        "SELECT at, api_key_id, key_name, client, tool, document_id, outcome, user_name
          FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?9 OFFSET ?10"
     ))?;
     let rows = stmt
@@ -304,6 +306,7 @@ pub fn list_audit(
                     tool: row.get(4)?,
                     document_id: row.get(5)?,
                     outcome: row.get(6)?,
+                    user_name: row.get(7)?,
                 })
             },
         )?

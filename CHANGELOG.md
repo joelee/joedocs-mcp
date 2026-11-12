@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-12
+
+User accounts: administrators sign in to the web interface and the admin command line with a name, a password and a TOTP code, instead of an admin token. Admin tokens are deprecated. MCP clients, keys and tools are unchanged.
+
+### Added
+
+- **Users.** `joedocs user create`, `list`, `disable`, `enable`, `unlock`, `reset-password`, `reset-totp` and `remove` on the server. All but `remove` also run remotely for a signed-in user. `create` and the resets print a one-time password, valid for 72 hours, alone on the last line. Every user is an admin in 0.5.1.
+- **TOTP required, set up at the first sign-in.** A new user, or one whose authenticator was reset, signs in with the one-time password, adds the shown secret (a QR code in the terminal and on the web page) to an authenticator, confirms it with a code, and chooses their own password. No session or device is given before that, and nothing turns TOTP off.
+- **`joedocs auth login`** (`--user NAME`, or the new `client.user`). The first time on a machine it asks for the password (without echo) and a code, and stores a device credential in `$XDG_STATE_HOME/joedocs/devices.toml` (`0600`). After that a session needs only a code; `--code CODE` renews without a terminal. Also `auth logout [--forget-device]`, `auth status`, `auth password` and `auth devices [revoke NAME]`.
+- **Web interface:** a user sign-in form (name, password and code), the TOTP setup page with a QR code drawn on the server, an Account page (change your password, revoke your devices) and a Users page.
+- **Admin API routes:** `POST /admin/v1/auth/login` and `auth/setup`, `GET /admin/v1/me`, `POST me/password`, `GET me/devices`, `POST me/devices/{name}/revoke`, `GET`/`POST /admin/v1/users` and `POST users/{name}/disable|enable|unlock|reset-password|reset-totp`. `POST /admin/v1/session` also renews a session with a device credential (`Authorization: Bearer jdd_...`). New error codes: `429 busy`, `403 user_required`, `401 device_invalid`.
+- **Configuration keys:** `admin.device_days` (default 30: a device not used that long signs in with the password again), `admin.token_login` (default `true`; `false` refuses every admin-token request) and `client.user`, with the global flag `--user`.
+- **Passwords** are hashed with Argon2id at OWASP's minimum parameters (19 MiB, 2 iterations, 1 lane), stored as PHC strings and rehashed when the parameters rise. A new password is 12 to 256 characters (counted after NFC normalisation), not the user's name or a common password. Hashing never runs while the store is locked, at most two at once, so sign-in attempts cannot slow MCP requests; beyond that a sign-in is refused `429 busy`.
+- **Lockout per name.** Five failed sign-ins lock that name, real or not, for 15 minutes. The lock stops new sign-ins only: open sessions, device renewals and MCP keys keep working. Every refusal is the same `401`, so a reply never says whether a name exists. Audit rows of a user's calls name the user (`user_id`, `user_name`, and `"user"` in `audit --json`), and a refused sign-in records the name only when it is an existing user's.
+
+### Deprecated
+
+- **Admin tokens:** `joedocs admin-token`, `joedocs login` and `logout` with `JOEDOCS_ADMIN_TOKEN`, and admin-token sign-in on the web page. They keep working in 0.5.1. `login` and `admin-token` print a warning on standard error (standard output is unchanged), and admin API replies to admin-token requests carry `Deprecation: @1794441600` and a `Link` with `rel="deprecation"` (RFC 9745). Removal comes in a later release. Admin tokens can no longer reach the new user routes (`403 user_required`).
+
+### Changed
+
+- The database is version 7 (migration `0007_users`): users, devices, user sessions and the sign-in lock, plus nullable `user_id` and `user_name` columns on the audit log. Existing admin tokens, sessions, keys and grants keep working. Going back to 0.5.0 needs the backup taken before upgrading.
+- Exit code `77` also covers a needed TOTP setup without a terminal and an admin token on a user-only route; `69` also covers a server too busy checking sign-ins (`429 busy`).
+
+### Fixed
+
+- The release workflow no longer cancels the other binary builds when one fails, and retries the `musl-tools` install on a transient network failure (issue JD-35).
+
 ## [0.5.0] - 2026-11-11
 
 An admin web interface: the server's administrators can browse, search and read documents, and do what the admin commands do, in a browser.

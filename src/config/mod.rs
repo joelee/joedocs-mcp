@@ -243,8 +243,8 @@ impl Default for DocumentsConfig {
 pub struct AdminConfig {
     /// Whether to serve the admin API. Off by default.
     pub enabled: bool,
-    /// How long a session opened by `joedocs login` lasts, in hours (1 to
-    /// 168).
+    /// How long a session opened by `joedocs auth login`, the web sign-in
+    /// or `joedocs login` lasts, in hours (1 to 168).
     pub session_hours: u32,
     /// Whether to serve the admin web interface under `/admin/`. Off by
     /// default; needs `enabled`.

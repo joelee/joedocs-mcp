@@ -31,9 +31,7 @@ pub enum AdminRefusal {
     #[error("the admin token or code is not valid")]
     Unauthorized,
     /// Too many failed logins.
-    #[error(
-        "the admin token is locked after {MAX_FAILED_LOGINS} failed logins; try again after {until}"
-    )]
+    #[error("sign-in is locked after {MAX_FAILED_LOGINS} failed attempts; try again after {until}")]
     Locked {
         /// When logins are accepted again.
         until: String,
