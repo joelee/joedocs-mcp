@@ -644,3 +644,50 @@ fn forgetting_a_device_the_server_already_refuses_succeeds() {
     );
     assert!(!std::fs::read_to_string(&devices).unwrap().contains("jdd_"));
 }
+
+#[test]
+fn a_backup_with_a_refused_device_signs_in_again_or_says_how_and_leaves_no_file() {
+    let server = Server::start().unwrap();
+    let terminal = server.first_sign_in().unwrap();
+    let devices = server.state_home().join("joedocs/devices.toml");
+    let saved = std::fs::read_to_string(&devices).unwrap();
+    // The device lapses after 30 unused days.
+    server.clock.advance(31 * 86_400);
+    let quiet = Terminal::quiet(Arc::clone(&server.clock));
+    let first = server.root.path().join("first.tgz");
+    let refused = server
+        .run(
+            &quiet,
+            false,
+            &["--user", "alice", "backup", first.to_str().unwrap()],
+        )
+        .unwrap_err();
+    assert_eq!(refused.exit_code(), 77, "{refused}");
+    assert!(refused.to_string().contains("has ended"), "{refused}");
+    assert!(!first.exists(), "no partial backup");
+    assert!(!std::fs::read_to_string(&devices).unwrap().contains("jdd_"));
+    // At a terminal, the backup signs in again and then downloads.
+    std::fs::write(&devices, saved).unwrap();
+    let second = server.root.path().join("second.tgz");
+    let out = server
+        .run(
+            &terminal,
+            false,
+            &["--user", "alice", "backup", second.to_str().unwrap()],
+        )
+        .unwrap();
+    assert!(second.is_file(), "{out}");
+    let stored = std::fs::read_to_string(&devices).unwrap();
+    assert!(stored.contains("device = \"phoenix\""), "{stored}");
+}
+
+#[test]
+fn signing_in_again_after_a_refused_device_keeps_the_device_name() {
+    let server = Server::start().unwrap();
+    let terminal = server.first_sign_in().unwrap();
+    server.clock.advance(31 * 86_400);
+    let status = server
+        .run(&terminal, false, &["--user", "alice", "auth", "status"])
+        .unwrap();
+    assert!(status.contains("device: phoenix"), "{status}");
+}

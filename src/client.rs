@@ -708,23 +708,32 @@ impl<'a> Remote<'a> {
             saved.as_ref().map(|s| s.token.as_str()),
             body,
         )?;
-        if self.device_refused(&reply)? {
-            let fresh = self.sign_in_again()?;
-            return self
+        match self.fresh_session(&reply, saved.is_some())? {
+            Some(fresh) => self
                 .send(method.clone(), path, Some(&fresh.token), body)?
-                .into_result();
+                .into_result(),
+            None => reply.into_result(),
+        }
+    }
+
+    /// After a reply that refused the credential, a new session to send the
+    /// request again with: signing in again when the device was refused (it
+    /// is forgotten here, and the new one keeps its name), or renewing when
+    /// the session was (`had_session` says whether one was sent). `None`
+    /// when `reply` refused neither.
+    fn fresh_session(&self, reply: &Reply, had_session: bool) -> Result<Option<Saved>, Error> {
+        if let Some(device) = self.device_refused(reply)? {
+            return self.sign_in_again(Some(&device)).map(Some);
         }
         if !reply.is_session_refusal() {
-            return reply.into_result();
+            return Ok(None);
         }
-        let message = if saved.is_some() {
+        let message = if had_session {
             format!("Session expired. Code for {}: ", self.server)
         } else {
             format!("Code for {}: ", self.server)
         };
-        let fresh = self.relogin(&message)?;
-        self.send(method.clone(), path, Some(&fresh.token), body)?
-            .into_result()
+        self.relogin(&message).map(Some)
     }
 
     /// Opens a new session after the server refused the saved one: with a
@@ -748,8 +757,8 @@ pub struct Downloaded {
 
 impl Remote<'_> {
     /// Downloads `path` (the backup) into `dest`, which must not exist,
-    /// through a 0600 temporary file renamed into place. Logs in again like
-    /// [`Remote::call`] when the session is refused.
+    /// through a 0600 temporary file renamed into place. Renews the session,
+    /// or signs in again after a refused device, like [`Remote::call`].
     ///
     /// # Errors
     ///
@@ -759,17 +768,14 @@ impl Remote<'_> {
         let first = self.download_once(path, saved.as_ref().map(|s| s.token.as_str()), dest)?;
         let refused = match first {
             Ok(done) => return Ok(done),
-            Err(reply) if reply.is_session_refusal() => reply,
-            Err(reply) => {
-                return Err(reply
-                    .into_result()
-                    .err()
-                    .unwrap_or_else(|| Error::Protocol("no body".into())));
-            }
+            Err(reply) => reply,
         };
-        drop(refused);
-        let message = format!("Session expired. Code for {}: ", self.server);
-        let fresh = self.relogin(&message)?;
+        let Some(fresh) = self.fresh_session(&refused, true)? else {
+            return Err(refused
+                .into_result()
+                .err()
+                .unwrap_or_else(|| Error::Protocol("no body".into())));
+        };
         match self.download_once(path, Some(&fresh.token), dest)? {
             Ok(done) => Ok(done),
             Err(reply) => Err(reply

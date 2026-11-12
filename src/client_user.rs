@@ -271,7 +271,7 @@ impl<'a> Remote<'a> {
             None,
             Some(&json!({"code": code})),
         )?;
-        if self.device_refused(&reply)? {
+        if self.device_refused(&reply)?.is_some() {
             return Err(Error::Auth(
                 "this device's sign-in has ended; sign in again with your password (`joedocs auth login`)"
                     .into(),
@@ -294,7 +294,7 @@ impl<'a> Remote<'a> {
     pub(super) fn renew_with_prompts(&self, message: &str) -> Result<(String, Saved), Error> {
         let user = self.user()?.to_owned();
         if self.devices.get(&self.server, &user)?.is_none() {
-            return self.sign_in_again().map(|saved| (user, saved));
+            return self.sign_in_again(None).map(|saved| (user, saved));
         }
         if !self.prompt.interactive() {
             return Err(Error::Auth(format!(
@@ -321,23 +321,29 @@ impl<'a> Remote<'a> {
         ))
     }
 
-    /// Whether `reply` says the stored device is no longer accepted; the
-    /// device is then forgotten.
-    pub(super) fn device_refused(&self, reply: &super::Reply) -> Result<bool, Error> {
+    /// When `reply` says the stored device is no longer accepted, forgets
+    /// the device and returns its name (for the device that replaces it).
+    pub(super) fn device_refused(&self, reply: &super::Reply) -> Result<Option<String>, Error> {
         let Credential::User(user) = &self.credential else {
-            return Ok(false);
+            return Ok(None);
         };
         let refused =
             reply.status == 401 && reply.json()["error"]["code"].as_str() == Some("device_invalid");
-        if refused {
-            self.devices.remove(&self.server, user)?;
+        if !refused {
+            return Ok(None);
         }
-        Ok(refused)
+        let name = self
+            .devices
+            .get(&self.server, user)?
+            .map_or_else(|| "device".to_owned(), |e| e.device);
+        self.devices.remove(&self.server, user)?;
+        Ok(Some(name))
     }
 
     /// Signs in again from scratch after the device was refused, when
-    /// someone can answer; otherwise says how.
-    pub(super) fn sign_in_again(&self) -> Result<Saved, Error> {
+    /// someone can answer; otherwise says how. The new device is named
+    /// `device` (the refused one's name), or after the stored one.
+    pub(super) fn sign_in_again(&self, device: Option<&str>) -> Result<Saved, Error> {
         let user = self.user()?.to_owned();
         if !self.prompt.interactive() {
             return Err(Error::Auth(format!(
@@ -345,10 +351,13 @@ impl<'a> Remote<'a> {
                 self.server
             )));
         }
-        let device = self
-            .devices
-            .get(&self.server, &user)?
-            .map_or_else(|| "device".to_owned(), |e| e.device);
+        let device = match device {
+            Some(name) => name.to_owned(),
+            None => self
+                .devices
+                .get(&self.server, &user)?
+                .map_or_else(|| "device".to_owned(), |e| e.device),
+        };
         self.sign_in(None, &device)?;
         self.saved()?
             .ok_or_else(|| Error::Protocol("no session after signing in".into()))
