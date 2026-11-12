@@ -287,7 +287,7 @@ pub struct Busy;
 /// with at most [`HASHING_PERMITS`] at once server-wide.
 #[derive(Debug)]
 pub struct Gate {
-    permits: tokio::sync::Semaphore,
+    permits: std::sync::Arc<tokio::sync::Semaphore>,
     wait: Duration,
 }
 
@@ -302,12 +302,15 @@ impl Gate {
     #[must_use]
     pub fn new(permits: usize, wait: Duration) -> Self {
         Self {
-            permits: tokio::sync::Semaphore::new(permits),
+            permits: std::sync::Arc::new(tokio::sync::Semaphore::new(permits)),
             wait,
         }
     }
 
-    /// Runs `work` on a blocking thread once a place is free.
+    /// Runs `work` on a blocking thread once a place is free. The place is
+    /// held by the work itself, so it stays taken until the work ends even
+    /// when the caller's future is dropped first (a client that goes away
+    /// mid-hash cannot free a place while its hash still runs).
     ///
     /// # Errors
     ///
@@ -318,13 +321,17 @@ impl Gate {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        let permit = tokio::time::timeout(self.wait, self.permits.acquire())
+        let permit = tokio::time::timeout(self.wait, self.permits.clone().acquire_owned())
             .await
             .map_err(|_| Busy)?
             .map_err(|_| Busy)?;
-        let result = tokio::task::spawn_blocking(work).await.map_err(|_| Busy);
-        drop(permit);
-        result
+        tokio::task::spawn_blocking(move || {
+            let result = work();
+            drop(permit);
+            result
+        })
+        .await
+        .map_err(|_| Busy)
     }
 }
 
@@ -485,6 +492,34 @@ mod tests {
         for task in held {
             assert_eq!(task.await.unwrap(), Ok(()));
         }
+        assert_eq!(gate.run(|| 2).await, Ok(2));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_request_keeps_its_place_until_its_hash_ends() {
+        let gate = std::sync::Arc::new(Gate::new(1, Duration::from_millis(200)));
+        let (started, has_started) = tokio::sync::oneshot::channel::<()>();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let (ended, has_ended) = tokio::sync::oneshot::channel::<()>();
+        let request = tokio::spawn({
+            let gate = gate.clone();
+            async move {
+                gate.run(move || {
+                    let _ = started.send(());
+                    let _ = wait.recv();
+                    let _ = ended.send(());
+                })
+                .await
+            }
+        });
+        has_started.await.unwrap();
+        // The client goes away: the request's future is dropped, but its
+        // hash still runs on its blocking thread.
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        assert_eq!(gate.run(|| 1).await, Err(Busy));
+        release.send(()).unwrap();
+        has_ended.await.unwrap();
         assert_eq!(gate.run(|| 2).await, Ok(2));
     }
 }

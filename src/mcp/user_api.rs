@@ -484,12 +484,12 @@ async fn prepare(
             if let Err(forbidden) = &call.allowed {
                 return Err(refused(None, forbidden.clone()));
             }
-            signed_in_user(store, &call).map(|_| ())
+            signed_in_user(store, &call).map(|(who, _)| who)
         })
         .await
     };
-    match check {
-        Ok(Ok(())) => {}
+    let who = match check {
+        Ok(Ok(who)) => who,
         Ok(Err(refusal)) => {
             let Refused { who, error } = *refusal;
             return Err(Box::new(
@@ -497,17 +497,17 @@ async fn prepare(
             ));
         }
         Err(failed) => return Err(Box::new(failed.into_response())),
-    }
+    };
     match hash_off_lock(state, || crate::admin::prepare_password(&OsRandom)).await {
         Ok(Ok(prepared)) => Ok(prepared),
         Ok(Err(error)) => {
             let error = ApiError::from(&error);
             Err(Box::new(
-                refuse_now(Arc::clone(state), call.clone(), None, error).await,
+                refuse_now(Arc::clone(state), call.clone(), Some(who), error).await,
             ))
         }
         Err(busy) => Err(Box::new(
-            refuse_now(Arc::clone(state), call.clone(), None, busy).await,
+            refuse_now(Arc::clone(state), call.clone(), Some(who), busy).await,
         )),
     }
 }

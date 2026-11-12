@@ -1694,7 +1694,7 @@ mod tests {
     /// devices `laptop` and `desktop`, with `meanwhile` run (once) during
     /// the next hash.
     struct Alice {
-        _dir: tempfile::TempDir,
+        dir: tempfile::TempDir,
         state: Arc<ApiState>,
         clock: Arc<crate::clock::FixedClock>,
         secret: Vec<u8>,
@@ -1747,7 +1747,7 @@ mod tests {
             needs_rehash: false,
         };
         let mut alice = Alice {
-            _dir: dir,
+            dir,
             state,
             clock,
             secret: Vec::new(),
@@ -1900,5 +1900,52 @@ mod tests {
                 "{what}: the other device was not signed out"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_busy_user_call_is_audited_with_the_signed_in_user() {
+        let alice = signed_in_alice();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Arc::new(std::sync::Mutex::new(wait));
+        let mut held = Vec::new();
+        for _ in 0..crate::password::HASHING_PERMITS {
+            let (shared, wait) = (Arc::clone(&alice.state.shared), Arc::clone(&wait));
+            held.push(tokio::spawn(async move {
+                shared
+                    .hashing()
+                    .run(move || {
+                        let _ = wait.lock().map(|w| w.recv());
+                    })
+                    .await
+            }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let response = user_api::users(
+            Arc::clone(&alice.state),
+            alice.call("admin:users.create", 0),
+            UserRoute::Create,
+            serde_json::json!({"name": "bob"}).to_string().into(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        for _ in 0..crate::password::HASHING_PERMITS {
+            release.send(()).unwrap();
+        }
+        for task in held {
+            task.await.unwrap().unwrap();
+        }
+        let rows: Vec<Option<String>> =
+            rusqlite::Connection::open(alice.dir.path().join("state/joedocs.db"))
+                .unwrap()
+                .prepare(
+                    "SELECT user_name FROM audit_log WHERE tool = 'admin:users.create' AND outcome = 'busy'",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+        assert_eq!(rows, [Some("alice".to_owned())]);
     }
 }

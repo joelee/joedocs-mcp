@@ -620,24 +620,29 @@ where
     })
     .await
     .unwrap_or_else(|_| Err(internal_refusal()));
-    let checked = match checked {
+    let (checked, who) = match checked {
         Ok(checked) => checked,
         Err(error) => return error.into_response(),
     };
     let Ok(hashed) = state.shared.hashing().run(move || hash(checked)).await else {
-        let busy = WebError::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "busy",
-            password::Busy.to_string(),
-        );
         let shared = Arc::clone(&state.shared);
         let _ = tokio::task::spawn_blocking(move || {
             if let Ok(store) = shared.store().lock() {
-                write_audit(&store, None, tool, "busy");
+                write_audit(&store, Some(&who), tool, "busy");
             }
         })
         .await;
-        return busy.into_response();
+        let mut busy = WebError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "busy",
+            password::Busy.to_string(),
+        )
+        .into_response();
+        busy.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            axum::http::HeaderValue::from_static("1"),
+        );
+        return busy;
     };
     tokio::task::spawn_blocking(move || {
         let Ok(mut store) = state.shared.store().lock() else {
@@ -664,19 +669,25 @@ where
     .unwrap_or_else(|_| internal_refusal().into_response())
 }
 
-/// The session, its user and `check`'s result, or the refusal and who made
-/// the request.
+/// A refused request and who made it, when known.
+type Refusal = Box<(Option<Admin>, WebError)>;
+
+/// `check`'s result and the signed-in user who asked, or the refusal and
+/// who made the request.
 fn signed_in_user<A>(
     store: &Store,
     state: &WebState,
     request: &WebRequest,
     check: impl FnOnce(&Store, &Session, &UserRow) -> Result<A, WebError>,
-) -> Result<A, Box<(Option<Admin>, WebError)>> {
+) -> Result<(A, Admin), Refusal> {
     let session = signed_in(store, state, request)?;
     let Some(user) = session.admin.user().cloned() else {
         return Err(Box::new((Some(session.admin.clone()), user_required())));
     };
-    check(store, &session, &user).map_err(|error| Box::new((Some(Admin::User(user)), error)))
+    match check(store, &session, &user) {
+        Ok(checked) => Ok((checked, Admin::User(user))),
+        Err(error) => Err(Box::new((Some(Admin::User(user)), error))),
+    }
 }
 
 fn internal_refusal() -> WebError {
@@ -685,4 +696,145 @@ fn internal_refusal() -> WebError {
         "internal",
         "internal error",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use secrecy::ExposeSecret as _;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    use crate::auth::OsRandom;
+    use crate::clock::Clock as _;
+    use crate::mcp::{ServerOptions, Shared};
+    use crate::store::{SignInRequest, SignedIn, Store};
+
+    /// A store with `alice` set up and signed in on the web; her session
+    /// cookie value.
+    fn alice_on_the_web(dir: &std::path::Path) -> (Store, String) {
+        let paths = crate::store::Paths {
+            home: dir.join("vault"),
+            state_dir: dir.join("state"),
+        };
+        let git = crate::history::GitCli::new(paths.git_dir(), &paths.home);
+        Store::init(&paths, &git).unwrap();
+        let clock = Arc::new(crate::clock::FixedClock::at(1_793_000_000));
+        let mut store = Store::open(
+            paths,
+            crate::store::Settings::from_config(&crate::Config::default()),
+            Box::new(git),
+            Arc::clone(&clock) as Arc<dyn crate::clock::Clock>,
+        )
+        .unwrap();
+        store
+            .create_user("alice", "$argon2id$one-time", &OsRandom)
+            .unwrap();
+        let ok = crate::password::Verified {
+            matches: true,
+            needs_rehash: false,
+        };
+        let web = SignInRequest {
+            code: None,
+            device: None,
+            session_hours: 8,
+        };
+        let begin = store.sign_in_begin("alice").unwrap();
+        let Ok(SignedIn::Setup {
+            ticket,
+            totp: Some(totp),
+            ..
+        }) = store.sign_in_finish(&begin, ok, None, &web, &OsRandom)
+        else {
+            panic!("setup first");
+        };
+        let secret = crate::totp::base32_decode(totp.secret.expose_secret()).unwrap();
+        let code = crate::totp::code(&secret, crate::totp::step_at(clock.now().as_second()));
+        let request = SignInRequest {
+            code: Some(&code),
+            ..web
+        };
+        let Ok(SignedIn::Session { session, .. }) =
+            store.setup_finish(&ticket, "$argon2id$chosen", &request, &OsRandom)
+        else {
+            panic!("a web session");
+        };
+        let session = session.expose_secret().to_owned();
+        (store, session)
+    }
+
+    #[tokio::test]
+    async fn a_busy_page_says_when_to_retry_and_is_audited_with_the_user() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, session) = alice_on_the_web(dir.path());
+        let mut config = crate::Config::default();
+        config.admin.enabled = true;
+        config.admin.web_ui = true;
+        let shared = Shared::new(store);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let options = ServerOptions::from_config(&config);
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn({
+            let shared = Arc::clone(&shared);
+            async move {
+                crate::mcp::serve(listener, shared, &options, async {
+                    stopped.await.ok();
+                })
+                .await
+            }
+        });
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Arc::new(std::sync::Mutex::new(wait));
+        let mut held = Vec::new();
+        for _ in 0..crate::password::HASHING_PERMITS {
+            let (shared, wait) = (Arc::clone(&shared), Arc::clone(&wait));
+            held.push(tokio::spawn(async move {
+                shared
+                    .hashing()
+                    .run(move || {
+                        let _ = wait.lock().map(|w| w.recv());
+                    })
+                    .await
+            }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let session_token = secrecy::SecretString::from(session.clone());
+        let body = format!(
+            "name=bob&csrf={}",
+            crate::web::session::csrf_token(&session_token)
+        );
+        let host = format!("127.0.0.1:{}", addr.port());
+        let request = format!(
+            "POST /admin/users HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nCookie: joedocs_session={session}\r\nOrigin: http://{host}\r\nSec-Fetch-Site: same-origin\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        let reply = String::from_utf8_lossy(&raw).to_ascii_lowercase();
+        assert!(reply.starts_with("http/1.1 429"), "{reply}");
+        assert!(reply.contains("\r\nretry-after: 1\r\n"), "{reply}");
+        for _ in 0..crate::password::HASHING_PERMITS {
+            release.send(()).unwrap();
+        }
+        for task in held {
+            task.await.unwrap().unwrap();
+        }
+        stop.send(()).unwrap();
+        server.await.unwrap().unwrap();
+        let rows: Vec<Option<String>> =
+            rusqlite::Connection::open(dir.path().join("state/joedocs.db"))
+                .unwrap()
+                .prepare(
+                    "SELECT user_name FROM audit_log WHERE tool = 'admin:users.create' AND outcome = 'busy'",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+        assert_eq!(rows, [Some("alice".to_owned())]);
+    }
 }
