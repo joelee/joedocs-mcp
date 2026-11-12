@@ -3918,3 +3918,74 @@ async fn admin_token_sessions_cannot_use_the_account_or_users_pages() -> TestRes
     );
     server.stop().await
 }
+
+// --- Review fixes (0.5.1, JD-39) --------------------------------------------
+
+/// Signs `alice` in with the one-time password `initial` after a password
+/// reset (her authenticator is kept), chooses a new password, and returns
+/// the new session cookie.
+async fn set_password_again(server: &Server, initial: &str, secret: &[u8]) -> TestResult<String> {
+    server.clock.advance(30);
+    let signed = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[
+                ("user", "alice"),
+                ("password", initial),
+                ("code", &code_for(server, secret)),
+            ],
+        )
+        .await?;
+    let ticket = set_cookie(&signed, "joedocs_setup").ok_or("no setup cookie")?;
+    let done = server
+        .post_public(
+            "/admin/setup",
+            Some(&ticket),
+            &[
+                ("password", USER_PASSWORD),
+                ("password_again", USER_PASSWORD),
+            ],
+        )
+        .await?;
+    let cookie = set_cookie(&done, "joedocs_session").ok_or("no session cookie")?;
+    server.clock.advance(30);
+    Ok(cookie)
+}
+
+/// Whether the page `/admin/` opens with `cookie`.
+async fn opens(server: &Server, cookie: &str) -> TestResult<bool> {
+    Ok(server.get("/admin/", Some(cookie)).await?.status == 200)
+}
+
+#[tokio::test]
+async fn disabling_or_resetting_a_user_ends_their_browser_sessions_for_good() -> TestResult<()> {
+    let (server, initial) = start_with_user(|_| {}).await?;
+    let dir = server.dir.path().to_owned();
+    let (first, _, secret) = signed_in_user(&server, &initial).await?;
+    assert!(opens(&server, &first).await?);
+    joedocs_cli(&dir, &["user", "disable", "alice"])?;
+    joedocs_cli(&dir, &["user", "enable", "alice"])?;
+    assert!(
+        !opens(&server, &first).await?,
+        "a cookie from before disable"
+    );
+
+    // Reset the password, then choose a new one: the old cookie stays ended.
+    let reset = joedocs_cli(&dir, &["user", "reset-password", "alice"])?;
+    let again = reset.lines().last().ok_or("no one-time password")?;
+    let second = set_password_again(&server, again, &secret).await?;
+    assert!(opens(&server, &second).await?);
+    assert!(!opens(&server, &first).await?);
+
+    // Reset the authenticator, then set it up again.
+    let reset = joedocs_cli(&dir, &["user", "reset-totp", "alice"])?;
+    let again = reset.lines().last().ok_or("no one-time password")?;
+    let (third, _, _) = signed_in_user(&server, again).await?;
+    assert!(opens(&server, &third).await?);
+    assert!(
+        !opens(&server, &second).await?,
+        "a cookie from before reset-totp"
+    );
+    server.stop().await
+}

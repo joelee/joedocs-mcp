@@ -534,15 +534,17 @@ pub fn revoke_all_of(
     keep: Option<&str>,
     at: &str,
 ) -> rusqlite::Result<()> {
-    let keep = keep.unwrap_or("");
+    // With no kept device (`?3` NULL) every device and session goes,
+    // browser sessions (no device) included.
     conn.execute(
         "UPDATE devices SET revoked_at = ?2
-         WHERE user_id = ?1 AND revoked_at IS NULL AND id <> ?3",
+         WHERE user_id = ?1 AND revoked_at IS NULL AND (?3 IS NULL OR id <> ?3)",
         params![user_id, at, keep],
     )?;
     conn.execute(
         "UPDATE user_sessions SET revoked_at = ?2
-         WHERE user_id = ?1 AND revoked_at IS NULL AND COALESCE(device_id, '') <> ?3",
+         WHERE user_id = ?1 AND revoked_at IS NULL
+           AND (?3 IS NULL OR device_id IS NULL OR device_id <> ?3)",
         params![user_id, at, keep],
     )?;
     Ok(())
@@ -914,6 +916,17 @@ mod tests {
         assert!(device_revoked(&conn, "d1"));
         assert!(session_revoked(&conn, "s1"));
         assert_eq!(devices_of(&conn, "u1").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn revoking_all_without_a_kept_device_ends_browser_sessions() {
+        let (_dir, conn) = with_devices_and_sessions();
+        revoke_all_of(&conn, "u1", None, "t1").unwrap();
+        for session in ["s1", "s2", "w1"] {
+            assert!(session_revoked(&conn, session), "{session} is still live");
+        }
+        assert!(device_revoked(&conn, "d1"));
+        assert!(device_revoked(&conn, "d2"));
     }
 
     #[test]
