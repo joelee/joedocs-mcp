@@ -27,6 +27,7 @@ pub mod env;
 pub mod fs;
 pub mod history;
 pub mod mcp;
+pub mod password;
 pub mod search;
 pub mod secrets;
 pub mod status;

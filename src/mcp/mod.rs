@@ -118,6 +118,9 @@ pub(crate) fn with_default_port(origin: &str) -> String {
 pub struct Shared {
     store: Mutex<Store>,
     settings: Settings,
+    /// Password hashing, kept off the store lock and to two at a time.
+    #[expect(dead_code, reason = "used by the user sign-in routes (JD-37 STEP-08)")]
+    hashing: crate::password::Gate,
 }
 
 impl Shared {
@@ -128,7 +131,16 @@ impl Shared {
         Arc::new(Self {
             store: Mutex::new(store),
             settings,
+            hashing: crate::password::Gate::default(),
         })
+    }
+
+    /// The password hashing gate, shared by the admin API and the web
+    /// interface. Hash only through it, and never while holding
+    /// [`Shared::store`]'s lock.
+    #[expect(dead_code, reason = "used by the user sign-in routes (JD-37 STEP-08)")]
+    pub(crate) fn hashing(&self) -> &crate::password::Gate {
+        &self.hashing
     }
 
     /// The store's lock, for the web interface's handlers, which run on
