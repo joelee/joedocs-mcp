@@ -245,6 +245,24 @@ impl Store {
         Ok(row)
     }
 
+    /// Whether `name` is the last user who can sign in (enabled, not
+    /// removed, with a confirmed authenticator). The admin API and the web
+    /// interface refuse to disable or reset that user, so someone can
+    /// always sign in; the server's command line still can.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors.
+    pub fn is_last_sign_in_user(&self, name: &str) -> Result<bool, Error> {
+        let can = |u: &UserRow| {
+            u.removed_at.is_none() && u.disabled_at.is_none() && u.totp_enrolled_at.is_some()
+        };
+        let users = db::list_users(&self.conn)?;
+        let target = users.iter().any(|u| u.name == name && can(u));
+        let others = users.iter().filter(|u| u.name != name && can(u)).count();
+        Ok(target && others == 0)
+    }
+
     /// When a one-time password set now stops working.
     fn initial_until(&self) -> String {
         later(self.clock.now(), INITIAL_PASSWORD_HOURS * 3600)

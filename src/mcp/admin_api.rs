@@ -55,7 +55,6 @@ struct ApiState {
     /// `admin.device_days`.
     device_days: u32,
     /// `admin.token_login`.
-    #[expect(dead_code, reason = "read by the admin-token switch (JD-37 STEP-09)")]
     token_login: bool,
     config_file: Option<PathBuf>,
     bind: SocketAddr,
@@ -193,6 +192,8 @@ struct Call {
     allowed: Result<(), ApiError>,
     /// `admin.device_days`, for checking a device credential.
     device_days: u32,
+    /// `admin.token_login`: whether an admin token may be used at all.
+    token_login: bool,
 }
 
 impl Call {
@@ -222,6 +223,7 @@ impl Call {
             session,
             allowed: check_origin(state, headers),
             device_days: state.device_days,
+            token_login: state.token_login,
         }
     }
 }
@@ -313,6 +315,9 @@ fn authenticate(store: &Store, call: &Call) -> Result<Admin, Box<Refused>> {
         .token
         .as_ref()
         .ok_or_else(|| refused(None, ApiError::unauthorized()))?;
+    if !call.token_login {
+        return Err(refused(None, tokens_off()));
+    }
     let admin = store
         .admin_token_for(token)
         .map_err(|e| refused(None, ApiError::from(&e)))?
@@ -332,6 +337,29 @@ fn authenticate(store: &Store, call: &Call) -> Result<Admin, Box<Refused>> {
         let lock = locked(store, &admin).unwrap_or(error);
         refused(Some(Admin::Token(admin.clone())), lock)
     })
+}
+
+/// `401 unauthorized` for an admin token while `admin.token_login` is off.
+fn tokens_off() -> ApiError {
+    ApiError::new(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "admin tokens are switched off on this server (admin.token_login = false); sign in as a user with `joedocs auth login --user NAME`",
+    )
+}
+
+/// The `Deprecation` date of admin tokens (RFC 9745): 2026-11-12T00:00:00Z,
+/// the day of the 0.5.1 release that deprecates them.
+const TOKENS_DEPRECATED: &str = "@1794441600";
+/// Where the deprecation is explained.
+const DEPRECATION_LINK: &str =
+    "<https://github.com/joelee/joedocs-mcp/blob/main/docs/upgrading.md>; rel=\"deprecation\"";
+
+/// Marks a reply to an admin-token request as deprecated (RFC 9745).
+fn mark_deprecated(response: &mut Response) {
+    let headers = response.headers_mut();
+    headers.insert("deprecation", HeaderValue::from_static(TOKENS_DEPRECATED));
+    headers.append(header::LINK, HeaderValue::from_static(DEPRECATION_LINK));
 }
 
 /// Writes the audit row for `call`.
@@ -434,6 +462,7 @@ enum Route {
     MePassword,
     Devices,
     DeviceRevoke(String),
+    Users(UserRoute),
     Status,
     ProjectsList,
     ProjectsAdd,
@@ -476,6 +505,12 @@ impl Route {
             ["me", "password"] if post => Self::MePassword,
             ["me", "devices"] if get => Self::Devices,
             ["me", "devices", name, "revoke"] if post => Self::DeviceRevoke(percent_decode(name)),
+            ["users"] if get => Self::Users(UserRoute::List),
+            ["users"] if post => Self::Users(UserRoute::Create),
+            ["users", name, action] if post => match UserRoute::action(action, name) {
+                Some(route) => Self::Users(route),
+                None => Self::Unknown,
+            },
             ["status"] if get => Self::Status,
             ["projects"] if get => Self::ProjectsList,
             ["projects"] if post => Self::ProjectsAdd,
@@ -514,6 +549,7 @@ impl Route {
             Self::MePassword => "admin:me.password",
             Self::Devices => "admin:devices.list",
             Self::DeviceRevoke(_) => "admin:devices.revoke",
+            Self::Users(route) => route.operation(),
             Self::Status => "admin:status",
             Self::ProjectsList => "admin:projects.list",
             Self::ProjectsAdd => "admin:projects.add",
@@ -542,6 +578,44 @@ impl Route {
     }
 }
 
+/// A `/admin/v1/users` route. `remove` has none: it runs on the server only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UserRoute {
+    List,
+    Create,
+    Disable(String),
+    Enable(String),
+    Unlock(String),
+    ResetPassword(String),
+    ResetTotp(String),
+}
+
+impl UserRoute {
+    fn action(action: &str, name: &str) -> Option<Self> {
+        let name = percent_decode(name);
+        Some(match action {
+            "disable" => Self::Disable(name),
+            "enable" => Self::Enable(name),
+            "unlock" => Self::Unlock(name),
+            "reset-password" => Self::ResetPassword(name),
+            "reset-totp" => Self::ResetTotp(name),
+            _ => return None,
+        })
+    }
+
+    fn operation(&self) -> &'static str {
+        match self {
+            Self::List => "admin:users.list",
+            Self::Create => "admin:users.create",
+            Self::Disable(_) => "admin:users.disable",
+            Self::Enable(_) => "admin:users.enable",
+            Self::Unlock(_) => "admin:users.unlock",
+            Self::ResetPassword(_) => "admin:users.reset_password",
+            Self::ResetTotp(_) => "admin:users.reset_totp",
+        }
+    }
+}
+
 /// Every `/admin/v1/` request. It uses no extractor that can reject a
 /// request before it is checked and audited: the request is read here,
 /// with [`BODY_LIMIT`], and every outcome goes through [`run`].
@@ -549,6 +623,22 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
     let (parts, body) = request.into_parts();
     let route = Route::of(&parts.method, parts.uri.path());
     let call = Call::new(&state, route.operation(), &parts.headers);
+    let deprecated = call.token.is_some() && !user_api::has_device(&call);
+    let mut response = route_call(state, route, call, parts.uri, body).await;
+    if deprecated {
+        mark_deprecated(&mut response);
+    }
+    response
+}
+
+/// Runs the handler for `route`.
+async fn route_call(
+    state: Arc<ApiState>,
+    route: Route,
+    call: Call,
+    uri: axum::http::Uri,
+    body: axum::body::Body,
+) -> Response {
     let Ok(body) = axum::body::to_bytes(body, BODY_LIMIT).await else {
         let too_large = ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -557,7 +647,6 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         );
         return refuse(state, call, too_large).await;
     };
-    let uri = parts.uri;
     match route {
         Route::Login => login(state, call, body).await,
         Route::Logout => logout(state, call).await,
@@ -567,6 +656,7 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         Route::MePassword => user_api::change_password(state, call, body).await,
         Route::Devices => user_api::devices(state, call).await,
         Route::DeviceRevoke(name) => user_api::revoke_device(state, call, name).await,
+        Route::Users(command) => user_api::users(state, call, command, body).await,
         Route::Status => status(state, call).await,
         Route::ProjectsList => projects_list(state, call).await,
         Route::ProjectsAdd => projects_add(state, call, body).await,
@@ -623,6 +713,9 @@ async fn login(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
             return Ok(user_api::renew(store, state, call, &body));
         }
         let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
+        if !call.token_login {
+            return Ok((None, Err(tokens_off())));
+        }
         let who = store
             .admin_token_for(token)
             .map_err(|e| ApiError::from(&e))?
@@ -662,6 +755,9 @@ async fn logout(state: Arc<ApiState>, call: Call) -> Response {
             return Ok(user_api::sign_out(store, call));
         }
         let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
+        if !call.token_login {
+            return Ok((None, Err(tokens_off())));
+        }
         let who = store
             .admin_token_for(token)
             .map_err(|e| ApiError::from(&e))?

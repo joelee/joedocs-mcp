@@ -17,8 +17,9 @@ use axum::response::{IntoResponse as _, Response};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
 
-use super::{ApiError, ApiState, Call, Refused, authorized, refused, run, write_audit};
+use super::{ApiError, ApiState, Call, Refused, UserRoute, authorized, refused, run, write_audit};
 use crate::auth::{DEVICE_PREFIX, OsRandom};
+use crate::cli::UserCommand;
 use crate::password::{self, Verified};
 use crate::store::{Admin, SignInRequest, SignedIn, Store, UserSession};
 
@@ -346,6 +347,111 @@ pub(super) async fn change_password(state: Arc<ApiState>, call: Call, body: Byte
             }),
     })
     .await
+}
+
+/// `/admin/v1/users...`: the `joedocs user` commands, for a signed-in user,
+/// replying with the text the server's command prints. A new one-time
+/// password is hashed without the store lock, after the caller is checked.
+/// The last user who can sign in cannot be disabled or reset from here.
+pub(super) async fn users(
+    state: Arc<ApiState>,
+    call: Call,
+    route: UserRoute,
+    body: Bytes,
+) -> Response {
+    let command = match route {
+        UserRoute::List => Some(UserCommand::List),
+        UserRoute::Create => string(&body, "name").map(|name| UserCommand::Create { name }),
+        UserRoute::Disable(name) => Some(UserCommand::Disable { name }),
+        UserRoute::Enable(name) => Some(UserCommand::Enable { name }),
+        UserRoute::Unlock(name) => Some(UserCommand::Unlock { name }),
+        UserRoute::ResetPassword(name) => Some(UserCommand::ResetPassword { name }),
+        UserRoute::ResetTotp(name) => Some(UserCommand::ResetTotp { name }),
+    };
+    let prepared = match &command {
+        Some(command) if crate::admin::needs_password(command) => {
+            match prepare(&state, &call).await {
+                Ok(prepared) => Some(prepared),
+                Err(reply) => return *reply,
+            }
+        }
+        _ => None,
+    };
+    run(state, call, move |store, _, call| {
+        let who = match signed_in_user(store, call) {
+            Ok((who, _)) => who,
+            Err(refusal) => return Ok((refusal.who, Err(refusal.error))),
+        };
+        let Some(command) = command else {
+            return Ok((Some(who), Err(argument("send {\"name\": \"alice\"}"))));
+        };
+        if let Some(name) = guarded(&command) {
+            let last = store
+                .is_last_sign_in_user(name)
+                .map_err(|e| ApiError::from(&e))?;
+            if last {
+                let refusal = argument(format!(
+                    "{name} is the last user who can sign in, so it cannot be disabled or reset remotely; run `joedocs user ...` on the server instead"
+                ));
+                return Ok((Some(who), Err(refusal)));
+            }
+        }
+        let result = super::text(|out| {
+            crate::admin::user_prepared(store, &command, prepared, &OsRandom, out)
+        });
+        Ok((Some(who), result))
+    })
+    .await
+}
+
+/// The user a command would lock out, for the last-user rule.
+fn guarded(command: &UserCommand) -> Option<&str> {
+    match command {
+        UserCommand::Disable { name }
+        | UserCommand::ResetPassword { name }
+        | UserCommand::ResetTotp { name } => Some(name),
+        _ => None,
+    }
+}
+
+/// A new one-time password, hashed without the store lock, once the caller
+/// is known to be a signed-in user (so an anonymous request costs no hash).
+async fn prepare(
+    state: &Arc<ApiState>,
+    call: &Call,
+) -> Result<crate::admin::Prepared, Box<Response>> {
+    let check = {
+        let call = call.clone();
+        under_lock(state, move |store| {
+            if let Err(forbidden) = &call.allowed {
+                return Err(refused(None, forbidden.clone()));
+            }
+            signed_in_user(store, &call).map(|_| ())
+        })
+        .await
+    };
+    match check {
+        Ok(Ok(())) => {}
+        Ok(Err(refusal)) => {
+            let Refused { who, error } = *refusal;
+            return Err(Box::new(
+                refuse_now(Arc::clone(state), call.clone(), who, error).await,
+            ));
+        }
+        Err(failed) => return Err(Box::new(failed.into_response())),
+    }
+    match hash_off_lock(state, || crate::admin::prepare_password(&OsRandom)).await {
+        Ok(Ok(prepared)) => Ok(prepared),
+        Ok(Err(error)) => {
+            let error = ApiError::from(&error);
+            Err(Box::new(
+                refuse_now(Arc::clone(state), call.clone(), None, error).await,
+            ))
+        }
+        Err(busy) => Err(Box::new(
+            refuse_now(Arc::clone(state), call.clone(), None, busy).await,
+        )),
+    }
 }
 
 /// The signed-in user of `call` and their session, refusing an admin

@@ -196,6 +196,32 @@ pub fn admin_token(
     Ok(())
 }
 
+/// A new one-time password and its PHC string, made before the store is
+/// written to (hashing must never run under the server's store lock).
+pub type Prepared = (SecretString, String);
+
+/// Whether `command` gives out a new one-time password.
+#[must_use]
+pub fn needs_password(command: &UserCommand) -> bool {
+    matches!(
+        command,
+        UserCommand::Create { .. }
+            | UserCommand::ResetPassword { .. }
+            | UserCommand::ResetTotp { .. }
+    )
+}
+
+/// A new one-time password, hashed.
+///
+/// # Errors
+///
+/// Returns random and hashing errors.
+pub fn prepare_password(random: &dyn RandomSource) -> Result<Prepared, store::Error> {
+    let password = crate::password::initial_password(random)?;
+    let hash = crate::password::hash(&password, random)?;
+    Ok((password, hash))
+}
+
 /// Runs a `user` subcommand on the local store. New one-time passwords are
 /// hashed before the store is written to, and printed alone on the last
 /// line.
@@ -209,10 +235,33 @@ pub fn user(
     random: &dyn RandomSource,
     out: &mut dyn Write,
 ) -> Result<(), Error> {
-    let fresh = || -> Result<(SecretString, String), Error> {
-        let password = crate::password::initial_password(random).map_err(store::Error::from)?;
-        let hash = crate::password::hash(&password, random).map_err(store::Error::from)?;
-        Ok((password, hash))
+    let prepared = if needs_password(command) {
+        Some(prepare_password(random)?)
+    } else {
+        None
+    };
+    user_prepared(store, command, prepared, random, out)
+}
+
+/// Runs a `user` subcommand with its one-time password already made (see
+/// [`prepare_password`]), as the admin API does after hashing it without
+/// the store lock.
+///
+/// # Errors
+///
+/// Returns store and output errors, and [`Error::Store`] when a password
+/// is needed but none was prepared.
+pub fn user_prepared(
+    store: &mut Store,
+    command: &UserCommand,
+    mut prepared: Option<Prepared>,
+    random: &dyn RandomSource,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let mut fresh = || -> Result<Prepared, Error> {
+        prepared
+            .take()
+            .ok_or_else(|| store::Error::Hashing("no one-time password was prepared".into()).into())
     };
     match command {
         UserCommand::Create { name } => {
