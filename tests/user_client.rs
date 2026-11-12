@@ -651,6 +651,37 @@ fn forgetting_a_device_the_server_already_refuses_succeeds() {
 }
 
 #[test]
+fn forgetting_a_device_refused_during_renewal_succeeds_without_a_password() {
+    let server = Server::start().unwrap();
+    let terminal = server.first_sign_in().unwrap();
+    let devices = server.state_home().join("joedocs/devices.toml");
+    // A plain logout keeps the device but no session, so the revoke is
+    // refused for the session before the server looks at the device.
+    server
+        .run(&terminal, false, &["--user", "alice", "auth", "logout"])
+        .unwrap();
+    let kept = std::fs::read_to_string(&devices).unwrap();
+    assert!(kept.contains("jdd_") && !kept.contains("session"), "{kept}");
+    // The device lapses after 30 unused days: renewing it is refused.
+    server.clock.advance(31 * 86_400);
+    terminal.asked.borrow_mut().clear();
+    let out = server
+        .run(
+            &terminal,
+            false,
+            &["--user", "alice", "auth", "logout", "--forget-device"],
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        format!("Signed out and forgot this device on {}.\n", server.url)
+    );
+    assert!(!std::fs::read_to_string(&devices).unwrap().contains("jdd_"));
+    let asked = terminal.asked.borrow().join("\n");
+    assert!(!asked.contains("Password"), "never a full sign-in: {asked}");
+}
+
+#[test]
 fn a_backup_with_a_refused_device_signs_in_again_or_says_how_and_leaves_no_file() {
     let server = Server::start().unwrap();
     let terminal = server.first_sign_in().unwrap();

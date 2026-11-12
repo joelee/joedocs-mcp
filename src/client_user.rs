@@ -190,6 +190,28 @@ pub struct SignedIn {
     pub set_up: bool,
 }
 
+/// What renewing a session with the stored device gave.
+enum Renewal {
+    /// A new session, for the user.
+    Renewed(String, Saved),
+    /// The server no longer accepts the device, which was forgotten here.
+    DeviceRefused,
+}
+
+impl Renewal {
+    /// The new session, or the refusal as an error that says to sign in
+    /// again with the password.
+    fn into_session(self) -> Result<(String, Saved), Error> {
+        match self {
+            Self::Renewed(user, saved) => Ok((user, saved)),
+            Self::DeviceRefused => Err(Error::Auth(
+                "this device's sign-in has ended; sign in again with your password (`joedocs auth login`)"
+                    .into(),
+            )),
+        }
+    }
+}
+
 impl<'a> Remote<'a> {
     /// Prepares calls to `server` as `user`.
     ///
@@ -264,6 +286,12 @@ impl<'a> Remote<'a> {
     }
 
     fn try_renew(&self, code: &str) -> Result<(String, Saved), Error> {
+        self.try_renewal(code).and_then(Renewal::into_session)
+    }
+
+    /// Renews the session with the stored device and `code`; a device the
+    /// server refuses is forgotten here and reported as such.
+    fn try_renewal(&self, code: &str) -> Result<Renewal, Error> {
         let user = self.user()?.to_owned();
         let reply = self.send(
             reqwest::Method::POST,
@@ -272,10 +300,7 @@ impl<'a> Remote<'a> {
             Some(&json!({"code": code})),
         )?;
         if self.device_refused(&reply)?.is_some() {
-            return Err(Error::Auth(
-                "this device's sign-in has ended; sign in again with your password (`joedocs auth login`)"
-                    .into(),
-            ));
+            return Ok(Renewal::DeviceRefused);
         }
         let renewed = reply.into_result()?.json();
         let saved = Saved {
@@ -287,14 +312,23 @@ impl<'a> Remote<'a> {
             entry.expires_at = Some(saved.expires_at.clone());
             self.devices.put(entry)?;
         }
-        Ok((user, saved))
+        Ok(Renewal::Renewed(user, saved))
     }
 
     /// Renews with codes asked for at the terminal, up to three.
     pub(super) fn renew_with_prompts(&self, message: &str) -> Result<(String, Saved), Error> {
+        self.renewal_with_prompts(message)
+            .and_then(Renewal::into_session)
+    }
+
+    /// As [`Remote::renew_with_prompts`], reporting a device the server
+    /// refuses (forgotten here) instead of failing.
+    fn renewal_with_prompts(&self, message: &str) -> Result<Renewal, Error> {
         let user = self.user()?.to_owned();
         if self.devices.get(&self.server, &user)?.is_none() {
-            return self.sign_in_again(None).map(|saved| (user, saved));
+            return self
+                .sign_in_again(None)
+                .map(|saved| Renewal::Renewed(user, saved));
         }
         if !self.prompt.interactive() {
             return Err(Error::Auth(format!(
@@ -310,7 +344,7 @@ impl<'a> Remote<'a> {
                 "That code was not accepted. Code: "
             };
             let code = self.ask(asked)?;
-            match self.try_renew(&code) {
+            match self.try_renewal(&code) {
                 Ok(done) => return Ok(done),
                 Err(Error::Auth(why)) if why.contains("not valid") => last = Some(why),
                 Err(other) => return Err(other),
@@ -501,8 +535,13 @@ impl<'a> Remote<'a> {
         let mut reply = self.send(reqwest::Method::POST, &path, entry.session.as_deref(), None)?;
         if reply.is_session_refusal() {
             let message = format!("Session expired. Code for {}: ", self.server);
-            let (_, fresh) = self.renew_with_prompts(&message)?;
-            reply = self.send(reqwest::Method::POST, &path, Some(&fresh.token), None)?;
+            match self.renewal_with_prompts(&message)? {
+                // Already refused, and forgotten by the renewal: done.
+                Renewal::DeviceRefused => return Ok(true),
+                Renewal::Renewed(_, fresh) => {
+                    reply = self.send(reqwest::Method::POST, &path, Some(&fresh.token), None)?;
+                }
+            }
         }
         let invalid =
             reply.status == 401 && reply.json()["error"]["code"].as_str() == Some("device_invalid");
