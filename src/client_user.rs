@@ -531,10 +531,8 @@ impl<'a> Remote<'a> {
         let new_password = self.new_password()?;
         let body = json!({"password": current, "code": code, "new_password": new_password});
         let reply = self.call(&reqwest::Method::POST, "me/password", Some(&body))?;
-        Ok(reply.json()["output"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned())
+        let text: super::TextReply = self.parse(&reply, "command reply")?;
+        Ok(text.output)
     }
 
     /// `joedocs auth devices revoke NAME`: revokes one of your devices, and
@@ -547,6 +545,7 @@ impl<'a> Remote<'a> {
         let user = self.user()?.to_owned();
         let path = format!("me/devices/{}/revoke", crate::percent_encode(name));
         let reply = self.call(&reqwest::Method::POST, &path, None)?;
+        let text: super::TextReply = self.parse(&reply, "command reply")?;
         if self
             .devices
             .get(&self.server, &user)?
@@ -554,10 +553,7 @@ impl<'a> Remote<'a> {
         {
             self.devices.remove(&self.server, &user)?;
         }
-        Ok(reply.json()["output"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned())
+        Ok(text.output)
     }
 
     fn ask(&self, message: &str) -> Result<String, Error> {

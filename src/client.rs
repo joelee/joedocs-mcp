@@ -335,6 +335,21 @@ pub struct TextReply {
     pub problems: u64,
 }
 
+/// The reply to `GET /admin/v1/me`: who is signed in.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MeReply {
+    /// The user's name.
+    pub user: String,
+    /// When the session expires.
+    pub expires_at: String,
+    /// When the authenticator was set up, if it is.
+    pub totp_enrolled_at: Option<String>,
+    /// The last sign-in, if any.
+    pub last_login_at: Option<String>,
+    /// The device of the session, if it has one.
+    pub device: Option<String>,
+}
+
 /// The reply to `GET /admin/v1/documents/{id}`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct DocumentReply {

@@ -28,6 +28,8 @@ struct Server {
     clock: Arc<FixedClock>,
     initial: String,
     token: String,
+    /// The admin token's TOTP secret.
+    token_secret: Vec<u8>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -52,6 +54,8 @@ impl Server {
         let hash = joedocs::password::hash(&password, &OsRandom)?;
         store.create_user("alice", &hash, &OsRandom)?;
         let token = store.create_admin_token("ops", &OsRandom)?;
+        let token_secret =
+            joedocs::totp::base32_decode(token.totp_secret.expose_secret()).ok_or("bad base32")?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         listener.set_nonblocking(true)?;
         let url = format!("http://{}", listener.local_addr()?);
@@ -81,6 +85,7 @@ impl Server {
             clock,
             initial: password.expose_secret().to_owned(),
             token: token.token.expose_secret().to_owned(),
+            token_secret,
             stop: Some(stop),
             thread: Some(thread),
         })
@@ -690,4 +695,55 @@ fn signing_in_again_after_a_refused_device_keeps_the_device_name() {
         .run(&terminal, false, &["--user", "alice", "auth", "status"])
         .unwrap();
     assert!(status.contains("device: phoenix"), "{status}");
+}
+
+#[test]
+fn a_server_url_ending_in_a_slash_still_finds_the_only_stored_user() {
+    let server = Server::start().unwrap();
+    server.first_sign_in().unwrap();
+    let quiet = Terminal::quiet(Arc::clone(&server.clock));
+    let slashed = format!("{}/", server.url);
+    let listed = server
+        .run_at(&slashed, &quiet, false, &["user", "list"])
+        .unwrap();
+    assert!(listed.contains("alice"), "{listed}");
+}
+
+#[test]
+fn an_admin_token_command_does_not_read_the_device_file() {
+    let server = Server::start().unwrap();
+    let quiet = Terminal::quiet(Arc::clone(&server.clock));
+    let code = joedocs::totp::code(
+        &server.token_secret,
+        joedocs::totp::step_at(server.clock.now().as_second()),
+    );
+    server
+        .run(&quiet, true, &["login", "--code", &code])
+        .unwrap();
+    let dir = server.state_home().join("joedocs");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("devices.toml"), "this is [not toml").unwrap();
+    let status = server.run(&quiet, true, &["status"]).unwrap();
+    assert!(
+        status.contains(&format!("server: {}", server.url)),
+        "{status}"
+    );
+}
+
+#[test]
+fn auth_commands_refuse_a_malformed_success_reply() {
+    let server = Server::start().unwrap();
+    let terminal = Terminal::new(Arc::clone(&server.clock), PASSWORD);
+    for body in ["this is not json", "{}"] {
+        let url = fake_server("200 OK", body).unwrap();
+        store_device(&server, &url).unwrap();
+        for args in [
+            &["--user", "alice", "auth", "status"][..],
+            &["--user", "alice", "auth", "password"][..],
+            &["--user", "alice", "auth", "devices", "revoke", "laptop"][..],
+        ] {
+            let refused = server.run_at(&url, &terminal, false, args).unwrap_err();
+            assert_eq!(refused.exit_code(), 70, "{args:?} with {body}: {refused}");
+        }
+    }
 }

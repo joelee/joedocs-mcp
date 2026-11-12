@@ -473,16 +473,24 @@ fn remote_for<'a>(
     ctx: &Context<'a>,
 ) -> Result<client::Remote<'a>, Error> {
     let token = loaded.secrets.admin_token.as_ref();
+    // One spelling of the server for the device file and the calls alike.
+    let server = server.trim_end_matches('/');
     if matches!(cli.command, Command::Login { .. } | Command::Logout) {
         return Ok(client::Remote::new(server, token, ctx.env, ctx.prompt)?);
     }
     let configured = loaded.config().client.user.as_str();
-    let user = if configured.is_empty() {
+    let is_auth = matches!(cli.command, Command::Auth { .. });
+    let user = if !configured.is_empty() {
+        Some(configured.to_owned())
+    } else if token.is_some() && !is_auth {
+        // The admin token wins without a user, so the device file is not
+        // even read.
+        None
+    } else {
         let stored = client::Devices::locate(ctx.env)?.users(server)?;
-        match (stored.as_slice(), token, &cli.command) {
-            (_, Some(_), command) if !matches!(command, Command::Auth { .. }) => None,
-            ([only], _, _) => Some(only.clone()),
-            (_, _, Command::Auth { .. }) => {
+        match (stored.as_slice(), is_auth) {
+            ([only], _) => Some(only.clone()),
+            (_, true) => {
                 return Err(client::Error::Usage(
                     "pass --user NAME (or set client.user) to sign in as that user".into(),
                 )
@@ -495,8 +503,6 @@ fn remote_for<'a>(
                 .into());
             }
         }
-    } else {
-        Some(configured.to_owned())
     };
     Ok(match user {
         Some(user) => client::Remote::for_user(server, &user, ctx.env, ctx.prompt)?,
@@ -540,17 +546,18 @@ fn remote_auth(
             writeln!(out, "{what} {}.", remote.server())?;
         }
         AuthCommand::Status => {
-            let me = remote.call(&Method::GET, "me", None)?.json();
-            let text = |key: &str| me[key].as_str().unwrap_or("-").to_owned();
+            let reply = remote.call(&Method::GET, "me", None)?;
+            let me: client::MeReply = remote.parse(&reply, "account reply")?;
+            let text = |value: Option<String>| value.unwrap_or_else(|| "-".to_owned());
             writeln!(
                 out,
                 "Signed in to {} as {}\n  device: {}\n  session expires: {}\n  authenticator set up: {}\n  last sign-in: {}",
                 remote.server(),
-                text("user"),
-                text("device"),
-                text("expires_at"),
-                text("totp_enrolled_at"),
-                text("last_login_at"),
+                me.user,
+                text(me.device),
+                me.expires_at,
+                text(me.totp_enrolled_at),
+                text(me.last_login_at),
             )?;
         }
         AuthCommand::Password => {
