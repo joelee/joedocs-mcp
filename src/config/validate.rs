@@ -56,37 +56,7 @@ impl Config {
                 ));
             }
         }
-        if !self.client.server.is_empty() && !is_server_url(&self.client.server) {
-            return Err(Violation::new(
-                "client.server",
-                format!(
-                    "\"{}\" must be an https:// URL like https://docs.example.net (or http:// to localhost, 127.0.0.1 or [::1])",
-                    self.client.server
-                ),
-            ));
-        }
-        if !(1..=168).contains(&self.admin.session_hours) {
-            return Err(Violation::new(
-                "admin.session_hours",
-                "must be from 1 to 168 (a week)",
-            ));
-        }
-        if self.admin.web_ui && !self.admin.enabled {
-            return Err(Violation::new(
-                "admin.web_ui",
-                "needs admin.enabled = true: the web interface is part of the admin API",
-            ));
-        }
-        if !self.admin.web_plantuml_url.is_empty() && !is_service_url(&self.admin.web_plantuml_url)
-        {
-            return Err(Violation::new(
-                "admin.web_plantuml_url",
-                format!(
-                    "\"{}\" must be an https:// URL like https://www.plantuml.com/plantuml (or http:// to localhost, 127.0.0.1 or [::1]), with no query or fragment",
-                    self.admin.web_plantuml_url
-                ),
-            ));
-        }
+        self.validate_admin_and_client()?;
         if self.documents.max_files == 0 {
             return Err(Violation::new(
                 "documents.max_files",
@@ -123,6 +93,57 @@ impl Config {
             "documents.statuses",
             &docs.statuses,
         )?;
+        Ok(())
+    }
+
+    /// The rules for `[admin]` and `[client]`.
+    fn validate_admin_and_client(&self) -> Result<(), Violation> {
+        if !self.client.server.is_empty() && !is_server_url(&self.client.server) {
+            return Err(Violation::new(
+                "client.server",
+                format!(
+                    "\"{}\" must be an https:// URL like https://docs.example.net (or http:// to localhost, 127.0.0.1 or [::1])",
+                    self.client.server
+                ),
+            ));
+        }
+        if !(1..=168).contains(&self.admin.session_hours) {
+            return Err(Violation::new(
+                "admin.session_hours",
+                "must be from 1 to 168 (a week)",
+            ));
+        }
+        if !(1..=365).contains(&self.admin.device_days) {
+            return Err(Violation::new(
+                "admin.device_days",
+                "must be from 1 to 365 (a year)",
+            ));
+        }
+        if !self.client.user.is_empty() && !crate::document::is_slug(&self.client.user) {
+            return Err(Violation::new(
+                "client.user",
+                format!(
+                    "\"{}\" must be a user name: lower-case letters, digits and '-', starting with a letter or digit",
+                    self.client.user
+                ),
+            ));
+        }
+        if self.admin.web_ui && !self.admin.enabled {
+            return Err(Violation::new(
+                "admin.web_ui",
+                "needs admin.enabled = true: the web interface is part of the admin API",
+            ));
+        }
+        if !self.admin.web_plantuml_url.is_empty() && !is_service_url(&self.admin.web_plantuml_url)
+        {
+            return Err(Violation::new(
+                "admin.web_plantuml_url",
+                format!(
+                    "\"{}\" must be an https:// URL like https://www.plantuml.com/plantuml (or http:// to localhost, 127.0.0.1 or [::1]), with no query or fragment",
+                    self.admin.web_plantuml_url
+                ),
+            ));
+        }
         Ok(())
     }
 }
@@ -361,6 +382,30 @@ mod tests {
         }
         let mut config = Config::default();
         config.admin.session_hours = 168;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn device_credentials_last_one_day_to_a_year() {
+        for days in [0, 366] {
+            let v = violation(|c| c.admin.device_days = days);
+            assert_eq!(v.key, "admin.device_days");
+        }
+        let mut config = Config::default();
+        config.admin.device_days = 365;
+        assert!(config.validate().is_ok());
+        config.admin.device_days = 1;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn client_users_are_user_names() {
+        for bad in ["Alice", "a b", "-x", "a/b"] {
+            let v = violation(|c| c.client.user = bad.into());
+            assert_eq!(v.key, "client.user", "{bad}");
+        }
+        let mut config = Config::default();
+        config.client.user = "alice-2".into();
         assert!(config.validate().is_ok());
     }
 

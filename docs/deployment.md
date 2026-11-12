@@ -205,7 +205,7 @@ bearer_token_env_var = "JOEDOCS_API_KEY"
 
 ## 6a. Manage from another machine
 
-The admin commands can also run from another machine, through the server's admin API, with an admin token and a TOTP code from an authenticator app. The API is off until you turn it on.
+The admin commands can also run from another machine, through the server's admin API, signed in as a user with a password and a TOTP code from an authenticator app. The API is off until you turn it on.
 
 1. On the server, turn the API on and restart the service:
 
@@ -215,31 +215,38 @@ The admin commands can also run from another machine, through the server's admin
    session_hours = 8    # how long a login lasts
    ```
 
-2. On the server, create an admin token for the machine you manage it from (with Docker: `docker compose exec joedocs joedocs admin-token create laptop`):
+2. On the server, create your user (with Docker: `docker compose exec joedocs joedocs user create alice`):
 
    ```bash
-   joedocs admin-token create laptop
+   joedocs user create alice
    ```
 
-   It prints a TOTP secret and an `otpauth://` URI: add the secret to Google Authenticator (or another TOTP app), or show the URI as a QR code with `... | qrencode -t ansiutf8`. The admin token is on the last line. Both are shown once.
-3. On the client, keep the token in a password manager, for example `pass insert joedocs/admin`.
-4. Log in, then use the admin commands as on the server. The first `joedocs login` asks for the server's URL, checks it, and saves it as `client.server` in `~/.config/joedocs/config.toml` (or the config file in use); you can also set it there yourself:
+   It prints a one-time password on the last line, valid for 72 hours. Users are created only by an admin; every user is an admin in 0.5.1.
+3. Sign in from the machine you manage it from. The first `joedocs auth login` asks for the server's URL, checks it, and saves it as `client.server` in `~/.config/joedocs/config.toml` (or the config file in use); you can also set it there yourself, with your user name:
 
    ```toml
    [client]
    server = "https://docs.example.ts.net"
+   user = "alice"
    ```
 
    ```bash
-   export JOEDOCS_ADMIN_TOKEN="$(pass show joedocs/admin)"
-   joedocs login            # asks for the server's URL the first time, then the 6-digit code
+   joedocs auth login --user alice   # the one-time password, then TOTP setup and your own password
    joedocs status
    joedocs key create ci --grant joedocs:read
    joedocs backup ~/joedocs-$(date +%F).tgz
-   joedocs logout
+   joedocs auth logout
    ```
 
-When the session expires, the next command asks for a new code. `joedocs admin-token revoke laptop` on the server ends that token and its sessions at once. The server's `/admin/v1/` path must be reachable the same way as `/mcp` (for example through `tailscale serve`), and `server.allowed_hosts` must list the name you use.
+   At this first sign-in it shows a TOTP secret, its `otpauth://` URI and a QR code: add it to Google Authenticator (or another TOTP app), type a code from it, then choose your password (12 or more characters). The machine keeps a device credential in `~/.local/state/joedocs/devices.toml` (`0600`), so later sign-ins there need only a code: when a session ends after `admin.session_hours`, the next command asks for one. A device unused for `admin.device_days` (30 by default) signs in with the password again.
+
+`joedocs auth devices` lists your devices and `auth devices revoke NAME` ends one; `joedocs user disable alice` on the server (or as another signed-in user) ends all of a user's sessions and devices at once, and `user reset-totp alice` lets a user who lost their authenticator set up a new one. The server's `/admin/v1/` path must be reachable the same way as `/mcp` (for example through `tailscale serve`), and `server.allowed_hosts` must list the name you use.
+
+**Sign-in attempts.** Five failed sign-ins lock that user name for 15 minutes (open sessions and MCP keys keep working), and anyone who can reach the sign-in can trigger that for a name they know. A name's count is forgotten 15 minutes after its last failure, the same way for every name. Keep `/admin/v1/` and `/admin/` off the public internet (a tailnet, a VPN) or behind a proxy that limits request rates. `joedocs user unlock NAME` clears a lock.
+
+A name that is no user's is locked the same way, so a refusal never says whether a name exists. Its count lives only in the server's memory (at most 100,000 names; real users' counts are in the database and are never pushed out). So a restart forgets unknown names' locks, and a sustained flood of failed sign-ins with made-up names (about ten minutes of a fully busy hashing gate) can lift one early; someone watching for that could tell an unknown name from a real one. The flood shows in the audit log as many `admin:auth.login` rows with outcome `unauthorized` (or `busy`); `joedocs audit` lists them.
+
+**Admin tokens (deprecated).** Before 0.5.1 the admin API took an admin token (`joedocs admin-token create NAME` on the server, `JOEDOCS_ADMIN_TOKEN` and `joedocs login` on the client). They still work and print a warning; once nobody uses them, set `[admin] token_login = false`, restart, and revoke them with `joedocs admin-token revoke NAME`.
 
 ## 6b. Admin web interface
 
@@ -254,8 +261,8 @@ The admin API can also serve pages for a browser under `/admin/`: browse, search
    ```
 
    `joedocs serve` then prints `JoeDocs web interface: http://127.0.0.1:8750/admin/`, and `joedocs status` says it is on.
-2. Create an admin token as in 6a step 2 and add its secret to your authenticator app.
-3. Open `https://<your server>/admin/` and sign in with the token and a code. The browser keeps a web session for `admin.session_hours`; the token is not stored.
+2. Create a user as in 6a step 2.
+3. Open `https://<your server>/admin/` and sign in with your user name and password and a code. At the first sign-in, the one-time password leads to the setup page: scan its QR code (or type the secret) into your authenticator, type a code, and choose your password. The browser keeps a web session for `admin.session_hours`; the password is not stored. The Users page creates and manages users, and Your account (in the session menu) changes your password and revokes your devices.
 
 **HTTPS.** Signing in is refused over plain HTTP except on the server itself (`http://localhost:8750/admin/`, `127.0.0.1` or `[::1]`), so reach it through `tailscale serve` or a TLS proxy (section 5), not through `bind` set to a Tailscale address. Over HTTPS the session cookie is `Secure` and host-only (`__Host-`).
 
@@ -288,6 +295,9 @@ The admin API can also serve pages for a browser under `/admin/`: browse, search
 | --- | --- |
 | `403 Forbidden` | The `Host` the client used is not in `server.allowed_hosts` (or its `Origin` is not in `server.allowed_origins`). Add it and restart. |
 | `401 Unauthorized` | The token is wrong, rotated or revoked. Check with `joedocs key list`. |
+| Signing in says "sign-in is locked" | Five failed sign-ins lock the user name (or admin token) for 15 minutes. Wait, or run `joedocs user unlock NAME` on the server. |
+| `joedocs auth login` says "sign in once at a terminal" | The first sign-in on a machine asks for the password, which needs a terminal; scripts then renew with `joedocs auth login --code CODE`. |
+| A command says "this device's sign-in has ended" | The device was revoked, or unused for `admin.device_days`. Sign in again with `joedocs auth login`. |
 | `/admin/` answers `401 Unauthorized` in the browser | `admin.enabled` or `admin.web_ui` is off, so `/admin/` is an unknown path, which the MCP endpoint's key check refuses. Turn both on and restart; `joedocs status` says whether the interface is on. |
 | Signing in says "Signing in needs HTTPS" | The page was opened over plain HTTP from another machine. Use `https://` through `tailscale serve` or a TLS proxy (section 6b). |
 | Signing in says the form was "not sent from this site" | The proxy changes the `Host` header. Pass it through, or add the public origin to `server.allowed_origins` (section 6b). |

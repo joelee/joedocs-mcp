@@ -53,8 +53,10 @@
 │   ├── backup.rs           joedocs backup: archive format, writing, safe restore
 │   ├── browse.rs           joedocs list, search, history, diff and audit: store requests, the admin API's JSON replies, tables
 │   ├── client.rs           Client of a server's admin API: login, sessions, prompts, remote calls
+│   ├── client_user.rs      auth login: TOTP setup, the device file, renewal with a device credential
 │   ├── status.rs           joedocs status: StatusReport, the /health probe, unit state, sizes
 │   ├── totp.rs             TOTP (RFC 6238), base32, otpauth URIs
+│   ├── password.rs         Password rules, Argon2id PHC hashing, one-time passwords, the hashing gate
 │   ├── auth.rs             API key format, hashing, grants, RandomSource
 │   ├── clock.rs            Clock trait, SystemClock, FixedClock
 │   ├── db/
@@ -62,10 +64,11 @@
 │   │   ├── projects.rs     Project queries
 │   │   ├── keys.rs         API key and grant queries
 │   │   ├── admin.rs        Admin token and session queries
+│   │   ├── users.rs        User, device, user session and sign-in lock queries (by user ID)
 │   │   ├── documents.rs    Document, listing and revision queries
 │   │   ├── files.rs        Files of multi-file documents and the files each revision changed
 │   │   ├── search.rs       Search index upkeep and the search query
-│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search, 0004_admin, 0005_files, 0006_web_sessions)
+│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search, 0004_admin, 0005_files, 0006_web_sessions, 0007_users, 0008_sign_in_lock)
 │   ├── document/
 │   │   ├── mod.rs          Slugs and re-exports
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
@@ -76,6 +79,7 @@
 │   ├── mcp/
 │   │   ├── mod.rs          Router, ServerOptions, serve, run, shutdown signal
 │   │   ├── admin_api.rs    The /admin/v1 API: login, sessions, checks, audit, routes
+│   │   ├── user_api.rs     The admin API's user routes: sign-in, setup, me, devices, users
 │   │   ├── auth.rs         Bearer key middleware and Caller
 │   │   ├── tools.rs        Tool parameters, results and handlers
 │   │   └── errors.rs       ToolError: codes and structured results
@@ -87,7 +91,7 @@
 │   │   ├── assets/         app.css, app.js, and vendor/ (htmx, Pele and their licences)
 │   │   ├── markdown.rs     Obsidian-style Markdown to safe HTML (tests in markdown_tests.rs)
 │   │   ├── plantuml.rs     PlantUML text encoding for the configured server
-│   │   └── pages/          One module per workspace: login, overview, documents, document, history, search, projects, keys, audit, archive, maintenance
+│   │   └── pages/          One module per workspace: login, setup, overview, documents, document, history, search, projects, keys, users (and Account), audit, archive, maintenance
 │   ├── search/
 │   │   ├── mod.rs          Re-exports and the Invalid error
 │   │   ├── query.rs        Query grammar and FTS5 expressions
@@ -102,6 +106,10 @@
 │       ├── admin_files.rs  convert, move-file and restore-file (admin only)
 │       ├── revisions.rs    History pages and diffs
 │       ├── admin_tokens.rs Admin tokens, TOTP logins, lockout, sessions
+│       ├── principal.rs    Admin: who made an admin request (an admin token or a user)
+│       ├── users.rs        User administration: create, list, disable, enable, unlock, resets, remove
+│       ├── sign_in.rs      User sign-in in phases, TOTP setup, devices, user sessions, the sign-in lock
+│       ├── throttle.rs     The sign-in lock of names that are no user's: in memory, by keyed hash, capped
 │       ├── archive.rs      Archive list and restore
 │       ├── audit.rs        Reading the audit log (joedocs audit)
 │       ├── backup.rs       The consistent snapshot behind joedocs backup
@@ -112,7 +120,8 @@
 │       ├── search.rs       Store::search
 │       ├── reindex.rs      Rebuilding the index from the history
 │       ├── journal.rs      Undoable vault file writes
-│       └── tests.rs        Store unit tests (temp vault, real git)
+│       ├── tests.rs        Store unit tests (temp vault, real git)
+│       └── sign_in_tests.rs Store tests of user sign-in (a module of tests.rs)
 └── tests/
     ├── admin.rs            Admin commands through the binary
     ├── admin_api.rs        The admin API: off by default, login, lockout, sessions, audit
@@ -127,6 +136,9 @@
     ├── reindex.rs          Rebuilds: identical, after a lost write or database
     ├── search.rs           Search over a fixture vault
     ├── store.rs            A document's lifecycle across files, git and index
+    ├── users.rs            joedocs user ... on the server, through the binary
+    ├── user_api.rs         The admin API's user routes: sign-in, setup, lock, devices, users, deprecation
+    ├── user_client.rs      joedocs auth ... and remote user commands: TOTP setup, devices, credential choice
     └── web.rs              The admin web interface: pages, sessions, checks, audit, parity with the commands, accessibility
 ```
 

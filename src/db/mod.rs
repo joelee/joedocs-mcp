@@ -12,6 +12,7 @@ mod files;
 mod keys;
 mod projects;
 mod search;
+mod users;
 
 use std::path::Path;
 
@@ -43,6 +44,15 @@ pub use search::{
     SearchQuery, SearchRow, clear_documents, file_fts_rowid, fts_rowid, index_document, index_file,
     search_documents, unindex_document, unindex_file,
 };
+pub use users::{
+    DeviceRow, ThrottleRow, UserRow, UserSecrets, UserSessionRow, clear_totp, confirm_totp,
+    devices_of, end_setup, find_device, find_user_by_id, find_user_by_name, find_user_session,
+    insert_device, insert_user, insert_user_session, list_users, record_device_failure,
+    record_user_login, rehash_password, renew_device, revoke_all_of, revoke_device, revoke_others,
+    revoke_user_session, set_initial_password, set_password, set_user_disabled, set_user_removed,
+    start_setup, throttle_clear, throttle_failure, throttle_of, throttle_rows, touch_device,
+    touch_user_session, user_secrets,
+};
 
 /// Schema migrations, applied in order. The schema version
 /// (`PRAGMA user_version`) is the number applied.
@@ -53,6 +63,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0004_admin.sql"),
     include_str!("migrations/0005_files.sql"),
     include_str!("migrations/0006_web_sessions.sql"),
+    include_str!("migrations/0007_users.sql"),
+    include_str!("migrations/0008_sign_in_lock.sql"),
 ];
 
 /// The schema version this build expects.
@@ -160,6 +172,38 @@ pub fn insert_audit(conn: &Connection, entry: &AuditEntry<'_>) -> rusqlite::Resu
     Ok(())
 }
 
+/// Appends an audit entry for an admin API or web interface call, naming
+/// the signed-in user when there is one (migration 7). MCP calls use
+/// [`insert_audit`], which leaves the user columns empty.
+///
+/// # Errors
+///
+/// Returns an error when the statement fails.
+pub fn insert_admin_audit(
+    conn: &Connection,
+    entry: &AuditEntry<'_>,
+    user: Option<(&str, &str)>,
+) -> rusqlite::Result<()> {
+    let (user_id, user_name) = user.unzip();
+    conn.execute(
+        "INSERT INTO audit_log (at, api_key_id, key_name, client, tool, document_id, outcome,
+             user_id, user_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            entry.at,
+            entry.api_key_id,
+            entry.key_name,
+            entry.client,
+            entry.tool,
+            entry.document_id,
+            entry.outcome,
+            user_id,
+            user_name
+        ],
+    )?;
+    Ok(())
+}
+
 /// Conditions of an audit log read; `None` means any.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuditQuery<'a> {
@@ -203,6 +247,8 @@ pub struct AuditRow {
     pub document_id: Option<String>,
     /// `ok` or an error code.
     pub outcome: String,
+    /// The signed-in user who made an admin call, if one did (0.5.1).
+    pub user_name: Option<String>,
 }
 
 /// A page of audit entries, newest first, and how many match.
@@ -235,7 +281,7 @@ pub fn list_audit(
         |row| row.get(0),
     )?;
     let mut stmt = conn.prepare(&format!(
-        "SELECT at, api_key_id, key_name, client, tool, document_id, outcome
+        "SELECT at, api_key_id, key_name, client, tool, document_id, outcome, user_name
          FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?9 OFFSET ?10"
     ))?;
     let rows = stmt
@@ -261,6 +307,7 @@ pub fn list_audit(
                     tool: row.get(4)?,
                     document_id: row.get(5)?,
                     outcome: row.get(6)?,
+                    user_name: row.get(7)?,
                 })
             },
         )?
@@ -390,7 +437,7 @@ mod tests {
         let version: usize = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         let row = get_document(&conn, "JD-1").unwrap().unwrap();
         assert_eq!(
             (row.revision, row.main_revision, row.multifile),
@@ -430,7 +477,7 @@ mod tests {
         let version: usize = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         let session = find_session(&conn, "s1").unwrap().unwrap();
         assert_eq!(session.kind, SessionKind::Api);
         assert!(
@@ -440,6 +487,149 @@ mod tests {
             )
             .is_err(),
             "kind is api or web"
+        );
+    }
+
+    #[test]
+    fn a_version_6_database_gains_users_with_its_tokens_sessions_keys_and_audit_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("joedocs.db");
+        let mut conn = Connection::open(&path).unwrap();
+        let tx = conn.transaction().unwrap();
+        for sql in &MIGRATIONS[..6] {
+            tx.execute_batch(sql).unwrap();
+        }
+        tx.pragma_update(None, "user_version", 6).unwrap();
+        tx.execute_batch(
+            "INSERT INTO projects (id, name, key, title, created_at)
+                 VALUES (1, 'joedocs', 'JD', 'JoeDocs', 't');
+             INSERT INTO api_keys (id, name, secret_sha256, created_at)
+                 VALUES ('k1', 'laptop', x'01', 't');
+             INSERT INTO grants (api_key_id, project_id, permission) VALUES ('k1', 1, 'write');
+             INSERT INTO admin_tokens (id, name, secret_sha256, totp_secret, created_at)
+                 VALUES ('a1', 'ops', x'00', x'00', 't');
+             INSERT INTO admin_sessions (id, admin_token_id, secret_sha256, created_at, expires_at, kind)
+                 VALUES ('s1', 'a1', x'00', 't', 'u', 'api'), ('w1', 'a1', x'00', 't', 'u', 'web');
+             INSERT INTO audit_log (at, api_key_id, key_name, client, tool, document_id, outcome)
+                 VALUES ('t', 'k1', 'laptop', 'c', 'new_document', 'JD-1', 'ok');",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        drop(conn);
+
+        let conn = open(&path).unwrap();
+        let version: usize = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 8);
+        assert_eq!(find_key_by_name(&conn, "laptop").unwrap().unwrap().id, "k1");
+        assert_eq!(
+            find_admin_token_by_name(&conn, "ops").unwrap().unwrap().id,
+            "a1"
+        );
+        assert_eq!(
+            find_session(&conn, "s1").unwrap().unwrap().kind,
+            SessionKind::Api
+        );
+        assert_eq!(
+            find_session(&conn, "w1").unwrap().unwrap().kind,
+            SessionKind::Web
+        );
+        let audit: (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT key_name, user_id, user_name FROM audit_log",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(audit, ("laptop".to_owned(), None, None));
+        assert_eq!(list_users(&conn).unwrap(), []);
+    }
+
+    #[test]
+    fn a_version_7_database_keys_its_sign_in_lock_by_user_and_keeps_its_users() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("joedocs.db");
+        let mut conn = Connection::open(&path).unwrap();
+        let tx = conn.transaction().unwrap();
+        for sql in &MIGRATIONS[..7] {
+            tx.execute_batch(sql).unwrap();
+        }
+        tx.pragma_update(None, "user_version", 7).unwrap();
+        tx.execute_batch(
+            "INSERT INTO users (id, name, password_hash, created_at, updated_at)
+                 VALUES ('u1', 'alice', 'h', 't', 't');
+             INSERT INTO sign_in_throttle (name, failures, locked_until, updated_at)
+                 VALUES ('alice', 0, 'later', 't'), ('a typed password', 3, NULL, 't');",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        drop(conn);
+
+        let conn = open(&path).unwrap();
+        let version: usize = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 8);
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('sign_in_throttle') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            columns,
+            ["user_id", "failures", "locked_until", "updated_at"]
+        );
+        assert_eq!(throttle_rows(&conn).unwrap(), 0, "old rows are dropped");
+        assert_eq!(list_users(&conn).unwrap()[0].name, "alice");
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'sign_in_throttle_updated'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
+    }
+
+    #[test]
+    fn admin_audit_entries_name_the_user_and_mcp_entries_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("joedocs.db")).unwrap();
+        let entry = |key: &'static str| AuditEntry {
+            at: "t",
+            api_key_id: key,
+            key_name: key,
+            client: "c",
+            tool: "admin:status",
+            document_id: None,
+            outcome: "ok",
+        };
+        insert_audit(&conn, &entry("k1")).unwrap();
+        insert_admin_audit(&conn, &entry("a1"), None).unwrap();
+        insert_admin_audit(&conn, &entry("u1"), Some(("u1", "alice"))).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT api_key_id, user_id, user_name FROM audit_log ORDER BY rowid")
+            .unwrap();
+        let rows: Vec<(String, Option<String>, Option<String>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("k1".to_owned(), None, None),
+                ("a1".to_owned(), None, None),
+                (
+                    "u1".to_owned(),
+                    Some("u1".to_owned()),
+                    Some("alice".to_owned())
+                ),
+            ]
         );
     }
 

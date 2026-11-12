@@ -20,8 +20,8 @@ use serde_json::{Value, json};
 
 use super::{ServerOptions, Shared, with_default_port};
 use crate::auth::OsRandom;
-use crate::db::AdminTokenRow;
-use crate::store::{self, Actor, AdminRefusal, Store};
+use crate::store::Admin;
+use crate::store::{self, AdminRefusal, Store};
 
 /// The header that carries an admin session token.
 pub const SESSION_HEADER: &str = "joedocs-session";
@@ -35,16 +35,27 @@ pub struct AdminOptions {
     pub config_file: Option<PathBuf>,
 }
 
-/// A test hook run between staging and compressing a remote backup.
+/// A test hook run between staging and compressing a remote backup, or
+/// while a password is hashed.
 #[cfg(test)]
 type StagingHook = Arc<dyn Fn(&Shared) + Send + Sync>;
+
+#[path = "user_api.rs"]
+mod user_api;
 
 struct ApiState {
     shared: Arc<Shared>,
     /// Called by a remote backup between staging and compressing (tests).
     #[cfg(test)]
     after_staging: Option<StagingHook>,
+    /// Called while a password is hashed (tests).
+    #[cfg(test)]
+    during_hash: Option<StagingHook>,
     session_hours: u32,
+    /// `admin.device_days`.
+    device_days: u32,
+    /// `admin.token_login`.
+    token_login: bool,
     config_file: Option<PathBuf>,
     bind: SocketAddr,
     allowed_hosts: Vec<String>,
@@ -62,7 +73,11 @@ pub(super) fn routes(
         shared: Arc::clone(shared),
         #[cfg(test)]
         after_staging: None,
+        #[cfg(test)]
+        during_hash: None,
         session_hours: admin.session_hours,
+        device_days: options.device_days,
+        token_login: options.token_login,
         config_file: admin.config_file.clone(),
         bind: options.bind,
         allowed_hosts: options.allowed_hosts.clone(),
@@ -111,13 +126,18 @@ pub(crate) fn classify(error: &store::Error) -> (StatusCode, &'static str) {
     match error {
         E::AdminRefused(AdminRefusal::Unauthorized) => (StatusCode::UNAUTHORIZED, "unauthorized"),
         E::AdminRefused(AdminRefusal::NoSession) => (StatusCode::UNAUTHORIZED, "no_session"),
+        E::AdminRefused(AdminRefusal::DeviceInvalid) => {
+            (StatusCode::UNAUTHORIZED, "device_invalid")
+        }
         E::AdminRefused(AdminRefusal::SessionExpired) => {
             (StatusCode::UNAUTHORIZED, "session_expired")
         }
         E::AdminRefused(AdminRefusal::Locked { .. }) => (StatusCode::TOO_MANY_REQUESTS, "locked"),
-        E::NotFound(_) | E::FileNotFound { .. } | E::ProjectNotFound(_) | E::KeyNotFound(_) => {
-            (StatusCode::NOT_FOUND, "not_found")
-        }
+        E::NotFound(_)
+        | E::FileNotFound { .. }
+        | E::ProjectNotFound(_)
+        | E::KeyNotFound(_)
+        | E::UserNotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
         E::Archived(_) => (StatusCode::CONFLICT, "archived"),
         E::AlreadyExists(_) => (StatusCode::CONFLICT, "already_exists"),
         E::Conflict { .. } | E::FileConflict { .. } => (StatusCode::CONFLICT, "conflict"),
@@ -163,12 +183,17 @@ impl IntoResponse for ApiError {
 }
 
 /// What a request carries, read once.
+#[derive(Clone)]
 struct Call {
     operation: &'static str,
     client: String,
     token: Option<SecretString>,
     session: Option<SecretString>,
     allowed: Result<(), ApiError>,
+    /// `admin.device_days`, for checking a device credential.
+    device_days: u32,
+    /// `admin.token_login`: whether an admin token may be used at all.
+    token_login: bool,
 }
 
 impl Call {
@@ -197,6 +222,8 @@ impl Call {
             token,
             session,
             allowed: check_origin(state, headers),
+            device_days: state.device_days,
+            token_login: state.token_login,
         }
     }
 }
@@ -254,7 +281,7 @@ pub(crate) fn strip_port(authority: &str) -> &str {
 /// audit row for the call whatever happens.
 async fn authorized<F>(state: Arc<ApiState>, call: Call, work: F) -> Response
 where
-    F: FnOnce(&mut Store, &ApiState, &AdminTokenRow) -> Result<Response, ApiError> + Send + 'static,
+    F: FnOnce(&mut Store, &ApiState, &Admin) -> Result<Response, ApiError> + Send + 'static,
 {
     run(state, call, move |store, state, call| {
         match authenticate(store, call) {
@@ -270,21 +297,27 @@ where
 
 /// A refused call, and who made it when the admin token is valid.
 struct Refused {
-    who: Option<AdminTokenRow>,
+    who: Option<Admin>,
     error: ApiError,
 }
 
-fn refused(who: Option<AdminTokenRow>, error: ApiError) -> Box<Refused> {
+fn refused(who: Option<Admin>, error: ApiError) -> Box<Refused> {
     Box::new(Refused { who, error })
 }
 
 /// The admin token and session of `call`, or the refusal and who called
 /// (when the token is valid).
-fn authenticate(store: &Store, call: &Call) -> Result<AdminTokenRow, Box<Refused>> {
+fn authenticate(store: &Store, call: &Call) -> Result<Admin, Box<Refused>> {
+    if user_api::has_device(call) {
+        return user_api::authenticate(store, call).map(|(admin, _)| admin);
+    }
     let token = call
         .token
         .as_ref()
         .ok_or_else(|| refused(None, ApiError::unauthorized()))?;
+    if !call.token_login {
+        return Err(refused(None, tokens_off()));
+    }
     let admin = store
         .admin_token_for(token)
         .map_err(|e| refused(None, ApiError::from(&e)))?
@@ -300,25 +333,44 @@ fn authenticate(store: &Store, call: &Call) -> Result<AdminTokenRow, Box<Refused
         });
     // A session can only be renewed by logging in, so say at once that the
     // token is locked rather than inviting a code.
-    checked.map_err(|error| refused(Some(admin.clone()), locked(store, &admin).unwrap_or(error)))
+    checked.map(Admin::Token).map_err(|error| {
+        let lock = locked(store, &admin).unwrap_or(error);
+        refused(Some(Admin::Token(admin.clone())), lock)
+    })
+}
+
+/// `401 unauthorized` for an admin token while `admin.token_login` is off.
+fn tokens_off() -> ApiError {
+    ApiError::new(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "admin tokens are switched off on this server (admin.token_login = false); sign in as a user with `joedocs auth login --user NAME`",
+    )
+}
+
+/// The `Deprecation` date of admin tokens (RFC 9745): 2026-11-12T00:00:00Z,
+/// the day of the 0.5.1 release that deprecates them.
+const TOKENS_DEPRECATED: &str = "@1794441600";
+/// Where the deprecation is explained.
+const DEPRECATION_LINK: &str =
+    "<https://github.com/joelee/joedocs-mcp/blob/main/docs/upgrading.md>; rel=\"deprecation\"";
+
+/// Marks a reply to an admin-token request as deprecated (RFC 9745).
+fn mark_deprecated(response: &mut Response) {
+    let headers = response.headers_mut();
+    headers.insert("deprecation", HeaderValue::from_static(TOKENS_DEPRECATED));
+    headers.append(header::LINK, HeaderValue::from_static(DEPRECATION_LINK));
 }
 
 /// Writes the audit row for `call`.
-fn write_audit(store: &Store, who: Option<&AdminTokenRow>, call: &Call, outcome: &str) {
-    let (id, name) = who.map_or(("unknown", "unknown"), |w| (w.id.as_str(), w.name.as_str()));
-    if let Err(error) = store.audit(
-        id,
-        &Actor::new(name, &call.client),
-        call.operation,
-        None,
-        outcome,
-    ) {
+fn write_audit(store: &Store, who: Option<&Admin>, call: &Call, outcome: &str) {
+    if let Err(error) = store.audit_admin(who, &call.client, call.operation, outcome) {
         tracing::error!(%error, "cannot write the admin audit entry");
     }
 }
 
 /// The lock refusal for `admin`, when it is locked now.
-fn locked(store: &Store, admin: &AdminTokenRow) -> Option<ApiError> {
+fn locked(store: &Store, admin: &crate::db::AdminTokenRow) -> Option<ApiError> {
     let until = admin.locked_until.as_ref()?;
     let now = store.now();
     if *until <= now {
@@ -348,7 +400,7 @@ where
             &mut Store,
             &ApiState,
             &Call,
-        ) -> Result<(Option<AdminTokenRow>, Result<Response, ApiError>), ApiError>
+        ) -> Result<(Option<Admin>, Result<Response, ApiError>), ApiError>
         + Send
         + 'static,
 {
@@ -367,7 +419,8 @@ where
                 let who = call
                     .token
                     .as_ref()
-                    .and_then(|t| store.admin_token_for(t).ok().flatten());
+                    .and_then(|t| store.admin_token_for(t).ok().flatten())
+                    .map(Admin::Token);
                 (who, Err(refused.clone()))
             }
             Ok(()) => match work(&mut store, &state, &call) {
@@ -403,6 +456,13 @@ pub const BODY_LIMIT: usize = 64 * 1024;
 enum Route {
     Login,
     Logout,
+    AuthLogin,
+    AuthSetup,
+    Me,
+    MePassword,
+    Devices,
+    DeviceRevoke(String),
+    Users(UserRoute),
     Status,
     ProjectsList,
     ProjectsAdd,
@@ -439,6 +499,18 @@ impl Route {
         match parts.as_slice() {
             ["session"] if post => Self::Login,
             ["session"] if *method == M::DELETE => Self::Logout,
+            ["auth", "login"] if post => Self::AuthLogin,
+            ["auth", "setup"] if post => Self::AuthSetup,
+            ["me"] if get => Self::Me,
+            ["me", "password"] if post => Self::MePassword,
+            ["me", "devices"] if get => Self::Devices,
+            ["me", "devices", name, "revoke"] if post => Self::DeviceRevoke(percent_decode(name)),
+            ["users"] if get => Self::Users(UserRoute::List),
+            ["users"] if post => Self::Users(UserRoute::Create),
+            ["users", name, action] if post => match UserRoute::action(action, name) {
+                Some(route) => Self::Users(route),
+                None => Self::Unknown,
+            },
             ["status"] if get => Self::Status,
             ["projects"] if get => Self::ProjectsList,
             ["projects"] if post => Self::ProjectsAdd,
@@ -471,6 +543,13 @@ impl Route {
         match self {
             Self::Login => "admin:session.create",
             Self::Logout => "admin:session.delete",
+            Self::AuthLogin => "admin:auth.login",
+            Self::AuthSetup => "admin:auth.setup",
+            Self::Me => "admin:me.status",
+            Self::MePassword => "admin:me.password",
+            Self::Devices => "admin:devices.list",
+            Self::DeviceRevoke(_) => "admin:devices.revoke",
+            Self::Users(route) => route.operation(),
             Self::Status => "admin:status",
             Self::ProjectsList => "admin:projects.list",
             Self::ProjectsAdd => "admin:projects.add",
@@ -499,6 +578,44 @@ impl Route {
     }
 }
 
+/// A `/admin/v1/users` route. `remove` has none: it runs on the server only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UserRoute {
+    List,
+    Create,
+    Disable(String),
+    Enable(String),
+    Unlock(String),
+    ResetPassword(String),
+    ResetTotp(String),
+}
+
+impl UserRoute {
+    fn action(action: &str, name: &str) -> Option<Self> {
+        let name = percent_decode(name);
+        Some(match action {
+            "disable" => Self::Disable(name),
+            "enable" => Self::Enable(name),
+            "unlock" => Self::Unlock(name),
+            "reset-password" => Self::ResetPassword(name),
+            "reset-totp" => Self::ResetTotp(name),
+            _ => return None,
+        })
+    }
+
+    fn operation(&self) -> &'static str {
+        match self {
+            Self::List => "admin:users.list",
+            Self::Create => "admin:users.create",
+            Self::Disable(_) => "admin:users.disable",
+            Self::Enable(_) => "admin:users.enable",
+            Self::Unlock(_) => "admin:users.unlock",
+            Self::ResetPassword(_) => "admin:users.reset_password",
+            Self::ResetTotp(_) => "admin:users.reset_totp",
+        }
+    }
+}
+
 /// Every `/admin/v1/` request. It uses no extractor that can reject a
 /// request before it is checked and audited: the request is read here,
 /// with [`BODY_LIMIT`], and every outcome goes through [`run`].
@@ -506,6 +623,22 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
     let (parts, body) = request.into_parts();
     let route = Route::of(&parts.method, parts.uri.path());
     let call = Call::new(&state, route.operation(), &parts.headers);
+    let deprecated = call.token.is_some() && !user_api::has_device(&call);
+    let mut response = route_call(state, route, call, parts.uri, body).await;
+    if deprecated {
+        mark_deprecated(&mut response);
+    }
+    response
+}
+
+/// Runs the handler for `route`.
+async fn route_call(
+    state: Arc<ApiState>,
+    route: Route,
+    call: Call,
+    uri: axum::http::Uri,
+    body: axum::body::Body,
+) -> Response {
     let Ok(body) = axum::body::to_bytes(body, BODY_LIMIT).await else {
         let too_large = ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -514,10 +647,16 @@ async fn dispatch(State(state): State<Arc<ApiState>>, request: axum::extract::Re
         );
         return refuse(state, call, too_large).await;
     };
-    let uri = parts.uri;
     match route {
         Route::Login => login(state, call, body).await,
         Route::Logout => logout(state, call).await,
+        Route::AuthLogin => user_api::sign_in(state, call, body).await,
+        Route::AuthSetup => user_api::setup(state, call, body).await,
+        Route::Me => user_api::me(state, call).await,
+        Route::MePassword => user_api::change_password(state, call, body).await,
+        Route::Devices => user_api::devices(state, call).await,
+        Route::DeviceRevoke(name) => user_api::revoke_device(state, call, name).await,
+        Route::Users(command) => user_api::users(state, call, command, body).await,
         Route::Status => status(state, call).await,
         Route::ProjectsList => projects_list(state, call).await,
         Route::ProjectsAdd => projects_add(state, call, body).await,
@@ -560,7 +699,8 @@ async fn refuse(state: Arc<ApiState>, call: Call, error: ApiError) -> Response {
         let who = call
             .token
             .as_ref()
-            .and_then(|t| store.admin_token_for(t).ok().flatten());
+            .and_then(|t| store.admin_token_for(t).ok().flatten())
+            .map(Admin::Token);
         Ok((who, Err(error)))
     })
     .await
@@ -569,10 +709,17 @@ async fn refuse(state: Arc<ApiState>, call: Call, error: ApiError) -> Response {
 /// `POST /admin/v1/session` with `{"code": "123456"}`: logs in.
 async fn login(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
     run(state, call, move |store, state, call| {
+        if user_api::has_device(call) {
+            return Ok(user_api::renew(store, state, call, &body));
+        }
         let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
+        if !call.token_login {
+            return Ok((None, Err(tokens_off())));
+        }
         let who = store
             .admin_token_for(token)
-            .map_err(|e| ApiError::from(&e))?;
+            .map_err(|e| ApiError::from(&e))?
+            .map(Admin::Token);
         let code = serde_json::from_slice::<Value>(&body)
             .ok()
             .and_then(|v| v.get("code").and_then(Value::as_str).map(str::to_owned));
@@ -604,10 +751,17 @@ async fn login(state: Arc<ApiState>, call: Call, body: Bytes) -> Response {
 /// `DELETE /admin/v1/session`: logs out.
 async fn logout(state: Arc<ApiState>, call: Call) -> Response {
     run(state, call, move |store, _, call| {
+        if user_api::has_device(call) {
+            return Ok(user_api::sign_out(store, call));
+        }
         let token = call.token.as_ref().ok_or_else(ApiError::unauthorized)?;
+        if !call.token_login {
+            return Ok((None, Err(tokens_off())));
+        }
         let who = store
             .admin_token_for(token)
-            .map_err(|e| ApiError::from(&e))?;
+            .map_err(|e| ApiError::from(&e))?
+            .map(Admin::Token);
         if who.is_none() {
             return Err(ApiError::unauthorized());
         }
@@ -1131,7 +1285,8 @@ fn backup_blocking(state: &ApiState, call: &Call) -> Response {
                     let who = call
                         .token
                         .as_ref()
-                        .and_then(|t| store.admin_token_for(t).ok().flatten());
+                        .and_then(|t| store.admin_token_for(t).ok().flatten())
+                        .map(Admin::Token);
                     Err(refused(who, forbidden.clone()))
                 }
                 Ok(()) => authenticate(store, call),
@@ -1276,7 +1431,10 @@ mod tests {
             after_staging: Some(Arc::new(move |shared: &Shared| {
                 seen.store(shared.store.try_lock().is_ok(), Ordering::SeqCst);
             })),
+            during_hash: None,
             session_hours: 8,
+            device_days: 30,
+            token_login: true,
             config_file: None,
             bind: "127.0.0.1:8750".parse().unwrap(),
             allowed_hosts: vec!["127.0.0.1".into()],
@@ -1388,5 +1546,406 @@ mod tests {
         assert_eq!(locked.retry_after, Some(42));
         let response = locked.into_response();
         assert_eq!(response.headers()[header::RETRY_AFTER], "42");
+    }
+
+    /// A store with the user `alice`, whose one-time password is returned,
+    /// and the API state around it, with `hook` run while a password is
+    /// hashed.
+    fn user_state(hook: Option<StagingHook>) -> (tempfile::TempDir, Arc<ApiState>, String) {
+        let (dir, state, password, _) = user_state_at(hook);
+        (dir, state, password)
+    }
+
+    /// As [`user_state`], with the store's clock.
+    fn user_state_at(
+        hook: Option<StagingHook>,
+    ) -> (
+        tempfile::TempDir,
+        Arc<ApiState>,
+        String,
+        Arc<crate::clock::FixedClock>,
+    ) {
+        use secrecy::ExposeSecret as _;
+        let dir = tempfile::TempDir::new().unwrap();
+        let paths = crate::store::Paths {
+            home: dir.path().join("vault"),
+            state_dir: dir.path().join("state"),
+        };
+        let git = crate::history::GitCli::new(paths.git_dir(), &paths.home);
+        Store::init(&paths, &git).unwrap();
+        let clock = Arc::new(crate::clock::FixedClock::at(1_793_000_000));
+        let mut store = Store::open(
+            paths,
+            crate::store::Settings::from_config(&crate::Config::default()),
+            Box::new(git),
+            Arc::clone(&clock) as Arc<dyn crate::clock::Clock>,
+        )
+        .unwrap();
+        let password = crate::password::initial_password(&OsRandom).unwrap();
+        let hash = crate::password::hash(&password, &OsRandom).unwrap();
+        store.create_user("alice", &hash, &OsRandom).unwrap();
+        let state = Arc::new(ApiState {
+            shared: Shared::new(store),
+            after_staging: None,
+            during_hash: hook,
+            session_hours: 8,
+            device_days: 30,
+            token_login: true,
+            config_file: None,
+            bind: "127.0.0.1:8750".parse().unwrap(),
+            allowed_hosts: vec!["127.0.0.1".into()],
+            allowed_origins: Vec::new(),
+            web_ui: false,
+        });
+        (dir, state, password.expose_secret().to_owned(), clock)
+    }
+
+    fn sign_in_call(state: &ApiState) -> Call {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1"));
+        Call::new(state, "admin:auth.login", &headers)
+    }
+
+    #[tokio::test]
+    async fn passwords_are_hashed_while_the_store_is_free_for_other_requests() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let read = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&read);
+        let hook: StagingHook = Arc::new(move |shared: &Shared| {
+            // Another request's read, while this sign-in hashes.
+            if let Ok(store) = shared.store.try_lock()
+                && store.users().is_ok()
+            {
+                seen.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let (_dir, state, password) = user_state(Some(hook));
+        let body = serde_json::json!({"user": "alice", "password": password}).to_string();
+        let response = user_api::sign_in(
+            Arc::clone(&state),
+            sign_in_call(&state),
+            body.clone().into(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            read.load(Ordering::SeqCst),
+            1,
+            "the store was locked during the hash"
+        );
+        // An unknown name takes the same path: its dummy hash runs too.
+        let body = serde_json::json!({"user": "nobody", "password": password}).to_string();
+        let response =
+            user_api::sign_in(Arc::clone(&state), sign_in_call(&state), body.into()).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            read.load(Ordering::SeqCst),
+            2,
+            "the unknown name was hashed too"
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_ins_are_refused_busy_while_both_hashing_places_stay_taken() {
+        let (dir, state, password) = user_state(None);
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Arc::new(std::sync::Mutex::new(wait));
+        let mut held = Vec::new();
+        for _ in 0..crate::password::HASHING_PERMITS {
+            let (shared, wait) = (Arc::clone(&state.shared), Arc::clone(&wait));
+            held.push(tokio::spawn(async move {
+                shared
+                    .hashing()
+                    .run(move || {
+                        let _ = wait.lock().map(|w| w.recv());
+                    })
+                    .await
+            }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let body = serde_json::json!({"user": "alice", "password": password}).to_string();
+        let started = std::time::Instant::now();
+        let response =
+            user_api::sign_in(Arc::clone(&state), sign_in_call(&state), body.into()).await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        assert!(started.elapsed() < std::time::Duration::from_secs(4));
+        for _ in 0..crate::password::HASHING_PERMITS {
+            release.send(()).unwrap();
+        }
+        for task in held {
+            task.await.unwrap().unwrap();
+        }
+        let busy: i64 = rusqlite::Connection::open(dir.path().join("state/joedocs.db"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE tool = 'admin:auth.login' AND outcome = 'busy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(busy, 1);
+    }
+
+    /// Something done to the store while a password is hashed.
+    type Meanwhile = Box<dyn FnOnce(&mut Store) + Send>;
+
+    /// `alice`, set up with the password `CHOSEN` and signed in on the
+    /// devices `laptop` and `desktop`, with `meanwhile` run (once) during
+    /// the next hash.
+    struct Alice {
+        dir: tempfile::TempDir,
+        state: Arc<ApiState>,
+        clock: Arc<crate::clock::FixedClock>,
+        secret: Vec<u8>,
+        meanwhile: Arc<std::sync::Mutex<Option<Meanwhile>>>,
+        devices: Vec<(SecretString, SecretString)>,
+    }
+
+    const CHOSEN: &str = "a long passphrase of my own";
+
+    impl Alice {
+        fn code(&self) -> String {
+            use crate::clock::Clock as _;
+            crate::totp::code(
+                &self.secret,
+                crate::totp::step_at(self.clock.now().as_second()),
+            )
+        }
+
+        fn call(&self, tool: &'static str, device: usize) -> Call {
+            use secrecy::ExposeSecret as _;
+            let (credential, session) = &self.devices[device];
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1"));
+            headers.insert(
+                header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {}", credential.expose_secret())).unwrap(),
+            );
+            headers.insert(
+                SESSION_HEADER,
+                HeaderValue::from_str(session.expose_secret()).unwrap(),
+            );
+            Call::new(&self.state, tool, &headers)
+        }
+    }
+
+    fn signed_in_alice() -> Alice {
+        use crate::store::{SignInRequest, SignedIn};
+        use secrecy::ExposeSecret as _;
+        let meanwhile: Arc<std::sync::Mutex<Option<Meanwhile>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let slot = Arc::clone(&meanwhile);
+        let hook: StagingHook = Arc::new(move |shared: &Shared| {
+            if let Some(work) = slot.lock().unwrap().take() {
+                work(&mut shared.store.lock().unwrap());
+            }
+        });
+        let (dir, state, _, clock) = user_state_at(Some(hook));
+        let ok = crate::password::Verified {
+            matches: true,
+            needs_rehash: false,
+        };
+        let mut alice = Alice {
+            dir,
+            state,
+            clock,
+            secret: Vec::new(),
+            meanwhile,
+            devices: Vec::new(),
+        };
+        let chosen =
+            crate::password::hash(&SecretString::from(CHOSEN.to_owned()), &OsRandom).unwrap();
+        let web = SignInRequest {
+            code: None,
+            device: None,
+            session_hours: 8,
+        };
+        let state = Arc::clone(&alice.state);
+        let mut store = state.shared.store.lock().unwrap();
+        let begin = store.sign_in_begin("alice").unwrap();
+        let Ok(SignedIn::Setup {
+            ticket,
+            totp: Some(totp),
+            ..
+        }) = store.sign_in_finish(&begin, ok, None, &web, &OsRandom)
+        else {
+            panic!("setup first");
+        };
+        alice.secret = crate::totp::base32_decode(totp.secret.expose_secret()).unwrap();
+        let code = alice.code();
+        let request = SignInRequest {
+            code: Some(&code),
+            ..web
+        };
+        store
+            .setup_finish(&ticket, &chosen, &request, &OsRandom)
+            .unwrap();
+        for name in ["laptop", "desktop"] {
+            alice.clock.advance(30);
+            let code = alice.code();
+            let request = SignInRequest {
+                code: Some(&code),
+                device: Some(name),
+                session_hours: 8,
+            };
+            let begin = store.sign_in_begin("alice").unwrap();
+            let Ok(SignedIn::Session {
+                session,
+                device: Some(device),
+                ..
+            }) = store.sign_in_finish(&begin, ok, None, &request, &OsRandom)
+            else {
+                panic!("a device");
+            };
+            alice.devices.push((device.credential, session));
+        }
+        drop(store);
+        alice.clock.advance(30);
+        alice
+    }
+
+    #[tokio::test]
+    async fn a_password_change_is_refused_when_its_session_or_password_changed_during_the_hash() {
+        let cases: Vec<(&str, Meanwhile, &str)> = vec![
+            (
+                "revoke device",
+                Box::new(|store: &mut Store| {
+                    let user = store.user("alice").unwrap();
+                    store.revoke_device_of(&user, "laptop").unwrap();
+                }),
+                "device_invalid",
+            ),
+            (
+                "disable",
+                Box::new(|store: &mut Store| {
+                    store.disable_user("alice").unwrap();
+                }),
+                "device_invalid",
+            ),
+            (
+                "reset password",
+                Box::new(|store: &mut Store| {
+                    store.reset_password("alice", "$argon2id$reset").unwrap();
+                }),
+                "device_invalid",
+            ),
+        ];
+        for (what, meanwhile, code) in cases {
+            check_stale_change(what, meanwhile, code).await;
+        }
+        // Ending the session needs its token, known only after sign-in.
+        let alice = signed_in_alice();
+        let session = alice.devices[0].1.clone();
+        let end: Meanwhile = Box::new(move |store: &mut Store| {
+            store.end_user_session(&session, false).unwrap();
+        });
+        stale_change(alice, "end session", end, "no_session").await;
+    }
+
+    async fn check_stale_change(what: &str, meanwhile: Meanwhile, code: &str) {
+        stale_change(signed_in_alice(), what, meanwhile, code).await;
+    }
+
+    /// Asks for a password change on `laptop` with `meanwhile` run during
+    /// its hash, and checks it is refused with `code` and changes nothing.
+    async fn stale_change(alice: Alice, what: &str, meanwhile: Meanwhile, code: &str) {
+        let before = {
+            let store = alice.state.shared.store.lock().unwrap();
+            store
+                .sign_in_begin("alice")
+                .unwrap()
+                .phc()
+                .map(str::to_owned)
+        };
+        *alice.meanwhile.lock().unwrap() = Some(meanwhile);
+        let body = serde_json::json!({
+            "password": CHOSEN,
+            "code": alice.code(),
+            "new_password": "a brand new passphrase to use",
+        })
+        .to_string();
+        let response = user_api::change_password(
+            Arc::clone(&alice.state),
+            alice.call("admin:me.password", 0),
+            body.into(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{what}");
+        let reply = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&reply).contains(code),
+            "{what}: {}",
+            String::from_utf8_lossy(&reply)
+        );
+        let store = alice.state.shared.store.lock().unwrap();
+        let after = store
+            .sign_in_begin("alice")
+            .unwrap()
+            .phc()
+            .map(str::to_owned);
+        assert_ne!(after.as_deref(), None, "{what}: alice still has a password");
+        if what == "reset password" {
+            assert_eq!(after.as_deref(), Some("$argon2id$reset"), "{what}");
+            assert!(store.user("alice").unwrap().must_change_password, "{what}");
+        } else {
+            assert_eq!(after, before, "{what}: the password did not change");
+        }
+        if what == "revoke device" || what == "end session" {
+            let (credential, session) = &alice.devices[1];
+            assert!(
+                store.user_api_session(credential, session, 30).is_ok(),
+                "{what}: the other device was not signed out"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_busy_user_call_is_audited_with_the_signed_in_user() {
+        let alice = signed_in_alice();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Arc::new(std::sync::Mutex::new(wait));
+        let mut held = Vec::new();
+        for _ in 0..crate::password::HASHING_PERMITS {
+            let (shared, wait) = (Arc::clone(&alice.state.shared), Arc::clone(&wait));
+            held.push(tokio::spawn(async move {
+                shared
+                    .hashing()
+                    .run(move || {
+                        let _ = wait.lock().map(|w| w.recv());
+                    })
+                    .await
+            }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let response = user_api::users(
+            Arc::clone(&alice.state),
+            alice.call("admin:users.create", 0),
+            UserRoute::Create,
+            serde_json::json!({"name": "bob"}).to_string().into(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        for _ in 0..crate::password::HASHING_PERMITS {
+            release.send(()).unwrap();
+        }
+        for task in held {
+            task.await.unwrap().unwrap();
+        }
+        let rows: Vec<Option<String>> =
+            rusqlite::Connection::open(alice.dir.path().join("state/joedocs.db"))
+                .unwrap()
+                .prepare(
+                    "SELECT user_name FROM audit_log WHERE tool = 'admin:users.create' AND outcome = 'busy'",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+        assert_eq!(rows, [Some("alice".to_owned())]);
     }
 }

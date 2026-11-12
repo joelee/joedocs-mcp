@@ -12,6 +12,8 @@ pub(crate) mod maintenance;
 mod overview;
 mod projects;
 mod search;
+pub(crate) mod setup;
+pub(crate) mod users;
 
 use askama::Template;
 use axum::http::StatusCode;
@@ -40,19 +42,23 @@ pub(crate) enum Section {
     Documents,
     Projects,
     Keys,
+    Users,
     Audit,
     Archive,
     Maintenance,
     /// The Search page, reached from the search box, not the navigation.
     Search,
+    /// The signed-in user's own page, reached from the session menu.
+    Account,
 }
 
 impl Section {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Overview,
         Self::Documents,
         Self::Projects,
         Self::Keys,
+        Self::Users,
         Self::Audit,
         Self::Archive,
         Self::Maintenance,
@@ -64,6 +70,8 @@ impl Section {
             Self::Documents => "/admin/documents",
             Self::Projects => "/admin/projects",
             Self::Keys => "/admin/keys",
+            Self::Users => "/admin/users",
+            Self::Account => "/admin/account",
             Self::Audit => "/admin/audit",
             Self::Archive => "/admin/archive",
             Self::Maintenance => "/admin/maintenance",
@@ -77,6 +85,8 @@ impl Section {
             Self::Documents => "Documents",
             Self::Projects => "Projects",
             Self::Keys => "API keys",
+            Self::Users => "Users",
+            Self::Account => "Your account",
             Self::Audit => "Audit",
             Self::Archive => "Archive",
             Self::Maintenance => "Maintenance",
@@ -106,7 +116,7 @@ impl<'a> Chrome<'a> {
     /// The layout for `session`, with `section` marked as the current page.
     pub(crate) fn new(session: &'a Session, section: Section, query: &'a str) -> Self {
         Self {
-            admin: &session.admin.name,
+            admin: session.admin.name(),
             expires_at: &session.expires_at,
             csrf: &session.csrf,
             query,
@@ -138,10 +148,10 @@ pub(crate) fn link(path: &str, pairs: &[(&str, Option<&str>)]) -> String {
     }
 }
 
-/// The signed-in admin as the author of a change: the admin token's name,
-/// from the web interface.
+/// The signed-in admin as the author of a change: the admin token's or the
+/// user's name, from the web interface.
 pub(crate) fn actor(session: &Session) -> crate::store::Actor {
-    crate::store::Actor::new(&session.admin.name, super::CLIENT)
+    crate::store::Actor::new(session.admin.name(), super::CLIENT)
 }
 
 /// The refusal for a store error, shown with a link back to `href`.
@@ -206,6 +216,10 @@ pub(crate) fn page(
         Route::FileMove(id) => document::move_file(store, request, session, id),
         Route::FileRestore(id) => document::restore_file(store, request, session, id),
         Route::Maintenance => maintenance::page(store, session),
+        Route::Account => users::account(store, state, request, session),
+        Route::DeviceRevoke(name) => users::revoke_device(store, session, name),
+        Route::UsersList => users::users(store, request, session),
+        Route::UserAction(name, action) => users::act(store, session, name, *action),
         Route::Check => maintenance::check(store, session),
         Route::Reindex => maintenance::reindex(store, session),
         _ => Err(WebError::new(

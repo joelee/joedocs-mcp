@@ -232,3 +232,57 @@ fn debug_logging_goes_to_stderr() {
         .stdout(predicate::str::contains("search order"))
         .stderr(predicate::str::contains("running command"));
 }
+
+#[test]
+fn admin_token_commands_warn_that_they_are_deprecated_on_standard_error_only() {
+    let home = TempDir::new().unwrap();
+    let vault = home.path().join("vault");
+    let state = home.path().join("state");
+    let with_storage = |cmd: &mut Command| {
+        cmd.env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env(format!("{}__STORAGE__HOME", prefix()), &vault)
+            .env(format!("{}__STORAGE__STATE_DIR", prefix()), &state);
+    };
+    let mut init = cmd(home.path());
+    with_storage(&mut init);
+    init.arg("init").assert().success();
+    let mut create = cmd(home.path());
+    with_storage(&mut create);
+    let output = create
+        .args(["admin-token", "create", "ops"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("admin tokens are deprecated"))
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .starts_with("jda_"),
+        "the token stays alone on the last line: {stdout}"
+    );
+    assert!(!stdout.contains("deprecated"), "{stdout}");
+    cmd(home.path())
+        .args([
+            "--server",
+            "http://127.0.0.1:9",
+            "login",
+            "--code",
+            "123456",
+        ])
+        .env("JOEDOCS_ADMIN_TOKEN", "jda_000000000000_00")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "`joedocs login` with an admin token is deprecated",
+        ));
+    // Other commands print no warning.
+    cmd(home.path())
+        .args(["config", "paths"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("deprecated").not());
+}

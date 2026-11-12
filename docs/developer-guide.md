@@ -87,7 +87,7 @@ The admin web interface lives in `src/web/`, with its Askama templates in `templ
 - **Dialogs** open with invoker commands (`commandfor` and `command="show-modal"`) and close with a `formmethod="dialog"` button, so they work without JavaScript.
 - **Routes.** A new route is added to `Route` in `src/web/mod.rs` with its audit tool (the matching admin API operation), and to the route table in that module's documentation; a test requests every route in the table and checks its audit row. Every route but the sign-in page needs a session by default.
 - **Static files** are served under `/admin/assets/<hash>/<name>`; the hash changes with the content, so browsers never keep an old copy.
-- **Trying it.** `JOEDOCS__ADMIN__ENABLED=true JOEDOCS__ADMIN__WEB_UI=true cargo run -- serve` with a scratch `JOEDOCS__STORAGE__HOME` and `JOEDOCS__STORAGE__STATE_DIR`, an admin token from `cargo run -- admin-token create dev` on the same store, then `http://127.0.0.1:8750/admin/`.
+- **Trying it.** `JOEDOCS__ADMIN__ENABLED=true JOEDOCS__ADMIN__WEB_UI=true cargo run -- serve` with a scratch `JOEDOCS__STORAGE__HOME` and `JOEDOCS__STORAGE__STATE_DIR`, a user from `cargo run -- user create dev` on the same store (its one-time password is the last line), then `http://127.0.0.1:8750/admin/`, where the first sign-in sets up TOTP.
 
 ### Vendored browser files
 

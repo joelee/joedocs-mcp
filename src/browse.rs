@@ -229,6 +229,9 @@ struct AuditEntryOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     document_id: Option<String>,
     outcome: String,
+    /// The signed-in user of an admin call (0.5.1), when there was one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user: Option<String>,
 }
 
 /// A page of audit entries: `{"items", "total", "next_start"}`.
@@ -269,6 +272,7 @@ pub fn audit(store: &Store, args: &AuditArgs) -> Result<Value, Error> {
                 tool: row.tool,
                 document_id: row.document_id,
                 outcome: row.outcome,
+                user: row.user_name,
             })
             .collect(),
         total: page.total,

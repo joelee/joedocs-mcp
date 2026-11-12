@@ -12,6 +12,9 @@ use crate::clock::FixedClock;
 use crate::document::front_matter::Fields;
 use crate::history::{Commit, GitCli, Logged};
 
+#[path = "sign_in_tests.rs"]
+mod sign_in;
+
 /// A history that delegates to git but can be told to fail commits.
 struct Flaky {
     git: GitCli,
@@ -1853,4 +1856,96 @@ fn a_failed_folder_restore_leaves_the_tree_as_it_was() {
             .revision,
         6
     );
+}
+
+/// An audit row's key and user columns.
+type AuditColumns = (String, String, String, Option<String>, Option<String>);
+
+#[test]
+fn admin_audit_rows_name_tokens_in_the_key_columns_and_leave_the_user_columns_empty() {
+    let mut fx = fixture();
+    let created = fx
+        .store
+        .create_admin_token("ops", &crate::auth::CountingRandom(1))
+        .unwrap();
+    let who = super::Admin::Token(created.row.clone());
+    fx.store
+        .audit_admin(Some(&who), "joedocs/0.5.1", "admin:status", "ok")
+        .unwrap();
+    fx.store
+        .audit_admin(None, "curl", "admin:status", "unauthorized")
+        .unwrap();
+    let mut stmt = fx
+        .store
+        .conn
+        .prepare(
+            "SELECT api_key_id, key_name, outcome, user_id, user_name FROM audit_log ORDER BY rowid",
+        )
+        .unwrap();
+    let rows: Vec<AuditColumns> = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (
+                created.row.id.clone(),
+                "ops".to_owned(),
+                "ok".to_owned(),
+                None,
+                None
+            ),
+            (
+                "unknown".to_owned(),
+                "unknown".to_owned(),
+                "unauthorized".to_owned(),
+                None,
+                None
+            ),
+        ]
+    );
+    assert_eq!(who.name(), "ops");
+    assert_eq!(who.token(), Some(&created.row));
+    assert_eq!(who.user(), None);
+}
+
+#[test]
+fn one_time_passwords_lapse_after_72_hours_and_removed_names_stay_taken() {
+    let mut fx = fixture();
+    let created = fx
+        .store
+        .create_user("alice", "$argon2id$stub", &crate::auth::CountingRandom(3))
+        .unwrap();
+    assert!(created.row.must_change_password);
+    let state = |fx: &Fixture| fx.store.users().unwrap()[0].state.clone();
+    fx.clock.advance(72 * 3600 - 60);
+    assert!(
+        matches!(state(&fx), super::UserState::SetupPending { ref until } if *until == created.until),
+        "{:?}",
+        state(&fx)
+    );
+    fx.clock.advance(120);
+    assert_eq!(state(&fx), super::UserState::SetupExpired);
+    fx.store.disable_user("alice").unwrap();
+    assert_eq!(state(&fx), super::UserState::Disabled);
+    fx.store.enable_user("alice").unwrap();
+    let reset = fx.store.reset_totp("alice", "$argon2id$stub2").unwrap();
+    assert!(matches!(state(&fx), super::UserState::SetupPending { .. }));
+    assert!(reset.until > created.until);
+    fx.store.remove_user("alice").unwrap();
+    assert!(matches!(state(&fx), super::UserState::Removed { .. }));
+    assert!(matches!(
+        fx.store
+            .create_user("alice", "$argon2id$x", &crate::auth::CountingRandom(9)),
+        Err(super::Error::AlreadyExists(_))
+    ));
+    assert!(matches!(
+        fx.store.user("nobody"),
+        Err(super::Error::UserNotFound(_))
+    ));
+    assert!(fx.store.disable_user("alice").unwrap_err().is_user_error());
 }

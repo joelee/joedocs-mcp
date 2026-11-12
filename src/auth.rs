@@ -25,6 +25,15 @@ pub const ADMIN_PREFIX: &str = "jda_";
 pub const SESSION_PREFIX: &str = "jds_";
 /// Prefix of every web interface session token (`jdw_<id>_<secret>`).
 pub const WEB_SESSION_PREFIX: &str = "jdw_";
+/// Prefix of every device credential (`jdd_<id>_<secret>`), issued by
+/// `joedocs auth login` to one machine.
+pub const DEVICE_PREFIX: &str = "jdd_";
+/// Prefix of every user session on the admin API (`jdu_<id>_<secret>`).
+pub const USER_SESSION_PREFIX: &str = "jdu_";
+/// Prefix of every user session in the web interface (`jdv_<id>_<secret>`).
+pub const USER_WEB_SESSION_PREFIX: &str = "jdv_";
+/// Prefix of every TOTP setup ticket (`jdt_<user id>_<secret>`).
+pub const SETUP_PREFIX: &str = "jdt_";
 
 /// A source of cryptographically secure random bytes.
 pub trait RandomSource {
@@ -170,7 +179,16 @@ pub fn new_secret(id: &str, random: &dyn RandomSource) -> Result<NewKey, RandomE
     secret_for(KEY_PREFIX, id, random)
 }
 
-fn secret_for(prefix: &str, id: &str, random: &dyn RandomSource) -> Result<NewKey, RandomError> {
+/// A new token `<prefix><id>_<secret>` for an existing `id`.
+///
+/// # Errors
+///
+/// Returns an error when random bytes are unavailable.
+pub fn secret_for(
+    prefix: &str,
+    id: &str,
+    random: &dyn RandomSource,
+) -> Result<NewKey, RandomError> {
     let mut secret = [0u8; SECRET_BYTES];
     random.fill(&mut secret)?;
     let id = id.to_owned();

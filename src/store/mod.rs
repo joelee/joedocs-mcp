@@ -32,11 +32,15 @@ mod folders;
 mod index_file;
 mod journal;
 mod links;
+mod principal;
 mod registry;
 mod reindex;
 mod revisions;
 mod search;
+mod sign_in;
 mod summary;
+mod throttle;
+mod users;
 mod vault;
 
 use std::fs::{self, File, OpenOptions};
@@ -60,11 +64,17 @@ pub use editing::{MAX_EDITS, Replacement};
 pub use file_changes::{FileWrite, WriteFiles, WrittenFile, WrittenFiles};
 pub use files::{FileInfo, NewFile};
 pub use folders::ArchivedFile;
+pub use principal::Admin;
 pub use registry::CreatedKey;
 pub use reindex::Reindexed;
 pub use revisions::{Diff, HistoryPage, MAX_DIFF_CONTEXT, MAX_HISTORY_LIMIT};
 pub use search::{MAX_SEARCH_LIMIT, SearchHit, SearchRequest, SearchResults};
+pub use sign_in::{
+    NewDevice, NewTotp, SETUP_MINUTES, SetupBegin, SetupView, SignInBegin, SignInRequest, SignedIn,
+    UserSession,
+};
 pub use summary::{ProjectCount, Summary};
+pub use users::{CreatedUser, INITIAL_PASSWORD_HOURS, UserListing, UserState};
 
 use crate::AppId;
 use crate::clock::Clock;
@@ -107,6 +117,9 @@ pub enum Error {
     /// No API key has this name.
     #[error("API key {0} does not exist")]
     KeyNotFound(String),
+    /// No user has this name.
+    #[error("user {0} does not exist")]
+    UserNotFound(String),
     /// Something with this name already exists.
     #[error("{0} already exists")]
     AlreadyExists(String),
@@ -217,6 +230,18 @@ pub enum Error {
     /// Random bytes were unavailable.
     #[error(transparent)]
     Random(#[from] crate::auth::RandomError),
+    /// A password could not be hashed.
+    #[error("cannot hash the password: {0}")]
+    Hashing(String),
+}
+
+impl From<crate::password::HashError> for Error {
+    fn from(error: crate::password::HashError) -> Self {
+        match error {
+            crate::password::HashError::Random(random) => Self::Random(random),
+            crate::password::HashError::Hash(message) => Self::Hashing(message),
+        }
+    }
 }
 
 impl From<rusqlite::Error> for Error {
@@ -239,6 +264,7 @@ impl Error {
                 | Self::Archived(_)
                 | Self::ProjectNotFound(_)
                 | Self::KeyNotFound(_)
+                | Self::UserNotFound(_)
                 | Self::AlreadyExists(_)
                 | Self::Conflict { .. }
                 | Self::TooLarge { .. }
@@ -404,6 +430,8 @@ pub struct Store {
     conn: Connection,
     history: Box<dyn History>,
     clock: Arc<dyn Clock>,
+    /// Failed sign-ins of names that are not users, in memory only.
+    unknown_names: std::sync::Mutex<throttle::UnknownNames>,
 }
 
 impl std::fmt::Debug for Store {
@@ -548,12 +576,14 @@ impl Store {
         if let Err(error) = index_file::exclude_from_history(&paths.git_dir()) {
             tracing::warn!(%error, "could not add INDEX.md to the history's exclude file");
         }
+        let unknown_names = throttle::UnknownNames::new(&crate::auth::OsRandom)?;
         Ok(Self {
             paths,
             settings,
             conn,
             history,
             clock,
+            unknown_names: std::sync::Mutex::new(unknown_names),
         })
     }
 

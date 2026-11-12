@@ -31,9 +31,7 @@ pub enum AdminRefusal {
     #[error("the admin token or code is not valid")]
     Unauthorized,
     /// Too many failed logins.
-    #[error(
-        "the admin token is locked after {MAX_FAILED_LOGINS} failed logins; try again after {until}"
-    )]
+    #[error("sign-in is locked after {MAX_FAILED_LOGINS} failed attempts; try again after {until}")]
     Locked {
         /// When logins are accepted again.
         until: String,
@@ -46,6 +44,12 @@ pub enum AdminRefusal {
     /// The session is missing, ended, or belongs to another token.
     #[error("there is no valid admin session; run `joedocs login`")]
     NoSession,
+    /// The device credential is revoked or has not been used for too long:
+    /// sign in again with the password.
+    #[error(
+        "this device's sign-in has ended; sign in again with your password (`joedocs auth login`)"
+    )]
+    DeviceInvalid,
 }
 
 /// A newly created admin token. The token and the TOTP secret are shown to
@@ -391,13 +395,13 @@ impl Store {
 }
 
 /// `now` plus `seconds`, formatted.
-fn later(now: Timestamp, seconds: i64) -> String {
+pub(super) fn later(now: Timestamp, seconds: i64) -> String {
     let at = Timestamp::from_second(now.as_second().saturating_add(seconds)).unwrap_or(now);
     format_timestamp(at)
 }
 
 /// Whole seconds from `now` until the formatted time `until` (at least 1).
-fn seconds_until(now: Timestamp, until: &str) -> u64 {
+pub(super) fn seconds_until(now: Timestamp, until: &str) -> u64 {
     until.parse::<Timestamp>().ok().map_or(1, |u| {
         u64::try_from(u.as_second() - now.as_second())
             .unwrap_or(1)

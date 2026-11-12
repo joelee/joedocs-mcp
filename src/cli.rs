@@ -26,6 +26,10 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "URL")]
     pub server: Option<String>,
 
+    /// Sign in to the admin API as this user (overrides `client.user`).
+    #[arg(long, global = true, value_name = "NAME")]
+    pub user: Option<String>,
+
     /// Command to run.
     #[command(subcommand)]
     pub command: Command,
@@ -111,6 +115,20 @@ pub enum Command {
         /// What to do.
         #[command(subcommand)]
         command: AdminTokenCommand,
+    },
+    /// Create and manage the users who sign in to the admin API and the web
+    /// interface with a password and a TOTP code.
+    User {
+        /// What to do.
+        #[command(subcommand)]
+        command: UserCommand,
+    },
+    /// Sign in to a server's admin API as a user (`--user`, or
+    /// `client.user`), and manage your own sign-in.
+    Auth {
+        /// What to do.
+        #[command(subcommand)]
+        command: AuthCommand,
     },
     /// Log in to the server's admin API with `JOEDOCS_ADMIN_TOKEN` and a
     /// TOTP code, and keep the session for later commands.
@@ -436,6 +454,8 @@ impl Command {
             Self::Key {
                 command: KeyCommand::Revoke { .. },
             } => "key revoke",
+            Self::User { command } => command.name(),
+            Self::Auth { command } => command.name(),
             Self::AdminToken {
                 command: AdminTokenCommand::Create { .. },
             } => "admin-token create",
@@ -621,6 +641,128 @@ pub enum AdminTokenCommand {
     },
 }
 
+/// `user` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum UserCommand {
+    /// Create a user and print a one-time password for their first
+    /// sign-in, valid for 72 hours, alone on the last line.
+    Create {
+        /// User name: lower-case letters, digits and '-'.
+        name: String,
+    },
+    /// List users and where each stands (never their secrets).
+    List,
+    /// Disable a user: sign-in is refused, and their sessions and devices
+    /// end at once.
+    Disable {
+        /// User name.
+        name: String,
+    },
+    /// Enable a disabled user.
+    Enable {
+        /// User name.
+        name: String,
+    },
+    /// Clear a user's sign-in lock after failed attempts.
+    Unlock {
+        /// User name.
+        name: String,
+    },
+    /// Give a user a new one-time password (their authenticator is kept).
+    ResetPassword {
+        /// User name.
+        name: String,
+    },
+    /// Clear a user's authenticator and give them a new one-time password:
+    /// the next sign-in sets up an authenticator again.
+    ResetTotp {
+        /// User name.
+        name: String,
+    },
+    /// Remove a user for good; the name stays taken (run on the server
+    /// only).
+    Remove {
+        /// User name.
+        name: String,
+    },
+}
+
+impl UserCommand {
+    /// The command's name, for logs.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Create { .. } => "user create",
+            Self::List => "user list",
+            Self::Disable { .. } => "user disable",
+            Self::Enable { .. } => "user enable",
+            Self::Unlock { .. } => "user unlock",
+            Self::ResetPassword { .. } => "user reset-password",
+            Self::ResetTotp { .. } => "user reset-totp",
+            Self::Remove { .. } => "user remove",
+        }
+    }
+}
+
+/// `auth` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum AuthCommand {
+    /// Sign in: the first time on this machine with your password and a
+    /// TOTP code (setting up an authenticator and your own password at
+    /// your very first sign-in), then with a code only.
+    Login {
+        /// A 6-digit code from your authenticator, instead of asking for
+        /// one (renews a session without a terminal).
+        #[arg(long)]
+        code: Option<String>,
+        /// This machine's name on the server (default: its host name).
+        #[arg(long, value_name = "NAME")]
+        device: Option<String>,
+    },
+    /// End the session with the server.
+    Logout {
+        /// Also revoke this machine's sign-in and forget it here.
+        #[arg(long)]
+        forget_device: bool,
+    },
+    /// Show who you are signed in as, on which device, until when.
+    Status,
+    /// Change your password: asks for the current one, a code, and the new
+    /// one twice. Your other devices and sessions end.
+    Password,
+    /// List your devices, or revoke one.
+    Devices {
+        /// What to do (list when left out).
+        #[command(subcommand)]
+        command: Option<DevicesCommand>,
+    },
+}
+
+impl AuthCommand {
+    /// The command's name, for logs.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Login { .. } => "auth login",
+            Self::Logout { .. } => "auth logout",
+            Self::Status => "auth status",
+            Self::Password => "auth password",
+            Self::Devices { command: None } => "auth devices",
+            Self::Devices { command: Some(_) } => "auth devices revoke",
+        }
+    }
+}
+
+/// `auth devices` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum DevicesCommand {
+    /// Revoke one of your devices: its sign-in ends at once.
+    Revoke {
+        /// Device name, as `joedocs auth devices` lists it.
+        name: String,
+    },
+}
+
 /// `config` subcommands.
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum ConfigCommand {
@@ -647,6 +789,13 @@ impl Cli {
                 key: "client.server".to_owned(),
                 flag: "--server".to_owned(),
                 value: Value::String(server.clone()),
+            });
+        }
+        if let Some(user) = &self.user {
+            values.push(CliValue {
+                key: "client.user".to_owned(),
+                flag: "--user".to_owned(),
+                value: Value::String(user.clone()),
             });
         }
         values
@@ -686,6 +835,18 @@ mod tests {
         assert_eq!(values[0].key, "log.level");
         assert_eq!(values[0].flag, "--log-level");
         assert_eq!(values[0].value, Value::String("debug".into()));
+    }
+
+    #[test]
+    fn the_user_flag_becomes_client_user() {
+        let cli = Cli::try_parse_from(["app", "--user", "alice", "config", "paths"]).unwrap();
+        let values = cli.cli_values();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].key, "client.user");
+        assert_eq!(values[0].flag, "--user");
+        assert_eq!(values[0].value, Value::String("alice".into()));
+        let cli = Cli::try_parse_from(["app", "config", "paths", "--user", "bob"]).unwrap();
+        assert_eq!(cli.user.as_deref(), Some("bob"));
     }
 
     #[test]

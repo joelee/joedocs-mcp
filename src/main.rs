@@ -44,6 +44,9 @@ fn main() -> ExitCode {
         .with_max_level(loaded.config().log.level.as_filter())
         .init();
 
+    if let Some(warning) = joedocs::deprecation_warning(&cli.command) {
+        eprintln!("{warning}");
+    }
     let mut stdout = std::io::stdout().lock();
     match joedocs::execute(&cli, &loaded, &ctx, &mut stdout) {
         Ok(()) => ExitCode::SUCCESS,

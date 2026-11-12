@@ -3,9 +3,12 @@
 //!
 //! Pages are rendered on the server with Askama templates; htmx only makes
 //! them faster, and every page and form also works as a plain link or form
-//! post. An admin signs in with an admin token and a TOTP code; the server
-//! then keeps a web session (`jdw_...`) in an `HttpOnly`, `SameSite=Strict`
-//! cookie, and the admin token is never stored by the browser.
+//! post. An admin signs in as a user with a name, a password and a TOTP
+//! code (0.5.1; at the first sign-in, after setting up TOTP), or with an
+//! admin token and a code (deprecated); the server then keeps a web session
+//! (`jdv_...` for a user, `jdw_...` for a token) in an `HttpOnly`,
+//! `SameSite=Strict` cookie, and neither the password nor the admin token
+//! is stored by the browser.
 //!
 //! Every request, in this order: the `Host` check (`server.allowed_hosts`);
 //! static files are then served without further checks or audit; for a
@@ -19,6 +22,19 @@
 //! | `GET /admin/login` | `admin:web.login_page` |
 //! | `POST /admin/login` | `admin:session.create` |
 //! | `POST /admin/logout` | `admin:session.delete` |
+//! | `POST /admin/sign-in` | `admin:auth.login` |
+//! | `GET /admin/setup` | `admin:web.setup_page` |
+//! | `POST /admin/setup` | `admin:auth.setup` |
+//! | `GET /admin/account` | `admin:me.status` |
+//! | `POST /admin/account/password` | `admin:me.password` |
+//! | `POST /admin/account/devices/{name}/revoke` | `admin:devices.revoke` |
+//! | `GET /admin/users` | `admin:users.list` |
+//! | `POST /admin/users` | `admin:users.create` |
+//! | `POST /admin/users/{name}/disable` | `admin:users.disable` |
+//! | `POST /admin/users/{name}/enable` | `admin:users.enable` |
+//! | `POST /admin/users/{name}/unlock` | `admin:users.unlock` |
+//! | `POST /admin/users/{name}/reset-password` | `admin:users.reset_password` |
+//! | `POST /admin/users/{name}/reset-totp` | `admin:users.reset_totp` |
 //! | `GET /admin/` | `admin:status` |
 //! | `GET /admin/documents` | `admin:documents.list` |
 //! | `GET /admin/documents/{id}` | `admin:documents.get` |
@@ -66,9 +82,8 @@ use axum::response::{IntoResponse as _, Response};
 use axum::routing::any;
 use secrecy::SecretString;
 
-use crate::db::AdminTokenRow;
 use crate::mcp::{BODY_LIMIT, ServerOptions, Shared, classify, host_allowed};
-use crate::store::{self, Actor, AdminRefusal, Store};
+use crate::store::{self, Admin, AdminRefusal, Store};
 
 /// The client name on the web interface's audit rows.
 pub const CLIENT: &str = "joedocs-web";
@@ -97,6 +112,10 @@ pub(crate) struct WebState {
     bind: std::net::SocketAddr,
     /// The config file in use, for the Overview.
     config_file: Option<std::path::PathBuf>,
+    /// `admin.token_login`: whether admin tokens may still sign in.
+    token_login: bool,
+    /// `admin.device_days`, shown on the Account page.
+    device_days: u32,
 }
 
 /// The routes: `/` and `/admin` redirect to `/admin/`, and everything under
@@ -112,6 +131,8 @@ pub(crate) fn routes(shared: &Arc<Shared>, web: &WebOptions, server: &ServerOpti
         csp,
         bind: server.bind,
         config_file: server.admin.as_ref().and_then(|a| a.config_file.clone()),
+        token_login: server.token_login,
+        device_days: server.device_days,
     });
     Router::new()
         .route("/", any(dispatch))
@@ -145,6 +166,15 @@ pub(crate) enum Route {
     LoginPage,
     Login,
     Logout,
+    SignIn,
+    SetupPage,
+    Setup,
+    Account,
+    AccountPassword,
+    DeviceRevoke(String),
+    UsersList,
+    UsersCreate,
+    UserAction(String, pages::users::UserAction),
     Home,
     DocumentsList,
     Document(String),
@@ -179,6 +209,8 @@ enum Access {
     Public,
     /// Logging in: the same-origin rule, but no session yet.
     Login,
+    /// The TOTP setup page: the setup ticket's cookie, no session.
+    Setup,
     /// A current web session, and for a `POST` the CSRF token.
     Session,
 }
@@ -192,6 +224,22 @@ impl Route {
             ("/admin/login", _) if get => Self::LoginPage,
             ("/admin/login", _) if post => Self::Login,
             ("/admin/logout", _) if post => Self::Logout,
+            ("/admin/sign-in", _) if post => Self::SignIn,
+            ("/admin/setup", _) if get => Self::SetupPage,
+            ("/admin/setup", _) if post => Self::Setup,
+            ("/admin/account", _) if get => Self::Account,
+            ("/admin/account/password", _) if post => Self::AccountPassword,
+            (_, ["account", "devices", name, "revoke"]) if post && !name.is_empty() => {
+                Self::DeviceRevoke(percent_decode(name))
+            }
+            ("/admin/users", _) if get => Self::UsersList,
+            ("/admin/users", _) if post => Self::UsersCreate,
+            (_, ["users", name, action]) if post && !name.is_empty() => {
+                match pages::users::UserAction::of(action) {
+                    Some(action) => Self::UserAction(percent_decode(name), action),
+                    None => Self::Unknown,
+                }
+            }
             ("/admin/", _) if get => Self::Home,
             (_, ["documents"]) if get => Self::DocumentsList,
             (_, ["documents", id]) if get && !id.is_empty() => Self::Document(percent_decode(id)),
@@ -248,6 +296,15 @@ impl Route {
             Self::LoginPage => "admin:web.login_page",
             Self::Login => "admin:session.create",
             Self::Logout => "admin:session.delete",
+            Self::SignIn => "admin:auth.login",
+            Self::SetupPage => "admin:web.setup_page",
+            Self::Setup => "admin:auth.setup",
+            Self::Account => "admin:me.status",
+            Self::AccountPassword => "admin:me.password",
+            Self::DeviceRevoke(_) => "admin:devices.revoke",
+            Self::UsersList => "admin:users.list",
+            Self::UsersCreate => "admin:users.create",
+            Self::UserAction(_, action) => action.operation(),
             Self::Home => "admin:status",
             Self::DocumentsList => "admin:documents.list",
             Self::Document(_) | Self::Download(_) => "admin:documents.get",
@@ -280,6 +337,7 @@ impl Route {
         match self {
             Self::LoginPage => Access::Public,
             Self::Login => Access::Login,
+            Self::SetupPage => Access::Setup,
             // Everything else needs a session, so a new route is closed
             // until it is made public on purpose.
             _ => Access::Session,
@@ -288,6 +346,7 @@ impl Route {
 }
 
 /// A request, read once.
+#[derive(Clone)]
 pub(crate) struct WebRequest {
     method: Method,
     path: String,
@@ -375,8 +434,8 @@ fn first<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 /// The signed-in admin of a page request.
 pub(crate) struct Session {
-    /// The admin token that opened the session.
-    pub(crate) admin: AdminTokenRow,
+    /// Who signed in: an admin token, or (from 0.5.1) a user.
+    pub(crate) admin: Admin,
     /// When the session expires.
     pub(crate) expires_at: String,
     /// The CSRF token forms carry.
@@ -544,6 +603,28 @@ async fn run(
     if matches!(route, Route::Backup) && checked.is_ok() {
         return secured(backup(state, request).await, &csp);
     }
+    // These hash a password, so they run without the store lock held.
+    if matches!(route, Route::SignIn) && checked.is_ok() {
+        return secured(pages::setup::sign_in(state, request).await, &csp);
+    }
+    if matches!(route, Route::Setup) && checked.is_ok() {
+        return secured(pages::setup::setup(state, request).await, &csp);
+    }
+    if checked.is_ok() {
+        match route {
+            Route::AccountPassword => {
+                return secured(pages::users::change_password(state, request).await, &csp);
+            }
+            Route::UsersCreate => {
+                return secured(pages::users::create(state, request).await, &csp);
+            }
+            Route::UserAction(name, action) if action.hashes() => {
+                let reply = pages::users::reset(state, request, name, action).await;
+                return secured(reply, &csp);
+            }
+            _ => {}
+        }
+    }
     let task = tokio::task::spawn_blocking(move || {
         let Ok(mut store) = state.shared.store().lock() else {
             return WebError::new(
@@ -629,10 +710,11 @@ fn handle(
     state: &WebState,
     route: &Route,
     request: &WebRequest,
-) -> (Option<AdminTokenRow>, Result<Response, WebError>) {
+) -> (Option<Admin>, Result<Response, WebError>) {
     match route.access() {
         Access::Public => (None, pages::public(state, route, request)),
         Access::Login => pages::login::submit(store, state, request),
+        Access::Setup => pages::setup::page(store, state, request),
         Access::Session => match signed_in(store, state, request) {
             Ok(session) => (
                 Some(session.admin.clone()),
@@ -653,8 +735,9 @@ fn signed_in(
     store: &Store,
     state: &WebState,
     request: &WebRequest,
-) -> Result<Session, Box<(Option<AdminTokenRow>, WebError)>> {
-    let session = open_session(store, request).map_err(|refused| Box::new((None, refused)))?;
+) -> Result<Session, Box<(Option<Admin>, WebError)>> {
+    let session =
+        open_session(store, state, request).map_err(|refused| Box::new((None, refused)))?;
     if request.method == Method::POST {
         let who = Some(session.admin.clone());
         if !session::same_origin(&request.headers, &state.allowed_origins) {
@@ -677,17 +760,35 @@ fn signed_in(
 
 /// The request's web session, or a refusal that sends the browser to the
 /// login page (and back here afterwards, for a page).
-fn open_session(store: &Store, request: &WebRequest) -> Result<Session, WebError> {
+fn open_session(
+    store: &Store,
+    state: &WebState,
+    request: &WebRequest,
+) -> Result<Session, WebError> {
     let cookie = session::session_cookie(&request.headers);
     let checked = cookie
         .as_ref()
         .ok_or_else(|| store::Error::AdminRefused(AdminRefusal::NoSession))
-        .and_then(|token| store.web_session(token));
+        .and_then(|token| {
+            if secrecy::ExposeSecret::expose_secret(token)
+                .starts_with(crate::auth::USER_WEB_SESSION_PREFIX)
+            {
+                return store
+                    .user_web_session(token)
+                    .map(|s| (Admin::User(s.user), s.expires_at));
+            }
+            if !state.token_login {
+                return Err(store::Error::AdminRefused(AdminRefusal::NoSession));
+            }
+            store
+                .web_session(token)
+                .map(|web| (Admin::Token(web.admin), web.expires_at))
+        });
     match (checked, cookie) {
-        (Ok(web), Some(token)) => Ok(Session {
+        (Ok((admin, expires_at)), Some(token)) => Ok(Session {
             csrf: session::csrf_token(&token),
-            admin: web.admin,
-            expires_at: web.expires_at,
+            admin,
+            expires_at,
             token,
         }),
         (Err(error), cookie) => {
@@ -746,9 +847,8 @@ fn secured(mut response: Response, csp: &HeaderValue) -> Response {
 }
 
 /// Writes the audit row for a page request.
-fn write_audit(store: &Store, who: Option<&AdminTokenRow>, tool: &str, outcome: &str) {
-    let (id, name) = who.map_or(("unknown", "unknown"), |w| (w.id.as_str(), w.name.as_str()));
-    if let Err(error) = store.audit(id, &Actor::new(name, CLIENT), tool, None, outcome) {
+fn write_audit(store: &Store, who: Option<&Admin>, tool: &str, outcome: &str) {
+    if let Err(error) = store.audit_admin(who, CLIENT, tool, outcome) {
         tracing::error!(%error, "cannot write the web interface audit entry");
     }
 }
