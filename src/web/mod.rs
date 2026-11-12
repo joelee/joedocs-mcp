@@ -25,6 +25,16 @@
 //! | `POST /admin/sign-in` | `admin:auth.login` |
 //! | `GET /admin/setup` | `admin:web.setup_page` |
 //! | `POST /admin/setup` | `admin:auth.setup` |
+//! | `GET /admin/account` | `admin:me.status` |
+//! | `POST /admin/account/password` | `admin:me.password` |
+//! | `POST /admin/account/devices/{name}/revoke` | `admin:devices.revoke` |
+//! | `GET /admin/users` | `admin:users.list` |
+//! | `POST /admin/users` | `admin:users.create` |
+//! | `POST /admin/users/{name}/disable` | `admin:users.disable` |
+//! | `POST /admin/users/{name}/enable` | `admin:users.enable` |
+//! | `POST /admin/users/{name}/unlock` | `admin:users.unlock` |
+//! | `POST /admin/users/{name}/reset-password` | `admin:users.reset_password` |
+//! | `POST /admin/users/{name}/reset-totp` | `admin:users.reset_totp` |
 //! | `GET /admin/` | `admin:status` |
 //! | `GET /admin/documents` | `admin:documents.list` |
 //! | `GET /admin/documents/{id}` | `admin:documents.get` |
@@ -104,6 +114,8 @@ pub(crate) struct WebState {
     config_file: Option<std::path::PathBuf>,
     /// `admin.token_login`: whether admin tokens may still sign in.
     token_login: bool,
+    /// `admin.device_days`, shown on the Account page.
+    device_days: u32,
 }
 
 /// The routes: `/` and `/admin` redirect to `/admin/`, and everything under
@@ -120,6 +132,7 @@ pub(crate) fn routes(shared: &Arc<Shared>, web: &WebOptions, server: &ServerOpti
         bind: server.bind,
         config_file: server.admin.as_ref().and_then(|a| a.config_file.clone()),
         token_login: server.token_login,
+        device_days: server.device_days,
     });
     Router::new()
         .route("/", any(dispatch))
@@ -156,6 +169,12 @@ pub(crate) enum Route {
     SignIn,
     SetupPage,
     Setup,
+    Account,
+    AccountPassword,
+    DeviceRevoke(String),
+    UsersList,
+    UsersCreate,
+    UserAction(String, pages::users::UserAction),
     Home,
     DocumentsList,
     Document(String),
@@ -208,6 +227,19 @@ impl Route {
             ("/admin/sign-in", _) if post => Self::SignIn,
             ("/admin/setup", _) if get => Self::SetupPage,
             ("/admin/setup", _) if post => Self::Setup,
+            ("/admin/account", _) if get => Self::Account,
+            ("/admin/account/password", _) if post => Self::AccountPassword,
+            (_, ["account", "devices", name, "revoke"]) if post && !name.is_empty() => {
+                Self::DeviceRevoke(percent_decode(name))
+            }
+            ("/admin/users", _) if get => Self::UsersList,
+            ("/admin/users", _) if post => Self::UsersCreate,
+            (_, ["users", name, action]) if post && !name.is_empty() => {
+                match pages::users::UserAction::of(action) {
+                    Some(action) => Self::UserAction(percent_decode(name), action),
+                    None => Self::Unknown,
+                }
+            }
             ("/admin/", _) if get => Self::Home,
             (_, ["documents"]) if get => Self::DocumentsList,
             (_, ["documents", id]) if get && !id.is_empty() => Self::Document(percent_decode(id)),
@@ -267,6 +299,12 @@ impl Route {
             Self::SignIn => "admin:auth.login",
             Self::SetupPage => "admin:web.setup_page",
             Self::Setup => "admin:auth.setup",
+            Self::Account => "admin:me.status",
+            Self::AccountPassword => "admin:me.password",
+            Self::DeviceRevoke(_) => "admin:devices.revoke",
+            Self::UsersList => "admin:users.list",
+            Self::UsersCreate => "admin:users.create",
+            Self::UserAction(_, action) => action.operation(),
             Self::Home => "admin:status",
             Self::DocumentsList => "admin:documents.list",
             Self::Document(_) | Self::Download(_) => "admin:documents.get",
@@ -571,6 +609,21 @@ async fn run(
     }
     if matches!(route, Route::Setup) && checked.is_ok() {
         return secured(pages::setup::setup(state, request).await, &csp);
+    }
+    if checked.is_ok() {
+        match route {
+            Route::AccountPassword => {
+                return secured(pages::users::change_password(state, request).await, &csp);
+            }
+            Route::UsersCreate => {
+                return secured(pages::users::create(state, request).await, &csp);
+            }
+            Route::UserAction(name, action) if action.hashes() => {
+                let reply = pages::users::reset(state, request, name, action).await;
+                return secured(reply, &csp);
+            }
+            _ => {}
+        }
     }
     let task = tokio::task::spawn_blocking(move || {
         let Ok(mut store) = state.shared.store().lock() else {

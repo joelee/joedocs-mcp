@@ -1,0 +1,79 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head page-head-actions">
+  <div>
+    <h1>Users</h1>
+    <p class="lede">People who sign in here and to the admin command line with a password and a code from their authenticator.</p>
+  </div>
+  <button type="button" commandfor="create-user" command="show-modal">Create user</button>
+</div>
+
+{% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
+{% if let Some(message) = error %}<p class="notice error" role="alert">{{ message }}</p>{% endif %}
+
+<p class="hint">In 0.5.1 every user is an admin. API keys still have no owner: disabling a user stops their sign-in, not a key.</p>
+
+{% if users.is_empty() %}
+<p class="empty">No users yet.</p>
+{% else %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th scope="col">Name</th><th scope="col">State</th><th scope="col">Authenticator</th><th scope="col">Last sign-in (UTC)</th><th scope="col" class="num">Devices</th><th scope="col">Created (UTC)</th><th scope="col">Actions</th></tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+      <tr data-user="{{ user.name }}">
+        <td><strong>{{ user.name }}</strong>{% if user.you %} <span class="hint">(you)</span>{% endif %}</td>
+        <td>{{ user.state }}</td>
+        <td class="nowrap">{% if let Some(at) = user.enrolled %}{{ at }}{% else %}<span class="hint">not set up</span>{% endif %}</td>
+        <td class="nowrap">{% if let Some(at) = user.last_login %}{{ at }}{% else %}<span class="hint">never</span>{% endif %}</td>
+        <td class="num">{{ user.devices }}</td>
+        <td class="nowrap">{{ user.created }}</td>
+        <td>
+          {% if user.buttons.is_empty() %}<span class="hint">none</span>{% else %}
+          <details class="key-actions">
+            <summary>Manage</summary>
+            <p class="key-danger">
+              {% for (action, class, label) in user.buttons %}
+              <button type="button" class="{{ class }}" commandfor="{{ action }}-{{ user.name }}" command="show-modal">{{ label }}</button>
+              {% endfor %}
+            </p>
+          </details>
+          {% for (action, heading, body, label) in user.actions %}
+          <dialog id="{{ action }}-{{ user.name }}" aria-labelledby="{{ action }}-{{ user.name }}-heading">
+            <form method="post" action="/admin/users/{{ user.name }}/{{ action }}" class="stack" data-busy="Working…">
+              <h2 id="{{ action }}-{{ user.name }}-heading">{{ heading }}</h2>
+              <p>{{ body }}</p>
+              <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+              <div class="dialog-actions">
+                <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
+                <button type="submit">{{ label }}</button>
+              </div>
+            </form>
+          </dialog>
+          {% endfor %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+<p class="hint">Removing a user runs on the server only: <code>joedocs user remove NAME</code>.</p>
+
+<dialog id="create-user" aria-labelledby="create-user-heading"{% if open %} open{% endif %}>
+  <form method="post" action="/admin/users" class="stack" data-busy="Creating…">
+    <h2 id="create-user-heading">Create user</h2>
+    <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+    <label for="u-name">Name <span class="hint">lower-case letters, digits and -</span></label>
+    <input id="u-name" name="name" value="{{ name }}" required autocomplete="off" autocapitalize="none" spellcheck="false">
+    <p class="hint">A one-time password is shown once, on the next page; it works for 72 hours.</p>
+    <div class="dialog-actions">
+      <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
+      <button type="submit">Create user</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}

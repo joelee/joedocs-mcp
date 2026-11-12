@@ -1,0 +1,69 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Your account</h1>
+  <p class="lede">Signed in as <strong>{{ user }}</strong>{% if let Some(at) = enrolled %}, with an authenticator set up on <time datetime="{{ at }}">{{ at }}</time>{% endif %}.</p>
+</div>
+
+{% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
+{% if let Some(message) = error %}<p class="notice error" role="alert">{{ message }}</p>{% endif %}
+
+<section aria-labelledby="password-heading">
+  <h2 id="password-heading">Change your password</h2>
+  <p class="hint">Your other devices and sessions end; this one stays signed in.</p>
+  <form method="post" action="/admin/account/password" class="stack narrow" data-busy="Changing…">
+    <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+    <label for="a-current">Current password</label>
+    <input id="a-current" name="password" type="password" autocomplete="current-password" required>
+    <label for="a-code">Code from your authenticator</label>
+    <input id="a-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+    <label for="a-new">New password <span class="hint">12 or more characters</span></label>
+    <input id="a-new" name="new_password" type="password" autocomplete="new-password" minlength="12" required>
+    <label for="a-again">Repeat the new password</label>
+    <input id="a-again" name="new_password_again" type="password" autocomplete="new-password" minlength="12" required>
+    <div><button type="submit">Change password</button></div>
+  </form>
+</section>
+
+<section aria-labelledby="devices-heading">
+  <h2 id="devices-heading">Your devices</h2>
+  <p class="hint">Machines signed in with <code>joedocs auth login</code>. A device not used for {{ device_days }} days must sign in with the password again.</p>
+  {% if devices.is_empty() %}
+  <p class="empty">No devices.</p>
+  {% else %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th scope="col">Device</th><th scope="col">Created (UTC)</th><th scope="col">Last used (UTC)</th><th scope="col">Actions</th></tr></thead>
+      <tbody>
+        {% for device in devices %}
+        <tr>
+          <td><strong>{{ device.name }}</strong></td>
+          <td class="nowrap">{{ device.created }}</td>
+          <td class="nowrap">{% if let Some(at) = device.last_used %}{{ at }}{% else %}<span class="hint">never</span>{% endif %}</td>
+          <td>
+            <button type="button" class="danger" commandfor="revoke-device-{{ loop.index }}" command="show-modal">Revoke</button>
+            <dialog id="revoke-device-{{ loop.index }}" aria-labelledby="revoke-device-{{ loop.index }}-heading">
+              <form method="post" action="/admin/account/devices/{{ device.path }}/revoke" class="stack">
+                <h2 id="revoke-device-{{ loop.index }}-heading">Revoke the device {{ device.name }}?</h2>
+                <p>Its sign-in ends at once; it must sign in with the password again.</p>
+                <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+                <div class="dialog-actions">
+                  <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
+                  <button type="submit" class="danger">Revoke {{ device.name }}</button>
+                </div>
+              </form>
+            </dialog>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+
+<section aria-labelledby="authenticator-heading">
+  <h2 id="authenticator-heading">Your authenticator</h2>
+  <p>Lost it? Another admin can reset it on the <a href="/admin/users">Users</a> page, or on the server with <code>joedocs user reset-totp {{ user }}</code>; you then set up a new one at your next sign-in.</p>
+</section>
+{% endblock %}

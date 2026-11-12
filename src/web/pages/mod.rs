@@ -13,6 +13,7 @@ mod overview;
 mod projects;
 mod search;
 pub(crate) mod setup;
+pub(crate) mod users;
 
 use askama::Template;
 use axum::http::StatusCode;
@@ -41,19 +42,23 @@ pub(crate) enum Section {
     Documents,
     Projects,
     Keys,
+    Users,
     Audit,
     Archive,
     Maintenance,
     /// The Search page, reached from the search box, not the navigation.
     Search,
+    /// The signed-in user's own page, reached from the session menu.
+    Account,
 }
 
 impl Section {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Overview,
         Self::Documents,
         Self::Projects,
         Self::Keys,
+        Self::Users,
         Self::Audit,
         Self::Archive,
         Self::Maintenance,
@@ -65,6 +70,8 @@ impl Section {
             Self::Documents => "/admin/documents",
             Self::Projects => "/admin/projects",
             Self::Keys => "/admin/keys",
+            Self::Users => "/admin/users",
+            Self::Account => "/admin/account",
             Self::Audit => "/admin/audit",
             Self::Archive => "/admin/archive",
             Self::Maintenance => "/admin/maintenance",
@@ -78,6 +85,8 @@ impl Section {
             Self::Documents => "Documents",
             Self::Projects => "Projects",
             Self::Keys => "API keys",
+            Self::Users => "Users",
+            Self::Account => "Your account",
             Self::Audit => "Audit",
             Self::Archive => "Archive",
             Self::Maintenance => "Maintenance",
@@ -207,6 +216,10 @@ pub(crate) fn page(
         Route::FileMove(id) => document::move_file(store, request, session, id),
         Route::FileRestore(id) => document::restore_file(store, request, session, id),
         Route::Maintenance => maintenance::page(store, session),
+        Route::Account => users::account(store, state, request, session),
+        Route::DeviceRevoke(name) => users::revoke_device(store, session, name),
+        Route::UsersList => users::users(store, request, session),
+        Route::UserAction(name, action) => users::act(store, session, name, *action),
         Route::Check => maintenance::check(store, session),
         Route::Reindex => maintenance::reindex(store, session),
         _ => Err(WebError::new(

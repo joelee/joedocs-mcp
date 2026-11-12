@@ -16,6 +16,7 @@
       <div class="menu">
         <p>Signed in as <strong>{{ chrome.admin }}</strong></p>
         <p class="hint">Session ends {{ chrome.expires_at }}</p>
+        <p><a href="/admin/account">Your account</a></p>
         <form method="post" action="/admin/logout">
           <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
           <button type="submit" class="secondary">Sign out</button>

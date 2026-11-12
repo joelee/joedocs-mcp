@@ -3701,3 +3701,220 @@ async fn switching_token_login_off_hides_and_refuses_the_token_form_and_its_sess
     );
     server.stop().await
 }
+
+// --- Account and Users pages (0.5.1, JD-37 STEP-12) ------------------------
+
+/// Takes `alice` through her first sign-in on the web; returns her session
+/// cookie, the CSRF token of her pages, and her TOTP secret.
+async fn signed_in_user(server: &Server, initial: &str) -> TestResult<(String, String, Vec<u8>)> {
+    let signed = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[("user", "alice"), ("password", initial)],
+        )
+        .await?;
+    let ticket = set_cookie(&signed, "joedocs_setup").ok_or("no setup cookie")?;
+    let setup = server.get("/admin/setup", Some(&ticket)).await?;
+    let secret = shown_secret(&setup.body).ok_or("no secret")?;
+    let done = server
+        .post_public(
+            "/admin/setup",
+            Some(&ticket),
+            &[
+                ("code", &code_for(server, &secret)),
+                ("password", USER_PASSWORD),
+                ("password_again", USER_PASSWORD),
+            ],
+        )
+        .await?;
+    let cookie = set_cookie(&done, "joedocs_session").ok_or("no session cookie")?;
+    server.clock.advance(30);
+    let csrf = server.csrf(&cookie).await?;
+    Ok((cookie, csrf, secret))
+}
+
+#[tokio::test]
+async fn the_account_page_changes_the_password_and_revokes_devices() -> TestResult<()> {
+    let (server, initial) = start_with_user(|_| {}).await?;
+    let (cookie, csrf, secret) = signed_in_user(&server, &initial).await?;
+    // A device signed in from the command line, through the admin API.
+    let body = serde_json::json!({
+        "user": "alice", "password": USER_PASSWORD, "code": code_for(&server, &secret), "device": "laptop"
+    })
+    .to_string();
+    let api = server
+        .send(
+            "POST",
+            "/admin/v1/auth/login",
+            "content-type: application/json\r\n",
+            &body,
+        )
+        .await?;
+    assert_eq!(api.status, 200, "{}", api.body);
+    server.clock.advance(30);
+    let page = server.get("/admin/account", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    assert!(page.body.contains("laptop"), "{}", page.body);
+    assert_eq!(html_problems(&page.body), Vec::<String>::new());
+    let mismatched = server
+        .post_form(
+            "/admin/account/password",
+            &cookie,
+            Some(&csrf),
+            &[
+                ("password", USER_PASSWORD),
+                ("code", &code_for(&server, &secret)),
+                ("new_password", "a fresh passphrase here"),
+                ("new_password_again", "another one entirely"),
+            ],
+        )
+        .await?;
+    assert_eq!(mismatched.status, 400);
+    assert!(mismatched.body.contains("differ"), "{}", mismatched.body);
+    let wrong = server
+        .post_form(
+            "/admin/account/password",
+            &cookie,
+            Some(&csrf),
+            &[
+                ("password", "not my password at all"),
+                ("code", "000000"),
+                ("new_password", "a fresh passphrase here"),
+                ("new_password_again", "a fresh passphrase here"),
+            ],
+        )
+        .await?;
+    assert_eq!(wrong.status, 401);
+    assert!(wrong.body.contains("not right"), "{}", wrong.body);
+    let changed = server
+        .post_form(
+            "/admin/account/password",
+            &cookie,
+            Some(&csrf),
+            &[
+                ("password", USER_PASSWORD),
+                ("code", &code_for(&server, &secret)),
+                ("new_password", "a fresh passphrase here"),
+                ("new_password_again", "a fresh passphrase here"),
+            ],
+        )
+        .await?;
+    assert_eq!(changed.status, 303, "{}", changed.body);
+    let after = server
+        .get("/admin/account?changed=1", Some(&cookie))
+        .await?;
+    assert_eq!(after.status, 200, "this session stays signed in");
+    assert!(
+        !after.body.contains(">laptop<"),
+        "the other device ended: {}",
+        after.body
+    );
+    let audit = server.audit()?;
+    assert!(
+        audit
+            .iter()
+            .any(|(t, _, o)| t == "admin:me.password" && o == "ok"),
+        "{audit:?}"
+    );
+    assert!(
+        audit
+            .iter()
+            .any(|(t, _, o)| t == "admin:me.password" && o == "unauthorized")
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_users_page_creates_disables_and_resets_users_but_not_the_last_one() -> TestResult<()> {
+    let (server, initial) = start_with_user(|_| {}).await?;
+    let (cookie, csrf, _) = signed_in_user(&server, &initial).await?;
+    let page = server.get("/admin/users", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    assert!(page.body.contains("alice"));
+    assert_eq!(html_problems(&page.body), Vec::<String>::new());
+    let created = server
+        .post_form("/admin/users", &cookie, Some(&csrf), &[("name", "bob")])
+        .await?;
+    assert_eq!(created.status, 200, "{}", created.body);
+    assert!(created.body.contains("Created user bob."));
+    let start = created
+        .body
+        .find("id=\"one-time-password\">")
+        .ok_or("no password")?
+        + 23;
+    let shown = &created.body[start..start + 23];
+    assert_eq!(shown.matches('-').count(), 3, "{shown}");
+    assert_eq!(html_problems(&created.body), Vec::<String>::new());
+    let taken = server
+        .post_form("/admin/users", &cookie, Some(&csrf), &[("name", "bob")])
+        .await?;
+    assert_eq!(taken.status, 409);
+    assert!(taken.body.contains("already exists"), "{}", taken.body);
+    let disabled = server
+        .post_form("/admin/users/bob/disable", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(disabled.status, 303, "{}", disabled.body);
+    let listed = server.get("/admin/users", Some(&cookie)).await?;
+    assert!(listed.body.contains("disabled"), "{}", listed.body);
+    let reset = server
+        .post_form("/admin/users/bob/reset-totp", &cookie, Some(&csrf), &[])
+        .await?;
+    assert_eq!(reset.status, 200, "{}", reset.body);
+    assert!(reset.body.contains("Cleared the authenticator of bob"));
+    // Alice is the only one who can sign in.
+    for action in ["disable", "reset-password", "reset-totp"] {
+        let refused = server
+            .post_form(
+                &format!("/admin/users/alice/{action}"),
+                &cookie,
+                Some(&csrf),
+                &[],
+            )
+            .await?;
+        assert_eq!(refused.status, 400, "{action}");
+        assert!(
+            refused.body.contains("last user who can sign in"),
+            "{action}"
+        );
+    }
+    let audit = server.audit()?;
+    assert!(
+        audit
+            .iter()
+            .any(|(t, _, o)| t == "admin:users.create" && o == "ok")
+    );
+    assert!(
+        audit
+            .iter()
+            .any(|(t, _, o)| t == "admin:users.reset_totp" && o == "ok")
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn admin_token_sessions_cannot_use_the_account_or_users_pages() -> TestResult<()> {
+    let server = start().await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    for path in ["/admin/account", "/admin/users"] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 403, "{path}");
+        assert!(page.body.contains("signed-in user"), "{path}");
+    }
+    let created = server
+        .post_form("/admin/users", &cookie, Some(&csrf), &[("name", "eve")])
+        .await?;
+    assert_eq!(created.status, 403);
+    let outcomes: Vec<_> = server
+        .audit()?
+        .into_iter()
+        .filter(|(t, _, _)| t.starts_with("admin:users") || t.starts_with("admin:me"))
+        .map(|(_, _, o)| o)
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["user_required", "user_required", "user_required"]
+    );
+    server.stop().await
+}
