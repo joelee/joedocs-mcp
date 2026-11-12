@@ -770,3 +770,23 @@ fn unlock_and_remove_clear_a_real_users_lock_and_a_removed_name_counts_in_memory
     assert_eq!(crate::db::throttle_rows(&fx.store.conn).unwrap(), 0);
     assert_eq!(fx.store.unknown_names_held(), 1);
 }
+
+#[test]
+fn a_user_whose_one_time_password_lapsed_does_not_count_for_the_last_user_rule() {
+    let mut fx = fixture();
+    active_user(&mut fx, "alice");
+    active_user(&mut fx, "bob");
+    assert!(!fx.store.is_last_sign_in_user("alice").unwrap());
+    fx.store.reset_password("bob", "$argon2id$temp").unwrap();
+    // Within its 72 hours, Bob can still sign in and choose a password.
+    fx.clock.advance(71 * 3600);
+    assert!(!fx.store.is_last_sign_in_user("alice").unwrap());
+    // After them, only Alice can.
+    fx.clock.advance(2 * 3600);
+    assert!(fx.store.is_last_sign_in_user("alice").unwrap());
+    // A temporary sign-in lock is not a lockout.
+    for _ in 0..5 {
+        fx.store.record_sign_in_failure("alice").unwrap();
+    }
+    assert!(fx.store.is_last_sign_in_user("alice").unwrap());
+}

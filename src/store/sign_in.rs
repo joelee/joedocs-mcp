@@ -257,12 +257,7 @@ impl Store {
             return Ok(None);
         };
         let now = self.now();
-        Ok(db::find_user_by_id(&self.conn, id)?.filter(|u| {
-            u.removed_at.is_none()
-                && u.disabled_at.is_none()
-                && (!u.must_change_password
-                    || u.initial_password_until.as_ref().is_some_and(|t| *t > now))
-        }))
+        Ok(db::find_user_by_id(&self.conn, id)?.filter(|u| can_sign_in_now(u, &now)))
     }
 
     /// Counts a failed sign-in for `name` and refuses it.
@@ -835,6 +830,20 @@ impl Store {
         db::revoke_device(&self.conn, &device.id, &self.now())?;
         Ok(db::find_device(&self.conn, &device.id)?.unwrap_or(device))
     }
+}
+
+/// Whether `user`'s password can sign in at `now`: not removed, not
+/// disabled, and either chosen by the user or a one-time password still
+/// within its time. (A temporary lock after failed attempts is not
+/// counted: it lifts by itself.)
+pub(super) fn can_sign_in_now(user: &UserRow, now: &str) -> bool {
+    user.removed_at.is_none()
+        && user.disabled_at.is_none()
+        && (!user.must_change_password
+            || user
+                .initial_password_until
+                .as_deref()
+                .is_some_and(|until| until > now))
 }
 
 /// Whether `user` may hold sessions and devices: not removed, not disabled,

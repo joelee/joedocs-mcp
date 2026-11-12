@@ -8,6 +8,7 @@
 //! (`crate::password::Gate`). Functions take the finished PHC string.
 
 use super::admin_tokens::later;
+use super::sign_in::can_sign_in_now;
 use super::{Error, Store};
 use crate::auth::{RandomSource, hex};
 use crate::db::{self, UserRow};
@@ -245,8 +246,9 @@ impl Store {
         Ok(row)
     }
 
-    /// Whether `name` is the last user who can sign in (enabled, not
-    /// removed, with a confirmed authenticator). The admin API and the web
+    /// Whether `name` is the last user who can sign in now (enabled, not
+    /// removed, with a confirmed authenticator, and a password of their own
+    /// or a one-time one still within its time). The admin API and the web
     /// interface refuse to disable or reset that user, so someone can
     /// always sign in; the server's command line still can.
     ///
@@ -254,9 +256,8 @@ impl Store {
     ///
     /// Returns database errors.
     pub fn is_last_sign_in_user(&self, name: &str) -> Result<bool, Error> {
-        let can = |u: &UserRow| {
-            u.removed_at.is_none() && u.disabled_at.is_none() && u.totp_enrolled_at.is_some()
-        };
+        let now = self.now();
+        let can = |u: &UserRow| u.totp_enrolled_at.is_some() && can_sign_in_now(u, &now);
         let users = db::list_users(&self.conn)?;
         let target = users.iter().any(|u| u.name == name && can(u));
         let others = users.iter().filter(|u| u.name != name && can(u)).count();
