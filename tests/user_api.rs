@@ -431,6 +431,47 @@ async fn five_failures_lock_a_name_without_checking_the_password_and_stop_nothin
     server.stop().await
 }
 
+/// The status, `Retry-After` and body of each of `times` wrong sign-ins of
+/// `name`.
+async fn wrong_sign_ins(
+    server: &Server,
+    name: &str,
+    times: usize,
+) -> TestResult<Vec<(u16, Option<String>, String)>> {
+    let mut seen = Vec::new();
+    for _ in 0..times {
+        let wrong = json!({"user": name, "password": "a wrong long password", "code": "000000"});
+        let reply = server.post("/admin/v1/auth/login", "", &wrong).await?;
+        let retry = reply.head.lines().find_map(|l| {
+            l.to_lowercase()
+                .strip_prefix("retry-after:")
+                .map(|v| v.trim().to_owned())
+        });
+        seen.push((reply.status, retry, reply.body));
+    }
+    Ok(seen)
+}
+
+#[tokio::test]
+async fn real_and_unknown_names_get_the_same_replies_after_an_idle_wait() -> TestResult<()> {
+    let server = start(&["alice"]).await?;
+    server.set_up("alice", PASSWORD).await?;
+    let mut seen = Vec::new();
+    for name in ["alice", "nobody"] {
+        let mut replies = wrong_sign_ins(&server, name, 2).await?;
+        server.clock.advance(16 * 60);
+        replies.extend(wrong_sign_ins(&server, name, 4).await?);
+        seen.push(replies);
+    }
+    assert_eq!(seen[0], seen[1]);
+    assert!(
+        seen[0].iter().all(|(status, ..)| *status == 401),
+        "{:?}",
+        seen[0]
+    );
+    server.stop().await
+}
+
 #[tokio::test]
 async fn a_password_alone_and_a_pending_setup_open_nothing() -> TestResult<()> {
     let server = start(&["alice", "bob"]).await?;

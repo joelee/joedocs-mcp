@@ -790,3 +790,74 @@ fn a_user_whose_one_time_password_lapsed_does_not_count_for_the_last_user_rule()
     }
     assert!(fx.store.is_last_sign_in_user("alice").unwrap());
 }
+
+/// Records `times` failed sign-ins of `name`, and whether it was locked
+/// after each.
+fn fail_and_watch(fx: &Fixture, name: &str, times: usize) -> Vec<bool> {
+    (0..times)
+        .map(|_| {
+            fx.store.record_sign_in_failure(name).unwrap();
+            locked_now(fx, name)
+        })
+        .collect()
+}
+
+/// A user's stored count of failed sign-ins.
+fn stored_failures(fx: &Fixture, name: &str) -> u32 {
+    let user = fx.store.user(name).unwrap();
+    crate::db::throttle_of(&fx.store.conn, &user.id)
+        .unwrap()
+        .map_or(0, |row| row.failures)
+}
+
+#[test]
+fn idle_counts_expire_the_same_for_real_and_unknown_names() {
+    let mut fx = fixture();
+    active_user(&mut fx, "alice");
+    let mut seen = Vec::new();
+    for name in ["alice", "nobody"] {
+        fail_and_watch(&fx, name, 2);
+        fx.clock.advance(16 * 60);
+        seen.push(fail_and_watch(&fx, name, 5));
+    }
+    let expected = vec![false, false, false, false, true];
+    assert_eq!(seen, vec![expected.clone(), expected]);
+}
+
+#[test]
+fn a_stale_count_never_completes_a_lock() {
+    let mut fx = fixture();
+    active_user(&mut fx, "alice");
+    for name in ["alice", "nobody"] {
+        fail_and_watch(&fx, name, 4);
+        fx.clock.advance(16 * 60);
+        assert_eq!(fail_and_watch(&fx, name, 1), vec![false], "{name}");
+    }
+    assert_eq!(stored_failures(&fx, "alice"), 1);
+}
+
+#[test]
+fn fifteen_idle_minutes_keep_the_count() {
+    let mut fx = fixture();
+    active_user(&mut fx, "alice");
+    for name in ["alice", "nobody"] {
+        fail_and_watch(&fx, name, 4);
+        fx.clock.advance(15 * 60);
+        assert_eq!(fail_and_watch(&fx, name, 1), vec![true], "{name}");
+    }
+}
+
+#[test]
+fn an_ended_lock_starts_a_new_count() {
+    let mut fx = fixture();
+    active_user(&mut fx, "alice");
+    for name in ["alice", "nobody"] {
+        assert_eq!(fail_and_watch(&fx, name, 5).last(), Some(&true), "{name}");
+        fx.clock.advance(15 * 60 + 1);
+        assert_eq!(
+            fail_and_watch(&fx, name, 5),
+            vec![false, false, false, false, true],
+            "{name}"
+        );
+    }
+}

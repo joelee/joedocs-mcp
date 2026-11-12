@@ -275,16 +275,24 @@ impl Store {
     pub fn record_sign_in_failure(&self, name: &str) -> Result<(), Error> {
         let counted = self.counted(name)?;
         let now = self.clock.now();
-        let failures = self.throttle_row(&counted)?.map_or(0, |t| t.failures);
-        let lock = (failures + 1 >= MAX_FAILED_LOGINS).then(|| later(now, LOCK_SECONDS));
         let (at, prune_before) = (format_timestamp(now), later(now, -LOCK_SECONDS));
+        // One rule for every name: a count untouched for LOCK_SECONDS is
+        // forgotten before this failure is counted (JD-40 D-02).
+        let failures = self
+            .throttle_row(&counted)?
+            .filter(|t| !t.expired(&prune_before))
+            .map_or(0, |t| t.failures)
+            + 1;
+        let lock = (failures >= MAX_FAILED_LOGINS).then(|| later(now, LOCK_SECONDS));
+        // A lock starts a new count.
+        let stored = if lock.is_some() { 0 } else { failures };
         match counted {
             Counted::User(id) => {
-                db::throttle_failure(&self.conn, &id, lock.as_deref(), &at, &prune_before)?;
+                db::throttle_failure(&self.conn, &id, stored, lock.as_deref(), &at, &prune_before)?;
             }
             Counted::Unknown(name) => {
                 self.unknown_names()
-                    .failure(&name, lock.as_deref(), &at, &prune_before);
+                    .failure(&name, stored, lock.as_deref(), &at, &prune_before);
             }
         }
         Ok(())

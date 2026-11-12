@@ -90,16 +90,19 @@ impl UnknownNames {
         self.entries.get(&self.slot(name)).map(|e| ThrottleRow {
             failures: e.failures,
             locked_until: e.locked_until.clone(),
+            updated_at: e.updated_at.clone(),
         })
     }
 
-    /// Records a failed sign-in for `name` at `at`: counts it, or locks the
-    /// name until `lock_until` when given (resetting the count). When the
-    /// throttle is full, entries untouched since `prune_before` whose lock
-    /// has ended go first, then the least recently failed tenth.
+    /// Records a failed sign-in for `name` at `at`: stores the count
+    /// `failures` the caller decided, and locks the name until `lock_until`
+    /// when given. When the throttle is full, entries untouched since
+    /// `prune_before` whose lock has ended go first, then the least recently
+    /// failed tenth.
     pub(super) fn failure(
         &mut self,
         name: &str,
+        failures: u32,
         lock_until: Option<&str>,
         at: &str,
         prune_before: &str,
@@ -113,13 +116,8 @@ impl UnknownNames {
             locked_until: None,
             updated_at: String::new(),
         });
-        if let Some(until) = lock_until {
-            entry.failures = 0;
-            entry.locked_until = Some(until.to_owned());
-        } else {
-            entry.failures += 1;
-            entry.locked_until = None;
-        }
+        entry.failures = failures;
+        entry.locked_until = lock_until.map(str::to_owned);
         at.clone_into(&mut entry.updated_at);
     }
 
@@ -163,15 +161,16 @@ mod tests {
     #[test]
     fn names_count_lock_and_are_held_by_keyed_hash_only() {
         let mut names = UnknownNames::new(&OsRandom).unwrap();
-        names.failure("nobody", None, "t1", "t0");
-        names.failure("nobody", None, "t2", "t0");
+        names.failure("nobody", 1, None, "t1", "t0");
+        names.failure("nobody", 2, None, "t2", "t0");
         assert_eq!(names.get("nobody").unwrap().failures, 2);
-        names.failure("nobody", Some("t9"), "t3", "t0");
+        names.failure("nobody", 0, Some("t9"), "t3", "t0");
         assert_eq!(
             names.get("nobody").unwrap(),
             ThrottleRow {
                 failures: 0,
-                locked_until: Some("t9".to_owned())
+                locked_until: Some("t9".to_owned()),
+                updated_at: "t3".to_owned(),
             }
         );
         assert_eq!(names.get("somebody"), None);
@@ -187,27 +186,27 @@ mod tests {
     fn a_full_throttle_prunes_expired_names_then_the_oldest_tenth() {
         let mut names = UnknownNames::with_cap(&OsRandom, 20).unwrap();
         for i in 0..20 {
-            names.failure(&format!("n{i:02}"), None, &format!("t{i:02}"), "t00");
+            names.failure(&format!("n{i:02}"), 1, None, &format!("t{i:02}"), "t00");
         }
         assert_eq!(names.len(), 20);
         // Entries untouched since t05 go first.
-        names.failure("new1", None, "t20", "t05");
+        names.failure("new1", 1, None, "t20", "t05");
         assert_eq!(names.len(), 16);
         assert!(names.get("n04").is_none() && names.get("n05").is_some());
         for i in 0..4 {
-            names.failure(&format!("more{i}"), None, "t21", "t00");
+            names.failure(&format!("more{i}"), 1, None, "t21", "t00");
         }
         assert_eq!(names.len(), 20);
         // Nothing expired: the two least recently failed go.
-        names.failure("new2", None, "t22", "t00");
+        names.failure("new2", 1, None, "t22", "t00");
         assert_eq!(names.len(), 19);
         assert!(names.get("n05").is_none() && names.get("n06").is_none());
         assert!(names.get("n07").is_some());
         // A lock that has not ended keeps an old entry.
         let mut locked = UnknownNames::with_cap(&OsRandom, 2).unwrap();
-        locked.failure("a", Some("t99"), "t01", "t00");
-        locked.failure("b", None, "t02", "t00");
-        locked.failure("c", None, "t03", "t50");
+        locked.failure("a", 0, Some("t99"), "t01", "t00");
+        locked.failure("b", 1, None, "t02", "t00");
+        locked.failure("c", 1, None, "t03", "t50");
         assert!(locked.get("a").is_some());
         assert!(locked.get("b").is_none());
         assert_eq!(locked.len(), 2);

@@ -121,6 +121,23 @@ pub struct ThrottleRow {
     pub failures: u32,
     /// Sign-ins for the name are refused until this time, if locked.
     pub locked_until: Option<String>,
+    /// When the last failure was counted.
+    pub updated_at: String,
+}
+
+impl ThrottleRow {
+    /// Whether the record has expired: untouched since `prune_before`, and
+    /// unlocked or locked only until before then. An expired count counts
+    /// as zero, for every name (JD-40 D-02). The same rule as the `DELETE`
+    /// in [`throttle_failure`].
+    #[must_use]
+    pub fn expired(&self, prune_before: &str) -> bool {
+        self.updated_at.as_str() < prune_before
+            && self
+                .locked_until
+                .as_deref()
+                .is_none_or(|until| until < prune_before)
+    }
 }
 
 const USER_SELECT: &str = "SELECT id, name, must_change_password, initial_password_until, \
@@ -687,22 +704,24 @@ pub fn revoke_user_session(conn: &Connection, id: &str, at: &str) -> rusqlite::R
 /// Returns an error when the query fails.
 pub fn throttle_of(conn: &Connection, user_id: &str) -> rusqlite::Result<Option<ThrottleRow>> {
     conn.query_row(
-        "SELECT failures, locked_until FROM sign_in_throttle WHERE user_id = ?1",
+        "SELECT failures, locked_until, updated_at FROM sign_in_throttle WHERE user_id = ?1",
         [user_id],
         |row| {
             Ok(ThrottleRow {
                 failures: row.get(0)?,
                 locked_until: row.get(1)?,
+                updated_at: row.get(2)?,
             })
         },
     )
     .optional()
 }
 
-/// Records a failed sign-in for the user `user_id`: counts it, and locks
-/// the user's sign-ins until `lock_until` when given (resetting the count).
-/// Rows not touched since `prune_before` whose lock has ended are deleted
-/// first. Rows are never deleted for room: there is one per user at most.
+/// Records a failed sign-in for the user `user_id` at `at`: stores the
+/// count `failures` the caller decided, and locks the user's sign-ins until
+/// `lock_until` when given. Rows not touched since `prune_before` whose
+/// lock has ended are deleted first (see [`ThrottleRow::expired`]). Rows
+/// are never deleted for room: there is one per user at most.
 ///
 /// # Errors
 ///
@@ -710,6 +729,7 @@ pub fn throttle_of(conn: &Connection, user_id: &str) -> rusqlite::Result<Option<
 pub fn throttle_failure(
     conn: &Connection,
     user_id: &str,
+    failures: u32,
     lock_until: Option<&str>,
     at: &str,
     prune_before: &str,
@@ -719,18 +739,11 @@ pub fn throttle_failure(
          WHERE updated_at < ?1 AND (locked_until IS NULL OR locked_until < ?1)",
         [prune_before],
     )?;
-    let (failures, locked) = match lock_until {
-        Some(until) => (0, Some(until)),
-        None => (
-            throttle_of(conn, user_id)?.map_or(0, |row| row.failures) + 1,
-            None,
-        ),
-    };
     conn.execute(
         "INSERT INTO sign_in_throttle (user_id, failures, locked_until, updated_at)
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT (user_id) DO UPDATE SET failures = ?2, locked_until = ?3, updated_at = ?4",
-        params![user_id, failures, locked, at],
+        params![user_id, failures, lock_until, at],
     )?;
     Ok(())
 }
@@ -956,12 +969,13 @@ mod tests {
         ] {
             insert_user(&conn, id, name, "h", "u", "t").unwrap();
         }
-        throttle_failure(&conn, "u1", None, "2026-01-01T00:00:00Z", "2000").unwrap();
-        throttle_failure(&conn, "u1", None, "2026-01-01T00:00:01Z", "2000").unwrap();
+        throttle_failure(&conn, "u1", 1, None, "2026-01-01T00:00:00Z", "2000").unwrap();
+        throttle_failure(&conn, "u1", 2, None, "2026-01-01T00:00:01Z", "2000").unwrap();
         assert_eq!(throttle_of(&conn, "u1").unwrap().unwrap().failures, 2);
         throttle_failure(
             &conn,
             "u1",
+            0,
             Some("2026-01-01T00:15:00Z"),
             "2026-01-01T00:00:02Z",
             "2000",
@@ -972,10 +986,11 @@ mod tests {
             (row.failures, row.locked_until.as_deref()),
             (0, Some("2026-01-01T00:15:00Z"))
         );
-        throttle_failure(&conn, "u2", None, "2026-01-01T00:00:03Z", "2000").unwrap();
+        throttle_failure(&conn, "u2", 1, None, "2026-01-01T00:00:03Z", "2000").unwrap();
         throttle_failure(
             &conn,
             "u4",
+            0,
             Some("2026-01-01T09:00:00Z"),
             "2026-01-01T00:00:04Z",
             "2000",
@@ -986,6 +1001,7 @@ mod tests {
         throttle_failure(
             &conn,
             "u3",
+            1,
             None,
             "2026-01-01T00:20:00Z",
             "2026-01-01T00:16:00Z",
@@ -998,5 +1014,19 @@ mod tests {
         throttle_clear(&conn, "u3").unwrap();
         throttle_clear(&conn, "u4").unwrap();
         assert_eq!(throttle_rows(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_throttle_row_expires_exactly_when_the_prune_would_delete_it() {
+        let row = |updated: &str, locked: Option<&str>| ThrottleRow {
+            failures: 3,
+            locked_until: locked.map(str::to_owned),
+            updated_at: updated.to_owned(),
+        };
+        let before = "2026-01-01T00:16:00Z";
+        assert!(row("2026-01-01T00:15:59Z", None).expired(before));
+        assert!(!row("2026-01-01T00:16:00Z", None).expired(before));
+        assert!(row("2026-01-01T00:00:00Z", Some("2026-01-01T00:15:00Z")).expired(before));
+        assert!(!row("2026-01-01T00:00:00Z", Some("2026-01-01T00:16:00Z")).expired(before));
     }
 }
