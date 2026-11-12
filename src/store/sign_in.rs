@@ -550,6 +550,24 @@ impl Store {
         Ok((device, user))
     }
 
+    /// The user a genuine device credential belongs to, whatever the state
+    /// of the device or user (to name them in the audit log).
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors.
+    pub fn device_owner(&self, credential: &SecretString) -> Result<Option<UserRow>, Error> {
+        let Some((id, secret)) = parse_prefixed(DEVICE_PREFIX, credential) else {
+            return Ok(None);
+        };
+        let Some(device) =
+            db::find_device(&self.conn, &id)?.filter(|d| verify_secret(&secret, &d.secret_sha256))
+        else {
+            return Ok(None);
+        };
+        Ok(db::find_user_by_id(&self.conn, &device.user_id)?)
+    }
+
     /// Checks an API session of a device credential, and records its use.
     ///
     /// # Errors

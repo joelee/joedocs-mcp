@@ -341,6 +341,42 @@ fn user_list(store: &Store, out: &mut dyn Write) -> Result<(), Error> {
     Ok(())
 }
 
+/// Writes a user's devices as a table, marking `current` (the device
+/// asking). Shared by `joedocs auth devices` and the admin API.
+///
+/// # Errors
+///
+/// Returns [`Error::Output`] when writing fails.
+pub fn write_devices(
+    out: &mut dyn Write,
+    devices: &[crate::db::DeviceRow],
+    current: Option<&str>,
+) -> Result<(), Error> {
+    let live: Vec<&crate::db::DeviceRow> =
+        devices.iter().filter(|d| d.revoked_at.is_none()).collect();
+    if live.is_empty() {
+        writeln!(out, "No devices.")?;
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = live
+        .iter()
+        .map(|d| {
+            let name = if current == Some(d.id.as_str()) {
+                format!("{} (this one)", d.name)
+            } else {
+                d.name.clone()
+            };
+            vec![
+                name,
+                d.created_at.clone(),
+                d.last_used_at.clone().unwrap_or_else(|| "never".to_owned()),
+            ]
+        })
+        .collect();
+    write_table(out, &["NAME", "CREATED", "LAST USED"], &rows)?;
+    Ok(())
+}
+
 fn admin_token_row(token: &AdminTokenRow, now: &str) -> Vec<String> {
     let state = match (&token.revoked_at, &token.locked_until) {
         (Some(at), _) => format!("revoked {at}"),

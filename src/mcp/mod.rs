@@ -56,6 +56,10 @@ pub struct ServerOptions {
     pub max_request_bytes: usize,
     /// The admin API, when `admin.enabled` is on.
     pub admin: Option<AdminOptions>,
+    /// `admin.device_days`: how long an unused device credential lasts.
+    pub device_days: u32,
+    /// `admin.token_login`: whether admin tokens may still be used.
+    pub token_login: bool,
     /// The admin web interface, when `admin.enabled` and `admin.web_ui`
     /// are both on.
     pub web: Option<crate::web::WebOptions>,
@@ -80,6 +84,8 @@ impl ServerOptions {
                 .map(|o| with_default_port(o))
                 .collect(),
             max_request_bytes: usize::try_from(max).unwrap_or(usize::MAX),
+            device_days: config.admin.device_days,
+            token_login: config.admin.token_login,
             admin: config.admin.enabled.then_some(AdminOptions {
                 session_hours: config.admin.session_hours,
                 config_file: None,
@@ -119,7 +125,6 @@ pub struct Shared {
     store: Mutex<Store>,
     settings: Settings,
     /// Password hashing, kept off the store lock and to two at a time.
-    #[expect(dead_code, reason = "used by the user sign-in routes (JD-37 STEP-08)")]
     hashing: crate::password::Gate,
 }
 
@@ -138,7 +143,6 @@ impl Shared {
     /// The password hashing gate, shared by the admin API and the web
     /// interface. Hash only through it, and never while holding
     /// [`Shared::store`]'s lock.
-    #[expect(dead_code, reason = "used by the user sign-in routes (JD-37 STEP-08)")]
     pub(crate) fn hashing(&self) -> &crate::password::Gate {
         &self.hashing
     }

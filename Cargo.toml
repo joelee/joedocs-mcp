@@ -79,3 +79,12 @@ dbg_macro = "warn"
 todo = "warn"
 print_stdout = "warn"
 allow_attributes_without_reason = "warn"
+
+# Argon2id password hashing takes about 0.75 s unoptimised, so tests that
+# sign users in would crawl; optimise the hashing crates even in test builds.
+# This changes only their speed, not any check.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
