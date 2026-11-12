@@ -17,7 +17,7 @@ User accounts: administrators sign in to the web interface and the admin command
 - **Admin API routes:** `POST /admin/v1/auth/login` and `auth/setup`, `GET /admin/v1/me`, `POST me/password`, `GET me/devices`, `POST me/devices/{name}/revoke`, `GET`/`POST /admin/v1/users` and `POST users/{name}/disable|enable|unlock|reset-password|reset-totp`. `POST /admin/v1/session` also renews a session with a device credential (`Authorization: Bearer jdd_...`). New error codes: `429 busy`, `403 user_required`, `401 device_invalid`.
 - **Configuration keys:** `admin.device_days` (default 30: a device not used that long signs in with the password again), `admin.token_login` (default `true`; `false` refuses every admin-token request) and `client.user`, with the global flag `--user`.
 - **Passwords** are hashed with Argon2id at OWASP's minimum parameters (19 MiB, 2 iterations, 1 lane), stored as PHC strings and rehashed when the parameters rise. A new password is 12 to 256 characters (counted after NFC normalisation), not the user's name or a common password. Hashing never runs while the store is locked, at most two at once, so sign-in attempts cannot slow MCP requests; beyond that a sign-in is refused `429 busy`.
-- **Lockout per name.** Five failed sign-ins lock that name, real or not, for 15 minutes. The lock stops new sign-ins only: open sessions, device renewals and MCP keys keep working. Every refusal is the same `401`, so a reply never says whether a name exists. Audit rows of a user's calls name the user (`user_id`, `user_name`, and `"user"` in `audit --json`), and a refused sign-in records the name only when it is an existing user's.
+- **Lockout per name.** Five failed sign-ins lock that name, real or not, for 15 minutes. The lock stops new sign-ins only: open sessions, device renewals and MCP keys keep working. Every refusal is the same `401`, so a reply never says whether a name exists. A typed name is never stored: real users' counts are kept by user ID, and other names are counted in memory only, under a keyed hash (at most 100,000, so a restart or a sustained flood can lift an unknown name's lock early). A device's renewals keep their own five-code lock, which ordinary use does not lift. Audit rows of a user's calls name the user (`user_id`, `user_name`, and `"user"` in `audit --json`), and a refused sign-in records the name only when it is an existing user's.
 
 ### Deprecated
 
@@ -25,8 +25,9 @@ User accounts: administrators sign in to the web interface and the admin command
 
 ### Changed
 
-- The database is version 7 (migration `0007_users`): users, devices, user sessions and the sign-in lock, plus nullable `user_id` and `user_name` columns on the audit log. Existing admin tokens, sessions, keys and grants keep working. Going back to 0.5.0 needs the backup taken before upgrading.
+- The database is version 8 (migrations `0007_users` and `0008_sign_in_lock`): users, devices, user sessions and the sign-in lock by user ID, plus nullable `user_id` and `user_name` columns on the audit log. Existing admin tokens, sessions, keys and grants keep working. Going back to 0.5.0 needs the backup taken before upgrading.
 - Exit code `77` also covers a needed TOTP setup without a terminal and an admin token on a user-only route; `69` also covers a server too busy checking sign-ins (`429 busy`).
+- `auth logout --forget-device` forgets this device only once the server has revoked it (or says it is no longer valid). It renews an expired session with a code first; without a terminal, or when the server refuses or fails, it exits non-zero and keeps the device. `auth status`, `auth password` and `auth devices revoke` exit `70` when the server's reply is malformed.
 
 ### Fixed
 

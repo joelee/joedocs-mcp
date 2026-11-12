@@ -64,11 +64,11 @@
 │   │   ├── projects.rs     Project queries
 │   │   ├── keys.rs         API key and grant queries
 │   │   ├── admin.rs        Admin token and session queries
-│   │   ├── users.rs        User, device, user session and sign-in throttle queries
+│   │   ├── users.rs        User, device, user session and sign-in lock queries (by user ID)
 │   │   ├── documents.rs    Document, listing and revision queries
 │   │   ├── files.rs        Files of multi-file documents and the files each revision changed
 │   │   ├── search.rs       Search index upkeep and the search query
-│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search, 0004_admin, 0005_files, 0006_web_sessions, 0007_users)
+│   │   └── migrations/     Embedded .sql files (0001_core, 0002_audit, 0003_search, 0004_admin, 0005_files, 0006_web_sessions, 0007_users, 0008_sign_in_lock)
 │   ├── document/
 │   │   ├── mod.rs          Slugs and re-exports
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
@@ -109,6 +109,7 @@
 │       ├── principal.rs    Admin: who made an admin request (an admin token or a user)
 │       ├── users.rs        User administration: create, list, disable, enable, unlock, resets, remove
 │       ├── sign_in.rs      User sign-in in phases, TOTP setup, devices, user sessions, the sign-in lock
+│       ├── throttle.rs     The sign-in lock of names that are no user's: in memory, by keyed hash, capped
 │       ├── archive.rs      Archive list and restore
 │       ├── audit.rs        Reading the audit log (joedocs audit)
 │       ├── backup.rs       The consistent snapshot behind joedocs backup

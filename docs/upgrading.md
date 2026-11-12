@@ -102,7 +102,7 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ### 0.5.0 to 0.5.1
 
-- **Migration 7** runs on the first start: it adds users, devices, user sessions and the sign-in lock, and two nullable audit columns. Nothing existing changes. **Take the backup in step 1 first:** going back to 0.5.0 means restoring it, because 0.5.0 refuses a version 7 database.
+- **Migrations 7 and 8** run on the first start, making the database version 8: they add users, devices, user sessions and the sign-in lock (by user ID), and two nullable audit columns. Nothing existing changes. **Take the backup in step 1 first:** going back to 0.5.0 means restoring it, because 0.5.0 refuses a version 8 database.
 - **Admin tokens keep working** and are deprecated: `joedocs login` and `admin-token` print a warning on standard error, and admin API replies to them carry a `Deprecation` header. To move to users, on the server run `joedocs user create NAME` for each administrator and give them the one-time password it prints. Each then signs in with `joedocs auth login --user NAME` (or on the web page), sets up an authenticator and chooses a password. When nobody uses an admin token any more, set `[admin] token_login = false` and restart, then revoke the tokens with `joedocs admin-token revoke`.
 - **API keys have no owner in 0.5.1**, and every user is an admin: disabling a user stops their sign-in, not any key. Keys, grants and MCP clients are unchanged.
 - **Three new keys:** `admin.device_days` (default 30), `admin.token_login` (default `true`) and `client.user`, with the global flag `--user`. The backup archive's format is unchanged; its database now also holds password hashes and more TOTP secrets, so keep backups as private as before.

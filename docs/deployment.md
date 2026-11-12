@@ -244,6 +244,8 @@ The admin commands can also run from another machine, through the server's admin
 
 **Sign-in attempts.** Five failed sign-ins lock that user name for 15 minutes (open sessions and MCP keys keep working), and anyone who can reach the sign-in can trigger that for a name they know. Keep `/admin/v1/` and `/admin/` off the public internet (a tailnet, a VPN) or behind a proxy that limits request rates. `joedocs user unlock NAME` clears a lock.
 
+A name that is no user's is locked the same way, so a refusal never says whether a name exists. Its count lives only in the server's memory (at most 100,000 names; real users' counts are in the database and are never pushed out). So a restart forgets unknown names' locks, and a sustained flood of failed sign-ins with made-up names (about ten minutes of a fully busy hashing gate) can lift one early; someone watching for that could tell an unknown name from a real one. The flood shows in the audit log as many `admin:auth.login` rows with outcome `unauthorized` (or `busy`); `joedocs audit` lists them.
+
 **Admin tokens (deprecated).** Before 0.5.1 the admin API took an admin token (`joedocs admin-token create NAME` on the server, `JOEDOCS_ADMIN_TOKEN` and `joedocs login` on the client). They still work and print a warning; once nobody uses them, set `[admin] token_login = false`, restart, and revoke them with `joedocs admin-token revoke NAME`.
 
 ## 6b. Admin web interface
