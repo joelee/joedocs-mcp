@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(resolved.config, Config::default());
         assert_eq!(resolved.file, None);
         assert!(resolved.sources.values().all(|s| *s == Source::Default));
-        assert_eq!(resolved.sources.len(), 18);
+        assert_eq!(resolved.sources.len(), 21);
     }
 
     #[test]
@@ -606,6 +606,25 @@ mod tests {
         let env = MapEnv::new().with("MY_APP__ADMIN__WEB_UI", "true");
         let err = resolve_with(&env, &MemFs::new()).unwrap_err();
         assert!(err.to_string().contains("admin.web_ui"), "{err}");
+    }
+
+    #[test]
+    fn user_sign_in_keys_have_defaults_and_overrides() {
+        let resolved = resolve_with(&MapEnv::new(), &MemFs::new()).unwrap();
+        assert_eq!(resolved.config.admin.device_days, 30);
+        assert!(resolved.config.admin.token_login);
+        assert_eq!(resolved.config.client.user, "");
+        let env = MapEnv::new()
+            .with("MY_APP__ADMIN__DEVICE_DAYS", "90")
+            .with("MY_APP__ADMIN__TOKEN_LOGIN", "false")
+            .with("MY_APP__CLIENT__USER", "alice");
+        let resolved = resolve_with(&env, &MemFs::new()).unwrap();
+        assert_eq!(resolved.config.admin.device_days, 90);
+        assert!(!resolved.config.admin.token_login);
+        assert_eq!(resolved.config.client.user, "alice");
+        let env = MapEnv::new().with("MY_APP__ADMIN__DEVICE_DAYS", "0");
+        let err = resolve_with(&env, &MemFs::new()).unwrap_err();
+        assert!(err.to_string().contains("admin.device_days"), "{err}");
     }
 
     #[test]

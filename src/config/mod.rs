@@ -253,6 +253,13 @@ pub struct AdminConfig {
     /// `https://www.plantuml.com/plantuml`. Empty shows diagrams as source.
     /// The admin's browser sends the diagram text to it.
     pub web_plantuml_url: String,
+    /// How many days a device credential issued by `joedocs auth login`
+    /// lasts without use (1 to 365).
+    pub device_days: u32,
+    /// Whether admin tokens may still sign in (deprecated in 0.5.1). When
+    /// off, every request carrying an admin token is refused, on the admin
+    /// API and the web interface alike.
+    pub token_login: bool,
 }
 
 impl Default for AdminConfig {
@@ -262,6 +269,8 @@ impl Default for AdminConfig {
             session_hours: 8,
             web_ui: false,
             web_plantuml_url: String::new(),
+            device_days: 30,
+            token_login: true,
         }
     }
 }
@@ -274,6 +283,9 @@ pub struct ClientConfig {
     /// admin commands run on that server instead of the local store. Empty
     /// means local.
     pub server: String,
+    /// The user `joedocs auth login` signs in as, and whose device
+    /// credential remote commands use. Empty means none chosen.
+    pub user: String,
 }
 
 /// Where a configuration value came from.

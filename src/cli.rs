@@ -26,6 +26,10 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "URL")]
     pub server: Option<String>,
 
+    /// Sign in to the admin API as this user (overrides `client.user`).
+    #[arg(long, global = true, value_name = "NAME")]
+    pub user: Option<String>,
+
     /// Command to run.
     #[command(subcommand)]
     pub command: Command,
@@ -649,6 +653,13 @@ impl Cli {
                 value: Value::String(server.clone()),
             });
         }
+        if let Some(user) = &self.user {
+            values.push(CliValue {
+                key: "client.user".to_owned(),
+                flag: "--user".to_owned(),
+                value: Value::String(user.clone()),
+            });
+        }
         values
     }
 }
@@ -686,6 +697,18 @@ mod tests {
         assert_eq!(values[0].key, "log.level");
         assert_eq!(values[0].flag, "--log-level");
         assert_eq!(values[0].value, Value::String("debug".into()));
+    }
+
+    #[test]
+    fn the_user_flag_becomes_client_user() {
+        let cli = Cli::try_parse_from(["app", "--user", "alice", "config", "paths"]).unwrap();
+        let values = cli.cli_values();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].key, "client.user");
+        assert_eq!(values[0].flag, "--user");
+        assert_eq!(values[0].value, Value::String("alice".into()));
+        let cli = Cli::try_parse_from(["app", "config", "paths", "--user", "bob"]).unwrap();
+        assert_eq!(cli.user.as_deref(), Some("bob"));
     }
 
     #[test]

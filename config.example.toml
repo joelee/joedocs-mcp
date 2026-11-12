@@ -57,6 +57,13 @@ web_ui = false
 # "https://www.plantuml.com/plantuml". The admin's browser sends the diagram
 # text to it. Empty shows PlantUML diagrams as source.
 web_plantuml_url = ""
+# How many days a device credential from `joedocs auth login` lasts without
+# use (1 to 365). After that the user signs in with the password again.
+device_days = 30
+# Whether admin tokens may still sign in (deprecated since 0.5.1). Set to
+# false once every administrator signs in as a user: every request carrying an
+# admin token is then refused, on the admin API and the web interface.
+token_login = true
 
 [client]
 # The server whose admin API this machine uses, e.g.
@@ -65,3 +72,7 @@ web_plantuml_url = ""
 # `joedocs login`. Empty means the local store. The admin token comes from
 # JOEDOCS_ADMIN_TOKEN, never from this file.
 server = ""
+# The user `joedocs auth login` signs in as, and whose device credential
+# admin commands use (or pass --user NAME). Passwords and device credentials
+# never go in this file.
+user = ""
