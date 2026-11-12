@@ -319,10 +319,13 @@ pub(super) async fn change_password(state: Arc<ApiState>, call: Call, body: Byte
     if let Err(refusal) = password::check_new(&session.user.name, &new_password) {
         return refuse_now(state, call, Some(who), argument(refusal.to_string())).await;
     }
-    let checked = hash_off_lock(&state, move || {
-        password::verify(&current, &phc)
-            .matches
-            .then(|| password::hash(&new_password, &OsRandom))
+    let checked = hash_off_lock(&state, {
+        let phc = phc.clone();
+        move || {
+            password::verify(&current, &phc)
+                .matches
+                .then(|| password::hash(&new_password, &OsRandom))
+        }
     })
     .await;
     let new_hash = match checked {
@@ -334,19 +337,74 @@ pub(super) async fn change_password(state: Arc<ApiState>, call: Call, body: Byte
         Ok(None) => None,
         Err(busy) => return refuse_now(state, call, Some(who), busy).await,
     };
-    let user = session.user.clone();
-    finish_text(state, call, Some(who), move |store| match new_hash {
-        None => {
-            store.record_sign_in_failure(&user.name)?;
-            Err(crate::store::AdminRefusal::Unauthorized.into())
-        }
-        Some(hash) => store
-            .change_password(&user, &code, &hash, &session)
-            .map(|()| {
-                "Changed your password; your other devices and sessions have ended.".to_owned()
-            }),
+    let asked = PasswordChange {
+        session,
+        phc,
+        code,
+        new_hash,
+    };
+    finish_change(state, call, asked).await
+}
+
+/// What phase 1 and 2 of a password change found, for phase 3.
+struct PasswordChange {
+    /// The session that asked.
+    session: UserSession,
+    /// The stored password the current one was checked against.
+    phc: String,
+    code: String,
+    /// The new password's hash; `None` when the current one was wrong.
+    new_hash: Option<String>,
+}
+
+/// Phase 3 of a password change, under the lock: the call is signed in
+/// again, so a device revoked, a session ended or a user disabled or reset
+/// while the password was hashed is refused, then the password changes
+/// unless it was reset or changed meanwhile. Nothing changes on a refusal.
+async fn finish_change(state: Arc<ApiState>, call: Call, asked: PasswordChange) -> Response {
+    let done = under_lock(&state, move |store| {
+        let (who, reply) = match signed_in_user(store, &call) {
+            Err(refusal) => {
+                let Refused { who, error } = *refusal;
+                (who, Err(error))
+            }
+            Ok((who, now))
+                if now.session_id != asked.session.session_id
+                    || now.user.id != asked.session.user.id =>
+            {
+                (Some(who), Err(ApiError::no_session()))
+            }
+            Ok((who, now)) => {
+                let changed = match &asked.new_hash {
+                    None => match store.record_sign_in_failure(&now.user.name) {
+                        Ok(()) => Err(crate::store::AdminRefusal::Unauthorized.into()),
+                        Err(error) => Err(error),
+                    },
+                    Some(hash) => {
+                        store.change_password(&now.user, &asked.code, &asked.phc, hash, &now)
+                    }
+                };
+                let reply = changed.map_err(|e| ApiError::from(&e)).and_then(|()| {
+                    super::text(|out| {
+                        writeln!(
+                            out,
+                            "Changed your password; your other devices and sessions have ended."
+                        )
+                        .map_err(crate::Error::from)
+                    })
+                });
+                (Some(who), reply)
+            }
+        };
+        let outcome = reply.as_ref().map_or_else(|e| e.code, |_| "ok");
+        write_audit(store, who.as_ref(), &call, outcome);
+        reply
     })
-    .await
+    .await;
+    match done {
+        Ok(Ok(reply)) => reply,
+        Ok(Err(error)) | Err(error) => error.into_response(),
+    }
 }
 
 /// `/admin/v1/users...`: the `joedocs user` commands, for a signed-in user,
@@ -622,28 +680,6 @@ where
         let reply = result
             .map_err(|e| ApiError::from(&e))
             .map(|signed| session_reply(&signed));
-        let outcome = reply.as_ref().map_or_else(|e| e.code, |_| "ok");
-        write_audit(store, who.as_ref(), &call, outcome);
-        reply
-    })
-    .await;
-    match done {
-        Ok(Ok(reply)) => reply,
-        Ok(Err(error)) | Err(error) => error.into_response(),
-    }
-}
-
-/// Like [`finish`], for work that replies with text (`{"output"}`).
-async fn finish_text<F>(state: Arc<ApiState>, call: Call, who: Option<Admin>, work: F) -> Response
-where
-    F: FnOnce(&mut Store) -> Result<String, crate::store::Error> + Send + 'static,
-{
-    let done = under_lock(&state, move |store| {
-        let reply = work(store)
-            .map_err(|e| ApiError::from(&e))
-            .and_then(|line| {
-                super::text(|out| writeln!(out, "{line}").map_err(crate::Error::from))
-            });
         let outcome = reply.as_ref().map_or_else(|e| e.code, |_| "ok");
         write_audit(store, who.as_ref(), &call, outcome);
         reply

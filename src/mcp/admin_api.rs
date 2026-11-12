@@ -1552,6 +1552,19 @@ mod tests {
     /// and the API state around it, with `hook` run while a password is
     /// hashed.
     fn user_state(hook: Option<StagingHook>) -> (tempfile::TempDir, Arc<ApiState>, String) {
+        let (dir, state, password, _) = user_state_at(hook);
+        (dir, state, password)
+    }
+
+    /// As [`user_state`], with the store's clock.
+    fn user_state_at(
+        hook: Option<StagingHook>,
+    ) -> (
+        tempfile::TempDir,
+        Arc<ApiState>,
+        String,
+        Arc<crate::clock::FixedClock>,
+    ) {
         use secrecy::ExposeSecret as _;
         let dir = tempfile::TempDir::new().unwrap();
         let paths = crate::store::Paths {
@@ -1560,11 +1573,12 @@ mod tests {
         };
         let git = crate::history::GitCli::new(paths.git_dir(), &paths.home);
         Store::init(&paths, &git).unwrap();
+        let clock = Arc::new(crate::clock::FixedClock::at(1_793_000_000));
         let mut store = Store::open(
             paths,
             crate::store::Settings::from_config(&crate::Config::default()),
             Box::new(git),
-            Arc::new(crate::clock::FixedClock::at(1_793_000_000)) as Arc<dyn crate::clock::Clock>,
+            Arc::clone(&clock) as Arc<dyn crate::clock::Clock>,
         )
         .unwrap();
         let password = crate::password::initial_password(&OsRandom).unwrap();
@@ -1583,7 +1597,7 @@ mod tests {
             allowed_origins: Vec::new(),
             web_ui: false,
         });
-        (dir, state, password.expose_secret().to_owned())
+        (dir, state, password.expose_secret().to_owned(), clock)
     }
 
     fn sign_in_call(state: &ApiState) -> Call {
@@ -1671,5 +1685,220 @@ mod tests {
             )
             .unwrap();
         assert_eq!(busy, 1);
+    }
+
+    /// Something done to the store while a password is hashed.
+    type Meanwhile = Box<dyn FnOnce(&mut Store) + Send>;
+
+    /// `alice`, set up with the password `CHOSEN` and signed in on the
+    /// devices `laptop` and `desktop`, with `meanwhile` run (once) during
+    /// the next hash.
+    struct Alice {
+        _dir: tempfile::TempDir,
+        state: Arc<ApiState>,
+        clock: Arc<crate::clock::FixedClock>,
+        secret: Vec<u8>,
+        meanwhile: Arc<std::sync::Mutex<Option<Meanwhile>>>,
+        devices: Vec<(SecretString, SecretString)>,
+    }
+
+    const CHOSEN: &str = "a long passphrase of my own";
+
+    impl Alice {
+        fn code(&self) -> String {
+            use crate::clock::Clock as _;
+            crate::totp::code(
+                &self.secret,
+                crate::totp::step_at(self.clock.now().as_second()),
+            )
+        }
+
+        fn call(&self, tool: &'static str, device: usize) -> Call {
+            use secrecy::ExposeSecret as _;
+            let (credential, session) = &self.devices[device];
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1"));
+            headers.insert(
+                header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {}", credential.expose_secret())).unwrap(),
+            );
+            headers.insert(
+                SESSION_HEADER,
+                HeaderValue::from_str(session.expose_secret()).unwrap(),
+            );
+            Call::new(&self.state, tool, &headers)
+        }
+    }
+
+    fn signed_in_alice() -> Alice {
+        use crate::store::{SignInRequest, SignedIn};
+        use secrecy::ExposeSecret as _;
+        let meanwhile: Arc<std::sync::Mutex<Option<Meanwhile>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let slot = Arc::clone(&meanwhile);
+        let hook: StagingHook = Arc::new(move |shared: &Shared| {
+            if let Some(work) = slot.lock().unwrap().take() {
+                work(&mut shared.store.lock().unwrap());
+            }
+        });
+        let (dir, state, _, clock) = user_state_at(Some(hook));
+        let ok = crate::password::Verified {
+            matches: true,
+            needs_rehash: false,
+        };
+        let mut alice = Alice {
+            _dir: dir,
+            state,
+            clock,
+            secret: Vec::new(),
+            meanwhile,
+            devices: Vec::new(),
+        };
+        let chosen =
+            crate::password::hash(&SecretString::from(CHOSEN.to_owned()), &OsRandom).unwrap();
+        let web = SignInRequest {
+            code: None,
+            device: None,
+            session_hours: 8,
+        };
+        let state = Arc::clone(&alice.state);
+        let mut store = state.shared.store.lock().unwrap();
+        let begin = store.sign_in_begin("alice").unwrap();
+        let Ok(SignedIn::Setup {
+            ticket,
+            totp: Some(totp),
+            ..
+        }) = store.sign_in_finish(&begin, ok, None, &web, &OsRandom)
+        else {
+            panic!("setup first");
+        };
+        alice.secret = crate::totp::base32_decode(totp.secret.expose_secret()).unwrap();
+        let code = alice.code();
+        let request = SignInRequest {
+            code: Some(&code),
+            ..web
+        };
+        store
+            .setup_finish(&ticket, &chosen, &request, &OsRandom)
+            .unwrap();
+        for name in ["laptop", "desktop"] {
+            alice.clock.advance(30);
+            let code = alice.code();
+            let request = SignInRequest {
+                code: Some(&code),
+                device: Some(name),
+                session_hours: 8,
+            };
+            let begin = store.sign_in_begin("alice").unwrap();
+            let Ok(SignedIn::Session {
+                session,
+                device: Some(device),
+                ..
+            }) = store.sign_in_finish(&begin, ok, None, &request, &OsRandom)
+            else {
+                panic!("a device");
+            };
+            alice.devices.push((device.credential, session));
+        }
+        drop(store);
+        alice.clock.advance(30);
+        alice
+    }
+
+    #[tokio::test]
+    async fn a_password_change_is_refused_when_its_session_or_password_changed_during_the_hash() {
+        let cases: Vec<(&str, Meanwhile, &str)> = vec![
+            (
+                "revoke device",
+                Box::new(|store: &mut Store| {
+                    let user = store.user("alice").unwrap();
+                    store.revoke_device_of(&user, "laptop").unwrap();
+                }),
+                "device_invalid",
+            ),
+            (
+                "disable",
+                Box::new(|store: &mut Store| {
+                    store.disable_user("alice").unwrap();
+                }),
+                "device_invalid",
+            ),
+            (
+                "reset password",
+                Box::new(|store: &mut Store| {
+                    store.reset_password("alice", "$argon2id$reset").unwrap();
+                }),
+                "device_invalid",
+            ),
+        ];
+        for (what, meanwhile, code) in cases {
+            check_stale_change(what, meanwhile, code).await;
+        }
+        // Ending the session needs its token, known only after sign-in.
+        let alice = signed_in_alice();
+        let session = alice.devices[0].1.clone();
+        let end: Meanwhile = Box::new(move |store: &mut Store| {
+            store.end_user_session(&session, false).unwrap();
+        });
+        stale_change(alice, "end session", end, "no_session").await;
+    }
+
+    async fn check_stale_change(what: &str, meanwhile: Meanwhile, code: &str) {
+        stale_change(signed_in_alice(), what, meanwhile, code).await;
+    }
+
+    /// Asks for a password change on `laptop` with `meanwhile` run during
+    /// its hash, and checks it is refused with `code` and changes nothing.
+    async fn stale_change(alice: Alice, what: &str, meanwhile: Meanwhile, code: &str) {
+        let before = {
+            let store = alice.state.shared.store.lock().unwrap();
+            store
+                .sign_in_begin("alice")
+                .unwrap()
+                .phc()
+                .map(str::to_owned)
+        };
+        *alice.meanwhile.lock().unwrap() = Some(meanwhile);
+        let body = serde_json::json!({
+            "password": CHOSEN,
+            "code": alice.code(),
+            "new_password": "a brand new passphrase to use",
+        })
+        .to_string();
+        let response = user_api::change_password(
+            Arc::clone(&alice.state),
+            alice.call("admin:me.password", 0),
+            body.into(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{what}");
+        let reply = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&reply).contains(code),
+            "{what}: {}",
+            String::from_utf8_lossy(&reply)
+        );
+        let store = alice.state.shared.store.lock().unwrap();
+        let after = store
+            .sign_in_begin("alice")
+            .unwrap()
+            .phc()
+            .map(str::to_owned);
+        assert_ne!(after.as_deref(), None, "{what}: alice still has a password");
+        if what == "reset password" {
+            assert_eq!(after.as_deref(), Some("$argon2id$reset"), "{what}");
+            assert!(store.user("alice").unwrap().must_change_password, "{what}");
+        } else {
+            assert_eq!(after, before, "{what}: the password did not change");
+        }
+        if what == "revoke device" || what == "end session" {
+            let (credential, session) = &alice.devices[1];
+            assert!(
+                store.user_api_session(credential, session, 30).is_ok(),
+                "{what}: the other device was not signed out"
+            );
+        }
     }
 }

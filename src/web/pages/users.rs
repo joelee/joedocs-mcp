@@ -535,11 +535,12 @@ pub(crate) async fn change_password(state: Arc<WebState>, request: WebRequest) -
             Ok((phc, current, new_password))
         },
         |(phc, current, new_password)| {
-            password::verify(&current, &phc)
+            let hashed = password::verify(&current, &phc)
                 .matches
-                .then(|| password::hash(&new_password, &OsRandom))
+                .then(|| password::hash(&new_password, &OsRandom));
+            (phc, hashed)
         },
-        move |store, session, user, hashed| {
+        move |store, session, user, (phc, hashed)| {
             let wrong = |store: &Store, message: &str, state: &WebState| -> WebError {
                 let page = account_page(
                     store,
@@ -571,7 +572,7 @@ pub(crate) async fn change_password(state: Arc<WebState>, request: WebRequest) -
             let keep = store
                 .user_web_session(&session.token)
                 .map_err(|e| WebError::from_store(&e))?;
-            match store.change_password(user, &code, &hash, &keep) {
+            match store.change_password(user, &code, &phc, &hash, &keep) {
                 Ok(()) => Ok(redirect("/admin/account?changed=1")),
                 Err(Error::AdminRefused(AdminRefusal::Unauthorized)) => Err(wrong(
                     store,

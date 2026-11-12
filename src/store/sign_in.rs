@@ -11,8 +11,8 @@
 //! 2. the caller verifies the password against it, without the lock
 //!    (`crate::password::Gate`);
 //! 3. [`Store::sign_in_finish`], under the lock again: the user is read
-//!    afresh, the code checked, and a session, a device or a setup ticket
-//!    issued.
+//!    afresh, the password must still be the one checked, the code is
+//!    checked, and a session, a device or a setup ticket issued.
 //!
 //! Every refusal of a sign-in is the same [`AdminRefusal::Unauthorized`],
 //! and every failure counts against the submitted name, real or not, so a
@@ -214,6 +214,11 @@ impl Store {
         };
         let secrets = db::user_secrets(&self.conn, &user.id)?
             .ok_or_else(|| Error::UserNotFound(user.name.clone()))?;
+        // The password was checked against what phase 1 read: if it was
+        // reset or changed since, the check proves nothing.
+        if begin.phc.as_deref() != Some(secrets.password_hash.as_str()) {
+            return self.refuse_sign_in(&begin.name);
+        }
         let Some(totp_secret) = secrets.totp_secret else {
             // No authenticator: only a one-time password gets here, and it
             // may only start setup.
@@ -710,23 +715,30 @@ impl Store {
     }
 
     /// Changes a signed-in user's password, with the current password
-    /// already checked and the new one hashed, once `code` is a valid TOTP
-    /// code. Every other device and session of the user ends; the session
-    /// `keep` (the one making the change) and its device stay.
+    /// already checked against `verified_phc` and the new one hashed, once
+    /// `code` is a valid TOTP code. Every other device and session of the
+    /// user ends; the session `keep` (the one making the change) and its
+    /// device stay.
     ///
     /// # Errors
     ///
-    /// Returns [`AdminRefusal::Unauthorized`] for a wrong code (counted
-    /// against the user's name), and database errors.
+    /// Returns [`AdminRefusal::Unauthorized`] for a wrong code, or when the
+    /// stored password is no longer `verified_phc` (it was reset or changed
+    /// while the current one was checked); both count against the user's
+    /// name. Returns database errors too.
     pub fn change_password(
         &mut self,
         user: &UserRow,
         code: &str,
+        verified_phc: &str,
         new_hash: &str,
         keep: &UserSession,
     ) -> Result<(), Error> {
         let secrets = db::user_secrets(&self.conn, &user.id)?
             .ok_or_else(|| Error::UserNotFound(user.name.clone()))?;
+        if secrets.password_hash != verified_phc {
+            return self.refuse_sign_in(&user.name);
+        }
         let now = self.clock.now();
         let step = secrets
             .totp_secret

@@ -261,7 +261,7 @@ fn a_code_is_accepted_once_across_sign_in_renewal_and_password_change() {
     let user = fx.store.user("alice").unwrap();
     assert!(matches!(
         fx.store
-            .change_password(&user, &code, "$argon2id$new", &keep),
+            .change_password(&user, &code, "$argon2id$chosen", "$argon2id$new", &keep),
         Err(Error::AdminRefused(AdminRefusal::Unauthorized))
     ));
 }
@@ -503,7 +503,7 @@ fn a_password_change_keeps_the_session_making_it_and_ends_the_others() {
     let user = fx.store.user("alice").unwrap();
     let code = now_code(&fx, &secret);
     fx.store
-        .change_password(&user, &code, "$argon2id$new", &keep)
+        .change_password(&user, &code, "$argon2id$chosen", "$argon2id$new", &keep)
         .unwrap();
     fx.store
         .user_api_session(&laptop.credential, laptop_session, 30)
@@ -521,4 +521,121 @@ fn a_password_change_keeps_the_session_making_it_and_ends_the_others() {
     assert!(fx.store.revoke_device_of(&user, "laptop").is_err());
     let ended = fx.store.end_user_session(laptop_session, false).unwrap();
     assert_eq!(ended.name, "alice");
+}
+
+/// Rows in `table`, to show a refused call wrote nothing.
+fn rows(fx: &Fixture, table: &str) -> i64 {
+    fx.store
+        .conn
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Meanwhile {
+    ResetPassword,
+    ResetTotp,
+    PasswordChange,
+}
+
+#[test]
+fn a_sign_in_whose_password_changed_while_it_was_checked_is_refused_and_issues_nothing() {
+    for meanwhile in [
+        Meanwhile::ResetPassword,
+        Meanwhile::ResetTotp,
+        Meanwhile::PasswordChange,
+    ] {
+        let mut fx = fixture();
+        let secret = active_user(&mut fx, "alice");
+        let code = now_code(&fx, &secret);
+        let SignedIn::Session { session, .. } =
+            sign_in(&mut fx, "alice", &with_code(&code, None)).unwrap()
+        else {
+            panic!("a web session");
+        };
+        fx.clock.advance(30);
+        // Phase 1 reads the chosen password; then, before phase 3, it
+        // changes.
+        let begin = fx.store.sign_in_begin("alice").unwrap();
+        match meanwhile {
+            Meanwhile::ResetPassword => {
+                fx.store.reset_password("alice", "$argon2id$reset").unwrap();
+            }
+            Meanwhile::ResetTotp => {
+                fx.store.reset_totp("alice", "$argon2id$reset").unwrap();
+            }
+            Meanwhile::PasswordChange => {
+                let keep = fx.store.user_web_session(&session).unwrap();
+                let user = fx.store.user("alice").unwrap();
+                let code = now_code(&fx, &secret);
+                fx.store
+                    .change_password(&user, &code, "$argon2id$chosen", "$argon2id$new", &keep)
+                    .unwrap();
+                fx.clock.advance(30);
+            }
+        }
+        let stored = fx
+            .store
+            .sign_in_begin("alice")
+            .unwrap()
+            .phc()
+            .map(str::to_owned);
+        let (sessions, devices) = (rows(&fx, "user_sessions"), rows(&fx, "devices"));
+        let code = now_code(&fx, &secret);
+        for request in [web(), with_code(&code, Some("laptop"))] {
+            let result =
+                fx.store
+                    .sign_in_finish(&begin, OK, Some("$argon2id$rehash"), &request, &OsRandom);
+            assert_eq!(refused(result), AdminRefusal::Unauthorized, "{meanwhile:?}");
+        }
+        assert_eq!(
+            fx.store
+                .sign_in_begin("alice")
+                .unwrap()
+                .phc()
+                .map(str::to_owned),
+            stored,
+            "{meanwhile:?}: no rehash"
+        );
+        assert_eq!(rows(&fx, "user_sessions"), sessions, "{meanwhile:?}");
+        assert_eq!(rows(&fx, "devices"), devices, "{meanwhile:?}");
+        let tickets: i64 = fx
+            .store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM users WHERE setup_ticket_sha256 IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tickets, 0, "{meanwhile:?}: no setup ticket");
+    }
+}
+
+#[test]
+fn a_password_change_checked_against_an_old_password_is_refused() {
+    let mut fx = fixture();
+    let secret = active_user(&mut fx, "alice");
+    let code = now_code(&fx, &secret);
+    let SignedIn::Session { session, .. } =
+        sign_in(&mut fx, "alice", &with_code(&code, None)).unwrap()
+    else {
+        panic!("a web session");
+    };
+    fx.clock.advance(30);
+    let keep = fx.store.user_web_session(&session).unwrap();
+    let user = fx.store.user("alice").unwrap();
+    let code = now_code(&fx, &secret);
+    assert!(matches!(
+        fx.store
+            .change_password(&user, &code, "$argon2id$older", "$argon2id$new", &keep),
+        Err(Error::AdminRefused(AdminRefusal::Unauthorized))
+    ));
+    assert_eq!(
+        fx.store.sign_in_begin("alice").unwrap().phc(),
+        Some("$argon2id$chosen")
+    );
+    fx.store.user_web_session(&session).unwrap();
 }
