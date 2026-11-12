@@ -115,9 +115,11 @@ pub(crate) fn classify(error: &store::Error) -> (StatusCode, &'static str) {
             (StatusCode::UNAUTHORIZED, "session_expired")
         }
         E::AdminRefused(AdminRefusal::Locked { .. }) => (StatusCode::TOO_MANY_REQUESTS, "locked"),
-        E::NotFound(_) | E::FileNotFound { .. } | E::ProjectNotFound(_) | E::KeyNotFound(_) => {
-            (StatusCode::NOT_FOUND, "not_found")
-        }
+        E::NotFound(_)
+        | E::FileNotFound { .. }
+        | E::ProjectNotFound(_)
+        | E::KeyNotFound(_)
+        | E::UserNotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
         E::Archived(_) => (StatusCode::CONFLICT, "archived"),
         E::AlreadyExists(_) => (StatusCode::CONFLICT, "already_exists"),
         E::Conflict { .. } | E::FileConflict { .. } => (StatusCode::CONFLICT, "conflict"),

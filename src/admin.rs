@@ -6,13 +6,15 @@
 use std::io::Write;
 use std::path::Path;
 
-use secrecy::ExposeSecret as _;
+use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::Error;
 use crate::auth::{Grant, RandomSource};
-use crate::cli::{AdminTokenCommand, ArchiveCommand, DocumentCommand, KeyCommand, ProjectCommand};
+use crate::cli::{
+    AdminTokenCommand, ArchiveCommand, DocumentCommand, KeyCommand, ProjectCommand, UserCommand,
+};
 use crate::db::{AdminTokenRow, KeyRow};
-use crate::store::{Actor, CheckReport, InitOutcome, Paths, Reindexed, Store};
+use crate::store::{self, Actor, CheckReport, InitOutcome, Paths, Reindexed, Store};
 
 /// The author recorded for changes made with admin commands.
 pub const ADMIN_AUTHOR: &str = "admin";
@@ -191,6 +193,151 @@ pub fn admin_token(
             )?;
         }
     }
+    Ok(())
+}
+
+/// Runs a `user` subcommand on the local store. New one-time passwords are
+/// hashed before the store is written to, and printed alone on the last
+/// line.
+///
+/// # Errors
+///
+/// Returns store, random, hashing and output errors.
+pub fn user(
+    store: &mut Store,
+    command: &UserCommand,
+    random: &dyn RandomSource,
+    out: &mut dyn Write,
+) -> Result<(), Error> {
+    let fresh = || -> Result<(SecretString, String), Error> {
+        let password = crate::password::initial_password(random).map_err(store::Error::from)?;
+        let hash = crate::password::hash(&password, random).map_err(store::Error::from)?;
+        Ok((password, hash))
+    };
+    match command {
+        UserCommand::Create { name } => {
+            let (password, hash) = fresh()?;
+            let created = store.create_user(name, &hash, random)?;
+            writeln!(out, "Created user {name}.")?;
+            write_one_time(
+                out,
+                name,
+                &created.until,
+                &password,
+                "set up an authenticator and choose their own password",
+            )?;
+        }
+        UserCommand::List => user_list(store, out)?,
+        UserCommand::Disable { name } => {
+            store.disable_user(name)?;
+            writeln!(
+                out,
+                "Disabled user {name}: sign-in is refused, and their sessions and devices have ended."
+            )?;
+        }
+        UserCommand::Enable { name } => {
+            store.enable_user(name)?;
+            writeln!(out, "Enabled user {name}; they sign in again.")?;
+        }
+        UserCommand::Unlock { name } => {
+            store.unlock_user(name)?;
+            writeln!(out, "Cleared the sign-in lock on {name}.")?;
+        }
+        UserCommand::ResetPassword { name } => {
+            let (password, hash) = fresh()?;
+            let reset = store.reset_password(name, &hash)?;
+            writeln!(
+                out,
+                "Reset the password of {name} and ended their sessions and devices; their authenticator is kept."
+            )?;
+            write_one_time(
+                out,
+                name,
+                &reset.until,
+                &password,
+                "choose their own password",
+            )?;
+        }
+        UserCommand::ResetTotp { name } => {
+            let (password, hash) = fresh()?;
+            let reset = store.reset_totp(name, &hash)?;
+            writeln!(
+                out,
+                "Cleared the authenticator of {name} and ended their sessions and devices."
+            )?;
+            write_one_time(
+                out,
+                name,
+                &reset.until,
+                &password,
+                "set up a new authenticator and choose their own password",
+            )?;
+        }
+        UserCommand::Remove { name } => {
+            store.remove_user(name)?;
+            writeln!(
+                out,
+                "Removed user {name}; their sessions and devices have ended, and the name stays taken."
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn write_one_time(
+    out: &mut dyn Write,
+    name: &str,
+    until: &str,
+    password: &SecretString,
+    next: &str,
+) -> Result<(), Error> {
+    writeln!(
+        out,
+        "Give {name} the one-time password below; it works for {} hours, until {until}. At the first sign-in (`joedocs auth login --user {name}`, or the web interface) they {next}.",
+        store::INITIAL_PASSWORD_HOURS,
+    )?;
+    writeln!(out, "{}", password.expose_secret())?;
+    Ok(())
+}
+
+fn user_list(store: &Store, out: &mut dyn Write) -> Result<(), Error> {
+    let users = store.users()?;
+    if users.is_empty() {
+        writeln!(out, "No users.")?;
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = users
+        .iter()
+        .map(|u| {
+            let state = match &u.state {
+                store::UserState::SetupPending { until } => format!("setup-pending until {until}"),
+                store::UserState::SetupExpired => "setup-expired (reset the password)".to_owned(),
+                store::UserState::Active => "active".to_owned(),
+                store::UserState::SignInLocked { until } => format!("sign-in locked until {until}"),
+                store::UserState::Disabled => "disabled".to_owned(),
+                store::UserState::Removed { at } => format!("removed {at}"),
+            };
+            vec![
+                u.row.name.clone(),
+                state,
+                u.row
+                    .totp_enrolled_at
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
+                u.row
+                    .last_login_at
+                    .clone()
+                    .unwrap_or_else(|| "never".to_owned()),
+                u.devices.to_string(),
+                u.row.created_at.clone(),
+            ]
+        })
+        .collect();
+    write_table(
+        out,
+        &["NAME", "STATE", "TOTP", "LAST LOGIN", "DEVICES", "CREATED"],
+        &rows,
+    )?;
     Ok(())
 }
 

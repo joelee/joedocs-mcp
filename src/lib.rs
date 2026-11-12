@@ -257,6 +257,9 @@ pub fn execute(
         Command::Key { command } => {
             admin::key(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
+        Command::User { command } => {
+            admin::user(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
+        }
         Command::AdminToken { command } => {
             admin::admin_token(&mut open_store(loaded, ctx)?, command, ctx.random, out)?;
         }
@@ -366,6 +369,9 @@ fn remote(
         Command::Serve => Some("serve"),
         Command::Systemd { .. } => Some("systemd"),
         Command::AdminToken { .. } => Some("admin-token"),
+        // Remote `user` commands arrive with the admin API's user routes
+        // (JD-37 STEP-10); until then `user` runs only on the server.
+        Command::User { command } => Some(command.name()),
         Command::Agents => Some("agents"),
         Command::Backup { restore: true, .. } => Some("backup --restore"),
         _ => None,

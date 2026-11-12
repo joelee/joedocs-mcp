@@ -116,6 +116,13 @@ pub enum Command {
         #[command(subcommand)]
         command: AdminTokenCommand,
     },
+    /// Create and manage the users who sign in to the admin API and the web
+    /// interface with a password and a TOTP code.
+    User {
+        /// What to do.
+        #[command(subcommand)]
+        command: UserCommand,
+    },
     /// Log in to the server's admin API with `JOEDOCS_ADMIN_TOKEN` and a
     /// TOTP code, and keep the session for later commands.
     Login {
@@ -440,6 +447,7 @@ impl Command {
             Self::Key {
                 command: KeyCommand::Revoke { .. },
             } => "key revoke",
+            Self::User { command } => command.name(),
             Self::AdminToken {
                 command: AdminTokenCommand::Create { .. },
             } => "admin-token create",
@@ -623,6 +631,69 @@ pub enum AdminTokenCommand {
         /// Token name.
         name: String,
     },
+}
+
+/// `user` subcommands.
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum UserCommand {
+    /// Create a user and print a one-time password for their first
+    /// sign-in, valid for 72 hours, alone on the last line.
+    Create {
+        /// User name: lower-case letters, digits and '-'.
+        name: String,
+    },
+    /// List users and where each stands (never their secrets).
+    List,
+    /// Disable a user: sign-in is refused, and their sessions and devices
+    /// end at once.
+    Disable {
+        /// User name.
+        name: String,
+    },
+    /// Enable a disabled user.
+    Enable {
+        /// User name.
+        name: String,
+    },
+    /// Clear a user's sign-in lock after failed attempts.
+    Unlock {
+        /// User name.
+        name: String,
+    },
+    /// Give a user a new one-time password (their authenticator is kept).
+    ResetPassword {
+        /// User name.
+        name: String,
+    },
+    /// Clear a user's authenticator and give them a new one-time password:
+    /// the next sign-in sets up an authenticator again.
+    ResetTotp {
+        /// User name.
+        name: String,
+    },
+    /// Remove a user for good; the name stays taken (run on the server
+    /// only).
+    Remove {
+        /// User name.
+        name: String,
+    },
+}
+
+impl UserCommand {
+    /// The command's name, for logs.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Create { .. } => "user create",
+            Self::List => "user list",
+            Self::Disable { .. } => "user disable",
+            Self::Enable { .. } => "user enable",
+            Self::Unlock { .. } => "user unlock",
+            Self::ResetPassword { .. } => "user reset-password",
+            Self::ResetTotp { .. } => "user reset-totp",
+            Self::Remove { .. } => "user remove",
+        }
+    }
 }
 
 /// `config` subcommands.

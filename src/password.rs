@@ -250,6 +250,34 @@ pub fn dummy_hash() -> &'static str {
     &DUMMY
 }
 
+/// Characters of a one-time initial password: upper-case letters and
+/// digits without `0`, `1`, `I` and `O`, which are easily confused. 32 of
+/// them, so each random byte maps to one evenly.
+const INITIAL_ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+/// Characters in a one-time initial password (5 bits each: 100 bits).
+const INITIAL_CHARS: usize = 20;
+
+/// A new one-time initial password, `XXXXX-XXXXX-XXXXX-XXXXX`, for an
+/// admin to hand to a new or reset user. It skips the rules of
+/// [`check_new`]: it is random, and the user replaces it at the first
+/// sign-in.
+///
+/// # Errors
+///
+/// Returns [`RandomError`] when random bytes are unavailable.
+pub fn initial_password(random: &dyn RandomSource) -> Result<SecretString, RandomError> {
+    let mut bytes = [0_u8; INITIAL_CHARS];
+    random.fill(&mut bytes)?;
+    let mut text = String::with_capacity(INITIAL_CHARS + 3);
+    for (i, byte) in bytes.iter().enumerate() {
+        if i > 0 && i % 5 == 0 {
+            text.push('-');
+        }
+        text.push(char::from(INITIAL_ALPHABET[usize::from(byte % 32)]));
+    }
+    Ok(SecretString::from(text))
+}
+
 /// Both hashing places stayed taken for [`HASHING_WAIT`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("the server is busy checking other sign-ins; try again in a moment")]
@@ -417,6 +445,21 @@ mod tests {
     fn the_dummy_hash_has_todays_parameters_and_matches_nothing_typed() {
         assert!(dummy_hash().starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
         assert!(!verify(&secret("password1234"), dummy_hash()).matches);
+    }
+
+    #[test]
+    fn initial_passwords_are_grouped_unambiguous_and_random() {
+        let a = initial_password(&CountingRandom(0)).unwrap();
+        let text = a.expose_secret();
+        assert_eq!(text.len(), 23);
+        assert_eq!(text.matches('-').count(), 3);
+        assert!(
+            text.chars()
+                .all(|c| c == '-' || INITIAL_ALPHABET.contains(&(c as u8)))
+        );
+        assert_eq!(&text[..5], "23456");
+        let b = initial_password(&CountingRandom(7)).unwrap();
+        assert_ne!(a.expose_secret(), b.expose_secret());
     }
 
     #[tokio::test]
