@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- **Web interface: an icon.** Browser tabs, bookmarks and phone home screens show a JoeDocs icon.
 - **Web interface: archive a document from its page.** A document's Actions menu offers Archive document, which asks for a reason and then shows the document on the Archive page, where it can be restored.
 - **Web interface: open a document by its ID.** Type `JD-33` (any case) into the search bar and press Enter to open that document. On the Search page it is listed first as you type, and an archived document's ID says it is in the Archive.
 

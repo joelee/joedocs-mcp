@@ -89,6 +89,15 @@ The admin web interface lives in `src/web/`, with its Askama templates in `templ
 - **Dialogs** open with invoker commands (`commandfor` and `command="show-modal"`) and close with a `formmethod="dialog"` button, so they work without JavaScript.
 - **Routes.** A new route is added to `Route` in `src/web/mod.rs` with its audit tool (the matching admin API operation), and to the route table in that module's documentation; a test requests every route in the table and checks its audit row. Every route but the sign-in page needs a session by default.
 - **Static files** are served under `/admin/assets/<hash>/<name>`; the hash changes with the content, so browsers never keep an old copy.
+- **Icons.** `src/web/assets/favicon.svg` is the source; `favicon.ico` (16, 32 and 48 pixels) and `apple-touch-icon.png` (180 pixels, square corners, because phones round them) are drawn from it with `rsvg-convert` (librsvg) and ImageMagick, which are needed only to redraw them, not to build. After changing the SVG:
+
+  ```bash
+  cd src/web/assets && t=$(mktemp -d)
+  for n in 16 32 48; do rsvg-convert -w $n -h $n favicon.svg -o $t/$n.png; done
+  magick $t/16.png $t/32.png $t/48.png favicon.ico
+  sed 's/ rx="14"//' favicon.svg > $t/square.svg
+  rsvg-convert -w 180 -h 180 $t/square.svg -o $t/touch.png && magick $t/touch.png -strip apple-touch-icon.png
+  ```
 - **Trying it.** `JOEDOCS__ADMIN__ENABLED=true JOEDOCS__ADMIN__WEB_UI=true cargo run -- serve` with a scratch `JOEDOCS__STORAGE__HOME` and `JOEDOCS__STORAGE__STATE_DIR`, a user from `cargo run -- user create dev` on the same store (its one-time password is the last line), then `http://127.0.0.1:8750/admin/`, where the first sign-in sets up TOTP.
 
 ### Vendored browser files

@@ -33,6 +33,21 @@ const FILES: &[Asset] = &[
         bytes: include_bytes!("assets/vendor/htmx.min.js"),
     },
     Asset {
+        name: "favicon.ico",
+        content_type: "image/x-icon",
+        bytes: include_bytes!("assets/favicon.ico"),
+    },
+    Asset {
+        name: "favicon.svg",
+        content_type: "image/svg+xml",
+        bytes: include_bytes!("assets/favicon.svg"),
+    },
+    Asset {
+        name: "apple-touch-icon.png",
+        content_type: "image/png",
+        bytes: include_bytes!("assets/apple-touch-icon.png"),
+    },
+    Asset {
         name: "pele.global.js",
         content_type: "text/javascript; charset=utf-8",
         bytes: include_bytes!("assets/vendor/pele.global.js"),
@@ -72,6 +87,12 @@ pub struct Urls {
     pub htmx: &'static str,
     /// `pele.global.js`, loaded only by pages with a Mermaid diagram.
     pub pele: &'static str,
+    /// `favicon.ico`: 16, 32 and 48 pixels, drawn from `favicon.svg`.
+    pub icon: &'static str,
+    /// `favicon.svg`, for browsers that draw it at any size.
+    pub icon_svg: &'static str,
+    /// `apple-touch-icon.png`, 180 pixels, for phone home screens.
+    pub touch_icon: &'static str,
 }
 
 /// The URLs of the files every page links.
@@ -82,6 +103,9 @@ pub fn urls() -> Urls {
         js: url("app.js"),
         htmx: url("htmx.min.js"),
         pele: url("pele.global.js"),
+        icon: url("favicon.ico"),
+        icon_svg: url("favicon.svg"),
+        touch_icon: url("apple-touch-icon.png"),
     }
 }
 
@@ -127,6 +151,9 @@ mod tests {
             (urls.css, "app.css"),
             (urls.js, "app.js"),
             (urls.htmx, "htmx.min.js"),
+            (urls.icon, "favicon.ico"),
+            (urls.icon_svg, "favicon.svg"),
+            (urls.touch_icon, "apple-touch-icon.png"),
         ] {
             assert!(url.starts_with("/admin/assets/"), "{url}");
             assert!(url.ends_with(&format!("/{name}")), "{url}");

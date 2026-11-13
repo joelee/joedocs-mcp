@@ -4591,3 +4591,76 @@ async fn setup_asks_for_the_new_password_before_the_qr_code_and_the_code() -> Te
     assert!(!page.body.contains("name=\"code\""), "{}", page.body);
     server.stop().await
 }
+
+/// The `href` of the first `<link>` whose attributes contain `marker`.
+fn link_href<'a>(body: &'a str, marker: &str) -> TestResult<&'a str> {
+    let link = body
+        .split("<link ")
+        .skip(1)
+        .find(|l| {
+            l.split('>')
+                .next()
+                .is_some_and(|attrs| attrs.contains(marker))
+        })
+        .ok_or_else(|| format!("no <link {marker}>"))?;
+    let start = link.find("href=\"").ok_or("no href")? + 6;
+    let end = link[start..].find('"').ok_or("no href end")?;
+    Ok(&link[start..start + end])
+}
+
+#[tokio::test]
+async fn every_page_links_the_icons_served_as_hashed_assets() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let sign_in = server.get("/admin/login", None).await?;
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    let missing = server.get("/admin/documents/JD-99", Some(&cookie)).await?;
+    assert_eq!(missing.status, 404);
+    let mut fetched = Vec::new();
+    for page in [&sign_in, &home, &missing] {
+        let icons = [
+            (
+                link_href(&page.body, "rel=\"icon\" href=\"/admin/assets/")?,
+                "image/x-icon",
+            ),
+            (
+                link_href(&page.body, "type=\"image/svg+xml\"")?,
+                "image/svg+xml",
+            ),
+            (
+                link_href(&page.body, "rel=\"apple-touch-icon\"")?,
+                "image/png",
+            ),
+        ];
+        for (href, kind) in icons {
+            assert!(href.starts_with("/admin/assets/"), "{href}");
+            let file = server.get(href, None).await?;
+            assert_eq!(file.status, 200, "{href}");
+            assert_eq!(file.header("content-type"), Some(kind), "{href}");
+            assert_eq!(
+                file.header("cache-control"),
+                Some("public, max-age=31536000, immutable"),
+                "{href}"
+            );
+            fetched.push((href.to_owned(), file.bytes));
+        }
+    }
+    let ico = &fetched[0].1;
+    assert!(fetched[0].0.ends_with("/favicon.ico"), "{}", fetched[0].0);
+    assert_eq!(&ico[..4], &[0, 0, 1, 0], "an icon file");
+    assert_eq!(
+        u16::from_le_bytes([ico[4], ico[5]]),
+        3,
+        "16, 32 and 48 pixels"
+    );
+    let sizes: Vec<u8> = (0..3).map(|i| ico[6 + 16 * i]).collect();
+    assert_eq!(sizes, [16, 32, 48]);
+    let svg = String::from_utf8_lossy(&fetched[1].1);
+    assert!(svg.contains("<svg") && !svg.contains("<script"), "{svg}");
+    let png = &fetched[2].1;
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+    let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+    assert_eq!((width, height), (180, 180));
+    server.stop().await
+}
