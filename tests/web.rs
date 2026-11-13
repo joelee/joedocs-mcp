@@ -4327,3 +4327,73 @@ async fn tables_that_show_every_row_sort_in_the_browser_and_paged_ones_do_not() 
     }
     server.stop().await
 }
+
+#[tokio::test]
+async fn a_document_id_in_the_search_opens_that_document() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let before = server.audit()?.len();
+    // The top bar sends a plain request: an exact ID of a live document,
+    // in any case and with spaces around it, opens it.
+    for query in ["JD-2", "jd-2", "%20jD-2%20"] {
+        let reply = server
+            .get(&format!("/admin/search?q={query}"), Some(&cookie))
+            .await?;
+        assert_eq!(reply.status, 303, "{query}: {}", reply.body);
+        assert_eq!(
+            reply.header("location"),
+            Some("/admin/documents/JD-2"),
+            "{query}"
+        );
+    }
+    let rows = server.audit()?;
+    assert!(
+        rows[before..]
+            .iter()
+            .all(|(tool, _, outcome)| tool == "admin:documents.search" && outcome == "ok"),
+        "{:?}",
+        &rows[before..]
+    );
+    // Typing it into the live search lists it first and stays put.
+    let live = server
+        .send("GET", "/admin/search?q=jd-2", &htmx(&cookie), "")
+        .await?;
+    assert_eq!(live.status, 200, "{}", live.body);
+    assert!(live.body.contains("class=\"id-match\""), "{}", live.body);
+    let first = live
+        .body
+        .find("href=\"/admin/documents/")
+        .ok_or("no link")?;
+    assert!(
+        live.body[first..].starts_with("href=\"/admin/documents/JD-2\""),
+        "{}",
+        live.body
+    );
+    assert!(live.body.contains("Second doc"), "{}", live.body);
+    // An archived document's ID says where it went.
+    for headers in [format!("Cookie: {cookie}\r\n"), htmx(&cookie)] {
+        let archived = server
+            .send("GET", "/admin/search?q=JD-4", &headers, "")
+            .await?;
+        assert_eq!(archived.status, 200, "{}", archived.body);
+        assert!(
+            archived.body.contains("JD-4 is archived"),
+            "{}",
+            archived.body
+        );
+        assert!(
+            archived.body.contains("href=\"/admin/archive\""),
+            "{}",
+            archived.body
+        );
+    }
+    // Anything else searches as before.
+    for query in ["JD-99999", "JD-2%20plan", "JD-02", "rollout"] {
+        let page = server
+            .get(&format!("/admin/search?q={query}"), Some(&cookie))
+            .await?;
+        assert_ne!(page.status, 303, "{query}");
+        assert!(!page.body.contains("class=\"id-match\""), "{query}");
+    }
+    server.stop().await
+}

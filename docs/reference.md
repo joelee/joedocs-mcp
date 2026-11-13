@@ -223,7 +223,7 @@ With `[admin] enabled = true` and `web_ui = true`, `joedocs serve` also serves p
 | --- | --- |
 | Overview (`/admin/`) | the `status` report, projects with their live and archived counts, and the latest audit entries |
 | Documents | a project's live documents, filtered by type and status as `list`, and sorted by clicking a column header (ID, Title, Type, Status, Revision, Updated: ascending, then descending, then most recently updated first again) across every page; each document rendered or as stored, at any revision, with its properties, files, an "On this page" list, its History and diffs between revisions, and downloads of the file (`.md`, as `get -f` writes it) and of every file (`.tgz`, as `get --archive`) |
-| Search | `search` over every project or one, with type, status, `key=value` and JSON filters; the results reload as you type |
+| Search | `search` over every project or one, with type, status, `key=value` and JSON filters; the results reload as you type. A search for exactly a document's ID (`JD-33`, any case) from the top bar opens that document; on the Search page that document is listed first, and an archived one's ID points to the Archive |
 | Projects | `project list` and `project add` |
 | API keys | `key list`, `create`, `grant`, `ungrant`, `rotate` and `revoke`; a new or rotated token is shown once, on the reply to that request |
 | Audit | `audit` with its filters, and quick filters for admin calls, refusals and the last 24 hours |

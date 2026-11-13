@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Web interface: open a document by its ID.** Type `JD-33` (any case) into the search bar and press Enter to open that document. On the Search page it is listed first as you type, and an archived document's ID says it is in the Archive.
+
 ### Changed
 
 - **Web interface: Documents sort by their column headers.** Click ID, Title, Type, Status, Revision or Updated to sort ascending, again for descending, and a third time for the default order (most recently updated first). The order holds across pages and filters, replacing the Order menu; links with the old `sort` values still work.

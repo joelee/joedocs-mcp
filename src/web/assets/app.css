@@ -318,6 +318,11 @@ pre.report-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .hit p { margin: 0; }
 .hit-head { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; }
 .hit-link { font-weight: 600; }
+/* The document whose ID was searched for, above the word matches. */
+.id-match { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--radius); padding: var(--space-3) var(--space-4); margin-top: var(--space-3); }
+.id-match p { margin: 0; }
+.id-match .hit-meta { margin-top: var(--space-1); }
+.id-match-link { font-weight: 600; }
 .hit-file { font-family: var(--mono); font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
 .hit .hit-meta { margin-top: var(--space-1); }
 .hit .snippet { margin-top: var(--space-2); overflow-wrap: anywhere; }

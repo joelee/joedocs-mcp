@@ -2,20 +2,23 @@
 //! is built as `joedocs search` builds it (`browse::SearchSpec::from_args`),
 //! so `status`, each `key=value` filter and the JSON filters merge and fail
 //! as on the command line. An htmx request for part of the page gets only
-//! the results region.
+//! the results region. A query that is exactly a live document's ID opens
+//! that document (the top bar's search); typed into the live search, the
+//! document is listed first instead.
 
 use askama::Template;
 use axum::http::StatusCode;
 use axum::response::Response;
 
 use super::super::assets::{self, Urls};
-use super::super::{Session, WebError, WebRequest, render};
+use super::super::{Session, WebError, WebRequest, redirect, render};
 use super::document::href;
 use super::documents::{Choice, number};
 use super::{Chrome, Section};
 use crate::browse::{self, SearchSpec};
 use crate::cli::{DEFAULT_SEARCH_LIMIT, SearchArgs};
-use crate::store::{SearchHit, Store};
+use crate::document::DocumentId;
+use crate::store::{DocumentInfo, Error, SearchHit, Store};
 
 /// One hit as the page shows it.
 pub(crate) struct Hit {
@@ -36,6 +39,10 @@ pub(crate) struct Hit {
 #[derive(Template)]
 #[template(path = "search_results.html")]
 struct Results {
+    /// The live document whose ID the query is, listed first.
+    id_match: Option<Hit>,
+    /// The ID the query is, of an archived document.
+    archived: Option<String>,
     /// Whether anything was asked for.
     searched: bool,
     error: Option<String>,
@@ -159,6 +166,12 @@ pub(crate) fn page(
     session: &Session,
 ) -> Result<Response, WebError> {
     let asked = Asked::from(request);
+    let named = named_document(store, asked.query);
+    if let Named::Live(document) = &named
+        && !request.wants_fragment()
+    {
+        return Ok(redirect(&format!("/admin/documents/{}", document.id)));
+    }
     let limit = number(request, "limit", DEFAULT_SEARCH_LIMIT);
     let found = number(request, "start", 1).and_then(|start| match &limit {
         Ok(limit) => run(store, &asked, start, *limit),
@@ -168,14 +181,27 @@ pub(crate) fn page(
             refused.message.clone(),
         )),
     });
-    let (status, results, refused) = match found {
-        Ok(results) => (StatusCode::OK, results, None),
-        Err(refused) => (
+    let (status, mut results, refused) = match (found, &named) {
+        (Ok(results), _) => (StatusCode::OK, results, None),
+        // The document is the answer; words the index cannot take do not
+        // spoil it.
+        (Err(_), Named::Live(_)) => (StatusCode::OK, Results::idle(), None),
+        (Err(refused), _) => (
             refused.status,
             refusal(refused.message.clone()),
             Some(refused),
         ),
     };
+    match named {
+        Named::Live(document) => {
+            results
+                .hits
+                .retain(|h| h.id != document.id || h.file.is_some());
+            results.id_match = Some(listed(*document));
+        }
+        Named::Archived(id) => results.archived = Some(id),
+        Named::Nothing => {}
+    }
     if request.wants_fragment() {
         return answer(refused, render(status, &results));
     }
@@ -241,6 +267,7 @@ fn run(store: &Store, asked: &Asked<'_>, start: u64, limit: u64) -> Result<Resul
         previous: (start > 1).then(|| asked.url(start.saturating_sub(limit).max(1), limit)),
         next: results.next_start.map(|next| asked.url(next, limit)),
         hits: results.items.into_iter().map(hit).collect(),
+        ..Results::idle()
     })
 }
 
@@ -248,6 +275,8 @@ impl Results {
     /// Before anything is asked: the region invites a search.
     fn idle() -> Self {
         Self {
+            id_match: None,
+            archived: None,
             searched: false,
             error: None,
             hits: Vec::new(),
@@ -266,6 +295,40 @@ fn refusal(message: String) -> Results {
         searched: true,
         error: Some(message),
         ..Results::idle()
+    }
+}
+
+/// What a query that may be a document ID names.
+enum Named {
+    Live(Box<DocumentInfo>),
+    Archived(String),
+    Nothing,
+}
+
+/// The document `query` is the ID of, if it is one.
+fn named_document(store: &Store, query: &str) -> Named {
+    let Ok(id) = query.parse::<DocumentId>() else {
+        return Named::Nothing;
+    };
+    match store.get(&id.to_string(), None) {
+        Ok(fetched) => Named::Live(Box::new(fetched.document)),
+        Err(Error::Archived(id)) => Named::Archived(id),
+        Err(_) => Named::Nothing,
+    }
+}
+
+/// `document` as a hit with no snippet.
+fn listed(document: DocumentInfo) -> Hit {
+    Hit {
+        href: href(&document.id, None, None, false),
+        snippet: Vec::new(),
+        id: document.id,
+        title: document.title,
+        file: None,
+        project: document.project,
+        doc_type: document.doc_type,
+        status: document.status,
+        updated: document.updated,
     }
 }
 
