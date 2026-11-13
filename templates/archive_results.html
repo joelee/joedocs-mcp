@@ -1,0 +1,38 @@
+{% if items.is_empty() %}
+<p class="empty">No archived documents match.</p>
+{% else %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th scope="col">ID</th><th scope="col">Title</th><th scope="col">Project</th><th scope="col">Type</th><th scope="col">Archived (UTC)</th><th scope="col">By</th><th scope="col">Reason</th><th scope="col">Action</th></tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr data-archived="{{ item.document.id }}">
+        <td class="nowrap"><code>{{ item.document.id }}</code></td>
+        <td>{{ item.document.title }}</td>
+        <td>{{ item.document.project }}</td>
+        <td>{{ item.document.doc_type }}</td>
+        <td class="nowrap">{{ item.archived_at }}</td>
+        <td>{{ item.archived_by }}</td>
+        <td>{{ item.reason }}</td>
+        <td>
+          <button type="button" class="secondary" commandfor="restore-{{ item.document.id }}" command="show-modal">Restore</button>
+          <dialog id="restore-{{ item.document.id }}" aria-labelledby="restore-{{ item.document.id }}-heading">
+            <form method="post" action="/admin/archive/{{ item.document.id }}/restore" class="stack">
+              <h2 id="restore-{{ item.document.id }}-heading">Restore {{ item.document.id }}?</h2>
+              <p>{{ item.document.title }} goes back to {{ item.document.project }} as a new revision, with its history intact.</p>
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <div class="dialog-actions">
+                <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
+                <button type="submit">Restore {{ item.document.id }}</button>
+              </div>
+            </form>
+          </dialog>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

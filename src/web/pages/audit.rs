@@ -40,6 +40,15 @@ struct AuditPage<'a> {
     /// The filter form's values, by key.
     values: Vec<(&'static str, &'a str)>,
     quick: Vec<Quick>,
+    /// The page size, kept in the form when it is not the default.
+    limit: Option<u64>,
+    results: AuditResults,
+}
+
+/// The results region, also sent alone to htmx when a filter changes.
+#[derive(Template)]
+#[template(path = "audit_results.html")]
+struct AuditResults {
     error: Option<String>,
     rows: Vec<AuditRow>,
     total: u64,
@@ -47,11 +56,18 @@ struct AuditPage<'a> {
     shown_to: u64,
     previous: Option<String>,
     next: Option<String>,
-    /// The page size, kept in the form when it is not the default.
-    limit: Option<u64>,
 }
 
 impl AuditPage<'_> {
+    /// The page, or for htmx only its results region.
+    fn reply(&self, status: StatusCode, fragment: bool) -> Response {
+        if fragment {
+            render(status, &self.results)
+        } else {
+            render(status, self)
+        }
+    }
+
     /// The form's value for `key`.
     fn value(&self, key: &str) -> &str {
         self.values
@@ -95,24 +111,27 @@ pub(crate) fn page(
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Audit, ""),
         quick: quick_filters(store),
-        error: None,
-        rows: Vec::new(),
-        total: 0,
-        start: 1,
-        shown_to: 0,
-        previous: None,
-        next: None,
         limit: None,
         values: values.clone(),
+        results: AuditResults {
+            error: None,
+            rows: Vec::new(),
+            total: 0,
+            start: 1,
+            shown_to: 0,
+            previous: None,
+            next: None,
+        },
     };
+    let fragment = request.wants_fragment();
     let numbers = number(request, "start", 1).and_then(|start| {
         number(request, "limit", DEFAULT_AUDIT_LIMIT).map(|limit| (start, limit))
     });
     let (start, limit) = match numbers {
         Ok(numbers) => numbers,
         Err(refused) => {
-            page.error = Some(refused.message.clone());
-            let shown = render(refused.status, &page);
+            page.results.error = Some(refused.message.clone());
+            let shown = page.reply(refused.status, fragment);
             return Err(refused.with_page(shown));
         }
     };
@@ -131,18 +150,19 @@ pub(crate) fn page(
     match found {
         Ok(found) => {
             let shown = found.items.len() as u64;
-            page.total = found.total;
-            page.start = start;
-            page.shown_to = start + shown - u64::from(shown > 0);
-            page.previous = (start > 1).then(|| url(start.saturating_sub(limit).max(1), limit));
-            page.next = found.next_start.map(|next| url(next, limit));
-            page.rows = found.items;
-            Ok(render(StatusCode::OK, &page))
+            let results = &mut page.results;
+            results.total = found.total;
+            results.start = start;
+            results.shown_to = start + shown - u64::from(shown > 0);
+            results.previous = (start > 1).then(|| url(start.saturating_sub(limit).max(1), limit));
+            results.next = found.next_start.map(|next| url(next, limit));
+            results.rows = found.items;
+            Ok(page.reply(StatusCode::OK, fragment))
         }
         Err(error) => {
             let refused = WebError::from_store(&error);
-            page.error = Some(refused.message.clone());
-            let shown = render(refused.status, &page);
+            page.results.error = Some(refused.message.clone());
+            let shown = page.reply(refused.status, fragment);
             Err(refused.with_page(shown))
         }
     }

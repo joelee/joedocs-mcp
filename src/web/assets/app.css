@@ -225,6 +225,17 @@ button:disabled, button[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 .stack { display: grid; gap: var(--space-2); }
 .filters { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end; margin-bottom: var(--space-4); }
 .filters > div { display: grid; gap: var(--space-1); }
+/* Filters apply as they change (htmx), so with scripts on the button is
+   hidden from view; it stays in the form so Enter still submits it. */
+.js .filters-apply {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+/* Shown again when the keyboard reaches it, so focus is never invisible. */
+.js .filters-apply:focus-within {
+  position: static; width: auto; height: auto; margin: 0;
+  overflow: visible; clip-path: none; white-space: normal;
+}
 
 .notice { padding: var(--space-3) var(--space-4); border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); }
 .notice.error { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); }

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **Web interface: filters apply as they change.** On Documents and Archive, picking a project, type or status reloads the list at once, and on Audit typing in a filter applies it after a short pause; there is no Show or Filter button to press. The address follows the filters, so a view can be shared or reloaded. Without JavaScript the button is still there.
+
 ## [0.5.1] - 2026-11-12
 
 User accounts: administrators sign in to the web interface and the admin command line with a name, a password and a TOTP code, instead of an admin token. Admin tokens are deprecated. MCP clients, keys and tools are unchanged.

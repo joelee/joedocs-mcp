@@ -34,11 +34,18 @@ struct DocumentsPage<'a> {
     title: &'a str,
     assets: Urls,
     chrome: Chrome<'a>,
-    project: Option<ProjectRow>,
     projects: Vec<Choice>,
     types: Vec<Choice>,
     statuses: Vec<Choice>,
     sorts: Vec<Choice>,
+    results: DocumentsResults,
+}
+
+/// The results region, also sent alone to htmx when a filter changes.
+#[derive(Template)]
+#[template(path = "documents_results.html")]
+struct DocumentsResults {
+    project: Option<ProjectRow>,
     items: Vec<DocumentInfo>,
     total: u64,
     start: u64,
@@ -157,11 +164,23 @@ pub(crate) fn list(
         }))
         .collect()
     };
+    let results = DocumentsResults {
+        project: projects.iter().find(|p| p.name == filters.project).cloned(),
+        total: listing.total,
+        start: filters.start,
+        shown_to: filters.start + listing.items.len() as u64 - u64::from(!listing.items.is_empty()),
+        previous: (filters.start > 1)
+            .then(|| filters.url(filters.start.saturating_sub(filters.limit).max(1))),
+        next: listing.next_start.map(|next| filters.url(next)),
+        items: listing.items,
+    };
+    if request.wants_fragment() {
+        return Ok(render(StatusCode::OK, &results));
+    }
     let page = DocumentsPage {
         title: "Documents",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Documents, ""),
-        project: projects.iter().find(|p| p.name == filters.project).cloned(),
         projects: projects
             .iter()
             .map(|p| Choice {
@@ -184,13 +203,7 @@ pub(crate) fn list(
                 selected: *sort == filters.sort,
             })
             .collect(),
-        total: listing.total,
-        start: filters.start,
-        shown_to: filters.start + listing.items.len() as u64 - u64::from(!listing.items.is_empty()),
-        previous: (filters.start > 1)
-            .then(|| filters.url(filters.start.saturating_sub(filters.limit).max(1))),
-        next: listing.next_start.map(|next| filters.url(next)),
-        items: listing.items,
+        results,
     };
     Ok(render(StatusCode::OK, &page))
 }
@@ -201,17 +214,19 @@ fn empty(session: &Session) -> Response {
         title: "Documents",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Documents, ""),
-        project: None,
         projects: Vec::new(),
         types: Vec::new(),
         statuses: Vec::new(),
         sorts: Vec::new(),
-        items: Vec::new(),
-        total: 0,
-        start: 1,
-        shown_to: 0,
-        previous: None,
-        next: None,
+        results: DocumentsResults {
+            project: None,
+            items: Vec::new(),
+            total: 0,
+            start: 1,
+            shown_to: 0,
+            previous: None,
+            next: None,
+        },
     };
     render(StatusCode::OK, &page)
 }

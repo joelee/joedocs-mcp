@@ -4,6 +4,10 @@
 "use strict";
 
 (() => {
+  // Scripts run: features that only work with them (filters that apply as
+  // they change) can hide what is there for browsers without them.
+  document.documentElement.classList.add("js");
+
   const THEME_KEY = "joedocs-theme";
   // Whether buttons open dialogs by themselves (invoker commands).
   const NATIVE_COMMANDS = "command" in HTMLButtonElement.prototype;

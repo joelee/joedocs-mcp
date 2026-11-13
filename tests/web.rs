@@ -3989,3 +3989,94 @@ async fn disabling_or_resetting_a_user_ends_their_browser_sessions_for_good() ->
     );
     server.stop().await
 }
+
+// --- JD-41: 0.5.2 user experience --------------------------------------------------
+
+/// Headers of an htmx request for part of a page.
+fn htmx(cookie: &str) -> String {
+    format!("Cookie: {cookie}\r\nHX-Request: true\r\nHX-Request-Type: partial\r\n")
+}
+
+#[tokio::test]
+async fn filters_apply_on_change_and_htmx_gets_only_the_results() -> TestResult<()> {
+    let server = start_full(|_| {}, audit_fixture).await?;
+    let cookie = server.login().await?;
+    // `(path, the form's htmx trigger, a filtered query, a row it lists,
+    // a row it leaves out)`.
+    let pages = [
+        (
+            "/admin/documents",
+            "change, submit",
+            "/admin/documents?project=joedocs&type=plans",
+            "Rollout plan",
+            "Second doc",
+        ),
+        (
+            "/admin/archive",
+            "change, submit",
+            "/admin/archive?type=notes",
+            "data-archived=\"JD-4\"",
+            "No archived documents match",
+        ),
+        (
+            "/admin/audit",
+            "input changed delay:300ms, submit",
+            "/admin/audit?key=ci-bot&tool=archive_document",
+            "archive_document JD-4 ok",
+            "new_document JD-2 ok",
+        ),
+    ];
+    for (path, trigger, query, listed, absent) in pages {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}: {}", page.body);
+        for needle in [
+            format!("hx-get=\"{path}\""),
+            format!("hx-trigger=\"{trigger}\""),
+            "hx-target=\"#results\"".to_owned(),
+            "hx-push-url=\"true\"".to_owned(),
+            "id=\"results\"".to_owned(),
+            "data-focus=\"keep\"".to_owned(),
+            // The button stays for Enter and for browsers without scripts.
+            "class=\"filters-apply\"".to_owned(),
+        ] {
+            assert!(
+                page.body.contains(&needle),
+                "{path} {needle}: {}",
+                page.body
+            );
+        }
+        let fragment = server.send("GET", query, &htmx(&cookie), "").await?;
+        assert_eq!(fragment.status, 200, "{query}: {}", fragment.body);
+        assert!(
+            !fragment.body.contains("<html"),
+            "{query}: {}",
+            fragment.body
+        );
+        assert!(
+            !fragment.body.contains("class=\"filters"),
+            "only the results, not the filters: {query}"
+        );
+        assert!(fragment.body.contains(listed), "{query}: {}", fragment.body);
+        assert!(
+            !fragment.body.contains(absent),
+            "{query}: {}",
+            fragment.body
+        );
+        let whole = server.get(query, Some(&cookie)).await?;
+        assert!(whole.body.contains("<html"), "a plain request: {query}");
+        assert!(whole.body.contains(listed), "{query}");
+    }
+    // The project line follows the project picked.
+    let notes = server
+        .send("GET", "/admin/documents?project=notes", &htmx(&cookie), "")
+        .await?;
+    assert!(notes.body.contains("<code>NT</code>"), "{}", notes.body);
+    // A refused audit filter answers with its message as a fragment.
+    let refused = server
+        .send("GET", "/admin/audit?since=yesterday", &htmx(&cookie), "")
+        .await?;
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert!(!refused.body.contains("<html"), "{}", refused.body);
+    assert!(refused.body.contains("notice error"), "{}", refused.body);
+    server.stop().await
+}

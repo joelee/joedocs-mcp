@@ -20,7 +20,16 @@ struct ArchivePage<'a> {
     chrome: Chrome<'a>,
     projects: Vec<Choice>,
     types: Vec<Choice>,
+    results: ArchiveResults,
+}
+
+/// The results region, also sent alone to htmx when a filter changes.
+#[derive(Template)]
+#[template(path = "archive_results.html")]
+struct ArchiveResults {
     items: Vec<ArchivedInfo>,
+    /// The session's CSRF token, for the restore forms.
+    csrf: String,
 }
 
 /// `GET /admin/archive`, with `project` and `type`.
@@ -53,13 +62,20 @@ pub(crate) fn list(
         }))
         .collect()
     };
+    let results = ArchiveResults {
+        items,
+        csrf: session.csrf.clone(),
+    };
+    if request.wants_fragment() {
+        return Ok(render(StatusCode::OK, &results));
+    }
     let page = ArchivePage {
         title: "Archive",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Archive, ""),
         projects: choices(&names, project, "All projects"),
         types: choices(&store.settings().types, doc_type, "All types"),
-        items,
+        results,
     };
     Ok(render(StatusCode::OK, &page))
 }
