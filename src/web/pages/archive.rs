@@ -20,6 +20,8 @@ struct ArchivePage<'a> {
     chrome: Chrome<'a>,
     projects: Vec<Choice>,
     types: Vec<Choice>,
+    /// What the last action did, when the URL says.
+    notice: Option<String>,
     results: ArchiveResults,
 }
 
@@ -75,9 +77,24 @@ pub(crate) fn list(
         chrome: Chrome::new(session, Section::Archive, ""),
         projects: choices(&names, project, "All projects"),
         types: choices(&store.settings().types, doc_type, "All types"),
+        notice: notice(request),
         results,
     };
     Ok(render(StatusCode::OK, &page))
+}
+
+/// The notice for `done=archived` and the archived `id`.
+fn notice(request: &WebRequest) -> Option<String> {
+    if request.query("done")? != "archived" {
+        return None;
+    }
+    let id = request
+        .query("id")?
+        .parse::<crate::document::DocumentId>()
+        .ok()?;
+    Some(format!(
+        "Archived {id}. Restore it from the list below to bring it back as a new revision."
+    ))
 }
 
 /// `POST /admin/archive/{id}/restore`: back to the document, which reports

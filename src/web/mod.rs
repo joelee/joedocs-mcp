@@ -56,6 +56,7 @@
 //! | `POST /admin/documents/{id}/convert` | `admin:document.convert` |
 //! | `POST /admin/documents/{id}/move-file` | `admin:document.move_file` |
 //! | `POST /admin/documents/{id}/restore-file` | `admin:document.restore_file` |
+//! | `POST /admin/documents/{id}/archive` | `admin:document.archive` |
 //! | `GET /admin/maintenance` | `admin:web.maintenance_page` |
 //! | `POST /admin/maintenance/check` | `admin:check` |
 //! | `POST /admin/maintenance/reindex` | `admin:reindex` |
@@ -194,6 +195,7 @@ pub(crate) enum Route {
     ArchiveList,
     ArchiveRestore(String),
     DocumentConvert(String),
+    DocumentArchive(String),
     FileMove(String),
     FileRestore(String),
     Maintenance,
@@ -270,6 +272,7 @@ impl Route {
                 let id = percent_decode(id);
                 match *action {
                     "convert" => Self::DocumentConvert(id),
+                    "archive" => Self::DocumentArchive(id),
                     "move-file" => Self::FileMove(id),
                     "restore-file" => Self::FileRestore(id),
                     _ => Self::Unknown,
@@ -323,6 +326,7 @@ impl Route {
             Self::ArchiveList => "admin:archive.list",
             Self::ArchiveRestore(_) => "admin:archive.restore",
             Self::DocumentConvert(_) => "admin:document.convert",
+            Self::DocumentArchive(_) => "admin:document.archive",
             Self::FileMove(_) => "admin:document.move_file",
             Self::FileRestore(_) => "admin:document.restore_file",
             Self::Maintenance => "admin:web.maintenance_page",

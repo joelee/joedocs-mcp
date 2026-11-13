@@ -12,15 +12,31 @@
   </p>
   {% if facts.current %}<p class="hint" data-facts="current">The title and status shown are the document's current ones: a file of a multi-file document does not record them.</p>{% endif %}
   {% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
-  {% if offer != Offer::Nothing %}
+  {% if !menu.is_empty() %}
   <details class="actions-menu">
     <summary>Actions</summary>
     <div class="menu">
-      {% if offer == Offer::Convert %}<button type="button" class="secondary" commandfor="convert-dialog" command="show-modal">Convert to multi-file</button>{% endif %}
-      {% if offer == Offer::Move %}<button type="button" class="secondary" commandfor="move-dialog" command="show-modal">Move this file</button>{% endif %}
+      {% if menu.offer == Offer::Convert %}<button type="button" class="secondary" commandfor="convert-dialog" command="show-modal">Convert to multi-file</button>{% endif %}
+      {% if menu.offer == Offer::Move %}<button type="button" class="secondary" commandfor="move-dialog" command="show-modal">Move this file</button>{% endif %}
+      {% if menu.archive %}<button type="button" class="danger" commandfor="archive-dialog" command="show-modal">Archive document</button>{% endif %}
     </div>
   </details>
-  {% if offer == Offer::Convert %}
+  {% if menu.archive %}
+  <dialog id="archive-dialog" aria-labelledby="archive-heading">
+    <form method="post" action="/admin/documents/{{ fetched.document.id }}/archive" class="stack" data-busy="Archiving…">
+      <h2 id="archive-heading">Archive {{ fetched.document.id }}?</h2>
+      <p>{{ facts.title }}{% if fetched.document.multifile %}, with all its files,{% endif %} leaves the documents and search of {{ fetched.document.project }}. Its history is kept, and it can be restored from the Archive page.</p>
+      <input type="hidden" name="csrf" value="{{ chrome.csrf }}">
+      <label for="archive-reason">Reason <span class="hint">kept in the history</span></label>
+      <input id="archive-reason" name="reason" required autocomplete="off" placeholder="Superseded by JD-42">
+      <div class="dialog-actions">
+        <button type="submit" class="secondary" formmethod="dialog" formnovalidate>Cancel</button>
+        <button type="submit" class="danger">Archive {{ fetched.document.id }}</button>
+      </div>
+    </form>
+  </dialog>
+  {% endif %}
+  {% if menu.offer == Offer::Convert %}
   <dialog id="convert-dialog" aria-labelledby="convert-heading">
     <form method="post" action="/admin/documents/{{ fetched.document.id }}/convert" class="stack">
       <h2 id="convert-heading">Convert {{ fetched.document.id }} to a multi-file document?</h2>
@@ -33,7 +49,7 @@
     </form>
   </dialog>
   {% endif %}
-  {% if offer == Offer::Move %}{% if let Some(name) = file %}
+  {% if menu.offer == Offer::Move %}{% if let Some(name) = file %}
   <dialog id="move-dialog" aria-labelledby="move-heading">
     <form method="post" action="/admin/documents/{{ fetched.document.id }}/move-file" class="stack">
       <h2 id="move-heading">Move {{ name }} to another document?</h2>

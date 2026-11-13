@@ -4397,3 +4397,119 @@ async fn a_document_id_in_the_search_opens_that_document() -> TestResult<()> {
     }
     server.stop().await
 }
+
+#[tokio::test]
+async fn documents_are_archived_from_their_page_with_a_reason() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    // The latest revision of a document, single-file or multi-file, offers
+    // it; an older revision and a file page do not.
+    for (path, offered) in [
+        ("/admin/documents/JD-2", true),
+        ("/admin/documents/JD-3", true),
+        ("/admin/documents/JD-1?version=1", false),
+        ("/admin/documents/JD-3?file=items%2Fone", false),
+    ] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}: {}", page.body);
+        assert_eq!(
+            page.body.contains("commandfor=\"archive-dialog\""),
+            offered,
+            "{path}"
+        );
+        if offered {
+            for needle in [
+                "action=\"/admin/documents/",
+                "/archive\"",
+                "<label for=\"archive-reason\">",
+                "id=\"archive-reason\" name=\"reason\" required",
+            ] {
+                assert!(page.body.contains(needle), "{path} {needle}: {}", page.body);
+            }
+        }
+    }
+    // Refused: no reason, a blank one, no CSRF token, an unknown document.
+    for (path, fields, token) in [
+        ("/admin/documents/JD-2/archive", vec![], Some(csrf.as_str())),
+        (
+            "/admin/documents/JD-2/archive",
+            vec![("reason", "   ")],
+            Some(csrf.as_str()),
+        ),
+        (
+            "/admin/documents/JD-2/archive",
+            vec![("reason", "done")],
+            None,
+        ),
+        (
+            "/admin/documents/JD-99/archive",
+            vec![("reason", "done")],
+            Some(csrf.as_str()),
+        ),
+    ] {
+        let reply = server.post_form(path, &cookie, token, &fields).await?;
+        assert!(
+            (400..500).contains(&reply.status),
+            "{path} {fields:?}: {} {}",
+            reply.status,
+            reply.body
+        );
+    }
+    let still = server
+        .get("/admin/documents?project=joedocs", Some(&cookie))
+        .await?;
+    assert!(still.body.contains("Second doc"), "nothing was archived");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn an_archived_document_lands_on_the_archive_page_with_a_notice() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let before = server.audit()?.len();
+
+    let archived = server
+        .post_form(
+            "/admin/documents/JD-2/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "replaced by the backlog")],
+        )
+        .await?;
+    assert_eq!(archived.status, 303, "{}", archived.body);
+    let location = archived.header("location").ok_or("no location")?.to_owned();
+    assert_eq!(location, "/admin/archive?done=archived&id=JD-2");
+    let archive = server.get(&location, Some(&cookie)).await?;
+    assert!(
+        archive.body.contains("Archived JD-2."),
+        "the notice names it: {}",
+        archive.body
+    );
+    let row = row_of(&archive.body, "archived", "JD-2");
+    assert!(row.contains("replaced by the backlog"), "{row}");
+    let library = server
+        .get("/admin/documents?project=joedocs", Some(&cookie))
+        .await?;
+    assert!(!library.body.contains("Second doc"), "{}", library.body);
+    let rows = server.audit()?;
+    let tools: Vec<_> = rows[before..]
+        .iter()
+        .filter(|(tool, _, _)| tool == "admin:document.archive")
+        .map(|(_, client, outcome)| (client.as_str(), outcome.as_str()))
+        .collect();
+    assert_eq!(tools, [("joedocs-web", "ok")]);
+    // Archiving it again is refused, and the page says why.
+    let again = server
+        .post_form(
+            "/admin/documents/JD-2/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "twice")],
+        )
+        .await?;
+    assert!((400..500).contains(&again.status), "{}", again.body);
+    assert!(again.body.contains("JD-2"), "{}", again.body);
+    server.stop().await
+}

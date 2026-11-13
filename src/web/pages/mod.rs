@@ -213,6 +213,7 @@ pub(crate) fn page(
         Route::ArchiveList => archive::list(store, request, session),
         Route::ArchiveRestore(id) => archive::restore(store, session, id),
         Route::DocumentConvert(id) => document::convert(store, session, id),
+        Route::DocumentArchive(id) => document::archive(store, request, session, id),
         Route::FileMove(id) => document::move_file(store, request, session, id),
         Route::FileRestore(id) => document::restore_file(store, request, session, id),
         Route::Maintenance => maintenance::page(store, session),

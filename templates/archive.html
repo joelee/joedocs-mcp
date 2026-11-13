@@ -5,6 +5,8 @@
   <p class="lede">Archived documents keep their history and can be restored. Archived files of a multi-file document are restored from its History.</p>
 </div>
 
+{% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
+
 <form class="filters" method="get" action="/admin/archive"
       hx-get="/admin/archive" hx-trigger="change, submit" hx-target="#results" hx-push-url="true">
   <div>
