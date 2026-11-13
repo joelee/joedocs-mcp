@@ -4080,3 +4080,152 @@ async fn filters_apply_on_change_and_htmx_gets_only_the_results() -> TestResult<
     assert!(refused.body.contains("notice error"), "{}", refused.body);
     server.stop().await
 }
+
+/// The titles of the Documents rows, in order.
+fn titles(body: &str) -> Vec<String> {
+    body.split("<td><a href=\"/admin/documents/")
+        .skip(1)
+        .filter_map(|part| {
+            let start = part.find("\">")? + 2;
+            let end = part[start..].find("</a>")?;
+            Some(part[start..start + end].to_owned())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn documents_sort_by_their_column_headers_across_pages() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &str| {
+        let path = format!("/admin/documents?project=joedocs{query}");
+        let cookie = cookie.clone();
+        let server = &server;
+        async move { server.get(&path, Some(&cookie)).await }
+    };
+    // Unsorted: every sortable header links to its ascending order; Files
+    // is not sortable, and the Order select is gone.
+    let plain = get("").await?;
+    assert_eq!(plain.status, 200, "{}", plain.body);
+    for column in ["id", "title", "type", "status", "revision", "updated"] {
+        let link = format!("href=\"/admin/documents?project=joedocs&#38;sort={column}\"");
+        assert!(plain.body.contains(&link), "{link}: {}", plain.body);
+    }
+    assert!(!plain.body.contains("sort=files"), "{}", plain.body);
+    assert!(!plain.body.contains("id=\"f-sort\""), "{}", plain.body);
+    assert!(!plain.body.contains("aria-sort"), "{}", plain.body);
+
+    // Ascending, then descending, then back to the default order.
+    let ascending = get("&sort=title").await?;
+    assert_eq!(
+        titles(&ascending.body),
+        ["Backlog", "Rollout plan", "Second doc"]
+    );
+    assert!(
+        ascending.body.contains("aria-sort=\"ascending\""),
+        "{}",
+        ascending.body
+    );
+    assert!(
+        ascending
+            .body
+            .contains("href=\"/admin/documents?project=joedocs&#38;sort=title&#38;dir=desc\""),
+        "{}",
+        ascending.body
+    );
+    // The filter form keeps the order through a hidden field it owns.
+    assert!(
+        ascending
+            .body
+            .contains("name=\"sort\" value=\"title\" form=\"documents-filters\""),
+        "{}",
+        ascending.body
+    );
+    let descending = get("&sort=title&dir=desc").await?;
+    assert_eq!(
+        titles(&descending.body),
+        ["Second doc", "Rollout plan", "Backlog"]
+    );
+    assert!(descending.body.contains("aria-sort=\"descending\""));
+    let title_header = descending
+        .body
+        .split("<th")
+        .find(|th| th.contains(">Title<"))
+        .ok_or("no Title header")?;
+    assert!(
+        title_header.contains("href=\"/admin/documents?project=joedocs\""),
+        "the third click goes back to the default order: {title_header}"
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn each_column_order_pages_and_the_0_5_1_orders_still_work() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &str| {
+        let path = format!("/admin/documents?project=joedocs{query}");
+        let cookie = cookie.clone();
+        let server = &server;
+        async move { server.get(&path, Some(&cookie)).await }
+    };
+    for (query, expected) in [
+        ("&sort=id", ["Rollout plan", "Second doc", "Backlog"]),
+        (
+            "&sort=id&dir=desc",
+            ["Backlog", "Second doc", "Rollout plan"],
+        ),
+        // Ties go by ID, in the same direction.
+        (
+            "&sort=revision&dir=desc",
+            ["Backlog", "Rollout plan", "Second doc"],
+        ),
+        ("&sort=type", ["Second doc", "Backlog", "Rollout plan"]),
+        ("&sort=status", ["Second doc", "Rollout plan", "Backlog"]),
+        ("&sort=updated", ["Rollout plan", "Second doc", "Backlog"]),
+    ] {
+        let page = get(query).await?;
+        assert_eq!(page.status, 200, "{query}: {}", page.body);
+        assert_eq!(titles(&page.body), expected, "{query}");
+    }
+
+    // Header links keep the filters and the page size, and start at the
+    // first page; the pager keeps the order.
+    let paged = get("&type=notes&sort=title&dir=desc&start=2&limit=1").await?;
+    assert_eq!(titles(&paged.body), ["Backlog"]);
+    assert!(
+        paged.body.contains(
+            "href=\"/admin/documents?project=joedocs&#38;type=notes&#38;sort=id&#38;limit=1\""
+        ),
+        "{}",
+        paged.body
+    );
+    assert!(
+        paged.body.contains(
+            "href=\"/admin/documents?project=joedocs&#38;type=notes&#38;sort=title&#38;dir=desc&#38;limit=1\""
+        ),
+        "the previous page keeps the order: {}",
+        paged.body
+    );
+
+    // The 0.5.1 orders still work.
+    for legacy in [
+        "updated_desc",
+        "updated_asc",
+        "created_desc",
+        "created_asc",
+        "title",
+    ] {
+        let page = get(&format!("&sort={legacy}")).await?;
+        assert_eq!(page.status, 200, "{legacy}: {}", page.body);
+    }
+    assert_eq!(
+        titles(&get("&sort=created_desc").await?.body),
+        ["Backlog", "Second doc", "Rollout plan"]
+    );
+    for bad in ["&sort=nope", "&sort=files", "&sort=title&dir=sideways"] {
+        let page = get(bad).await?;
+        assert_eq!(page.status, 400, "{bad}: {}", page.body);
+    }
+    server.stop().await
+}

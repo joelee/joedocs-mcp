@@ -193,6 +193,13 @@ section { margin-bottom: var(--space-8); }
 
 /* --- Tables ---------------------------------------------------------- */
 
+/* Sortable column headers: the link names the column, the arrow shows the
+   order the table is in. */
+th .sort-link { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: var(--space-1); min-height: 24px; }
+th .sort-link:hover, th .sort-link:focus-visible { text-decoration: underline; }
+th .sort-link::after { content: "\2195"; opacity: 0.45; font-size: 0.85em; }
+th[aria-sort="ascending"] .sort-link::after { content: "\2191"; opacity: 1; }
+th[aria-sort="descending"] .sort-link::after { content: "\2193"; opacity: 1; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
 table { border-collapse: collapse; width: 100%; font-size: var(--text-sm); }
 th, td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); vertical-align: top; }

@@ -178,13 +178,28 @@
   // region is `detail.ctx.target`. A region marked `data-focus="keep"`
   // (search results, which reload while the user types) leaves focus where
   // it is.
+  // A control marked `data-focus-key` that htmx replaces (a sort header
+  // link inside the results it reloads) gets focus back on its new copy.
+  let focusKey = null;
+  document.addEventListener("focusin", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const keyed = target ? target.closest("[data-focus-key]") : null;
+    focusKey = keyed ? keyed.dataset.focusKey : null;
+  });
+
   document.addEventListener("htmx:after:swap", (event) => {
     const target = event.detail && event.detail.ctx ? event.detail.ctx.target : null;
     const region = target instanceof HTMLElement ? target : null;
     if (!region) {
       return;
     }
-    if (region.dataset.focus !== "keep") {
+    const lost = !document.activeElement || document.activeElement === document.body;
+    const again = focusKey
+      ? [...region.querySelectorAll("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)
+      : null;
+    if (lost && again instanceof HTMLElement) {
+      again.focus({ preventScroll: true });
+    } else if (region.dataset.focus !== "keep") {
       if (!region.hasAttribute("tabindex")) {
         region.setAttribute("tabindex", "-1");
       }

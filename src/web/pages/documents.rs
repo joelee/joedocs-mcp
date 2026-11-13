@@ -1,5 +1,6 @@
 //! The document library: one project's live documents, filtered by type and
-//! status, sorted and paged as `joedocs list` does.
+//! status and paged as `joedocs list` does, and sorted by any column header
+//! across every page.
 
 use askama::Template;
 use axum::http::StatusCode;
@@ -8,18 +9,117 @@ use axum::response::Response;
 use super::super::assets::{self, Urls};
 use super::super::{Session, WebError, WebRequest, render};
 use super::{Chrome, Section};
-use crate::cli::{DEFAULT_LIST_LIMIT, SortArg};
-use crate::db::ProjectRow;
+use crate::cli::DEFAULT_LIST_LIMIT;
+use crate::db::{ProjectRow, Sort};
 use crate::store::{DocumentInfo, ListRequest, Store};
 
-/// The sort orders, with their labels.
-const SORTS: [(SortArg, &str); 5] = [
-    (SortArg::UpdatedDesc, "Recently updated"),
-    (SortArg::UpdatedAsc, "Least recently updated"),
-    (SortArg::CreatedDesc, "Newest"),
-    (SortArg::CreatedAsc, "Oldest"),
-    (SortArg::Title, "Title"),
-];
+/// A column the library sorts by, as its header and the `sort` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Column {
+    Id,
+    Title,
+    Type,
+    Status,
+    Revision,
+    Updated,
+}
+
+impl Column {
+    const ALL: [Self; 6] = [
+        Self::Id,
+        Self::Title,
+        Self::Type,
+        Self::Status,
+        Self::Revision,
+        Self::Updated,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Id => "id",
+            Self::Title => "title",
+            Self::Type => "type",
+            Self::Status => "status",
+            Self::Revision => "revision",
+            Self::Updated => "updated",
+        }
+    }
+}
+
+/// An order picked with a column header. Without one, the library is most
+/// recently updated first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Order {
+    column: Column,
+    descending: bool,
+}
+
+impl Order {
+    /// The order a `sort` and `dir` ask for: a column name, or one of the
+    /// orders `joedocs list --sort` names, as links from 0.5.1 carry.
+    fn parse(sort: Option<&str>, dir: Option<&str>) -> Result<Option<Self>, WebError> {
+        let invalid = |key: &str, value: &str| {
+            WebError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                format!("`{key}` cannot be \"{value}\""),
+            )
+        };
+        let descending = match dir.unwrap_or("") {
+            "" | "asc" => false,
+            "desc" => true,
+            other => return Err(invalid("dir", other)),
+        };
+        let order = |column, descending| Some(Self { column, descending });
+        Ok(match sort.unwrap_or("") {
+            "" => None,
+            "updated_desc" => order(Column::Updated, true),
+            "updated_asc" => order(Column::Updated, false),
+            "created_desc" => order(Column::Id, true),
+            "created_asc" => order(Column::Id, false),
+            name => match Column::ALL.into_iter().find(|c| c.name() == name) {
+                Some(column) => order(column, descending),
+                None => return Err(invalid("sort", name)),
+            },
+        })
+    }
+
+    /// The store's order for this one, or the default.
+    fn sort(order: Option<Self>) -> Sort {
+        let Some(Self { column, descending }) = order else {
+            return Sort::default();
+        };
+        match (column, descending) {
+            (Column::Id, false) => Sort::CreatedAsc,
+            (Column::Id, true) => Sort::CreatedDesc,
+            (Column::Title, false) => Sort::Title,
+            (Column::Title, true) => Sort::TitleDesc,
+            (Column::Type, false) => Sort::TypeAsc,
+            (Column::Type, true) => Sort::TypeDesc,
+            (Column::Status, false) => Sort::StatusAsc,
+            (Column::Status, true) => Sort::StatusDesc,
+            (Column::Revision, false) => Sort::RevisionAsc,
+            (Column::Revision, true) => Sort::RevisionDesc,
+            (Column::Updated, false) => Sort::UpdatedAsc,
+            (Column::Updated, true) => Sort::UpdatedDesc,
+        }
+    }
+}
+
+/// One column header of the library.
+pub(crate) struct Header {
+    pub(crate) label: &'static str,
+    /// `num` for a right-aligned column, or empty.
+    pub(crate) class: &'static str,
+    /// The link to the next order (ascending, descending, then the
+    /// default), for a sortable column.
+    pub(crate) href: Option<String>,
+    /// `ascending` or `descending` on the sorted column.
+    pub(crate) aria_sort: Option<&'static str>,
+    /// The key that brings focus back to this header after htmx swaps the
+    /// results in.
+    pub(crate) key: &'static str,
+}
 
 /// One choice in a filter.
 pub(crate) struct Choice {
@@ -37,7 +137,6 @@ struct DocumentsPage<'a> {
     projects: Vec<Choice>,
     types: Vec<Choice>,
     statuses: Vec<Choice>,
-    sorts: Vec<Choice>,
     results: DocumentsResults,
 }
 
@@ -46,6 +145,9 @@ struct DocumentsPage<'a> {
 #[template(path = "documents_results.html")]
 struct DocumentsResults {
     project: Option<ProjectRow>,
+    headers: Vec<Header>,
+    /// The order, kept by the filter form through fields in this region.
+    sort: Option<(&'static str, bool)>,
     items: Vec<DocumentInfo>,
     total: u64,
     start: u64,
@@ -59,7 +161,7 @@ struct Filters {
     project: String,
     doc_type: Option<String>,
     status: Option<String>,
-    sort: SortArg,
+    order: Option<Order>,
     start: u64,
     limit: u64,
 }
@@ -67,6 +169,11 @@ struct Filters {
 impl Filters {
     /// This listing at `start`, as a link that keeps the other filters.
     fn url(&self, start: u64) -> String {
+        self.url_with(self.order, start)
+    }
+
+    /// This listing in `order`, at `start`.
+    fn url_with(&self, order: Option<Order>, start: u64) -> String {
         let mut query = form_urlencoded::Serializer::new(String::new());
         query.append_pair("project", &self.project);
         if let Some(t) = &self.doc_type {
@@ -75,8 +182,11 @@ impl Filters {
         if let Some(s) = &self.status {
             query.append_pair("status", s);
         }
-        if self.sort != SortArg::default() {
-            query.append_pair("sort", self.sort.api_name());
+        if let Some(order) = order {
+            query.append_pair("sort", order.column.name());
+            if order.descending {
+                query.append_pair("dir", "desc");
+            }
         }
         if start != 1 {
             query.append_pair("start", &start.to_string());
@@ -85,6 +195,59 @@ impl Filters {
             query.append_pair("limit", &self.limit.to_string());
         }
         format!("/admin/documents?{}", query.finish())
+    }
+
+    /// The column headers, each linking to its next order from the first
+    /// page.
+    fn headers(&self) -> Vec<Header> {
+        let sortable = |label, column: Column| {
+            let current = self.order.filter(|o| o.column == column);
+            let next = match current {
+                None => Some(Order {
+                    column,
+                    descending: false,
+                }),
+                Some(Order {
+                    descending: false, ..
+                }) => Some(Order {
+                    column,
+                    descending: true,
+                }),
+                Some(_) => None,
+            };
+            Header {
+                label,
+                class: if column == Column::Revision {
+                    "num"
+                } else {
+                    ""
+                },
+                href: Some(self.url_with(next, 1)),
+                aria_sort: current.map(|o| {
+                    if o.descending {
+                        "descending"
+                    } else {
+                        "ascending"
+                    }
+                }),
+                key: column.name(),
+            }
+        };
+        vec![
+            sortable("ID", Column::Id),
+            sortable("Title", Column::Title),
+            sortable("Type", Column::Type),
+            sortable("Status", Column::Status),
+            sortable("Revision", Column::Revision),
+            Header {
+                label: "Files",
+                class: "num",
+                href: None,
+                aria_sort: None,
+                key: "files",
+            },
+            sortable("Updated (UTC)", Column::Updated),
+        ]
     }
 }
 
@@ -116,16 +279,7 @@ pub(crate) fn list(
     else {
         return Ok(empty(session));
     };
-    let sort = match request.query("sort").filter(|s| !s.is_empty()) {
-        None => SortArg::default(),
-        Some(name) => SortArg::from_api_name(name).ok_or_else(|| {
-            WebError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_argument",
-                format!("`sort` cannot be \"{name}\""),
-            )
-        })?,
-    };
+    let order = Order::parse(request.query("sort"), request.query("dir"))?;
     let filters = Filters {
         doc_type: request
             .query("type")
@@ -135,7 +289,7 @@ pub(crate) fn list(
             .query("status")
             .filter(|s| !s.is_empty())
             .map(str::to_owned),
-        sort,
+        order,
         start: number(request, "start", 1)?,
         limit: number(request, "limit", DEFAULT_LIST_LIMIT)?,
         project: name,
@@ -145,7 +299,7 @@ pub(crate) fn list(
             project: filters.project.clone(),
             doc_type: filters.doc_type.clone(),
             status: filters.status.clone(),
-            sort: filters.sort.sort(),
+            sort: Order::sort(filters.order),
             start: filters.start,
             limit: filters.limit,
         })
@@ -166,6 +320,8 @@ pub(crate) fn list(
     };
     let results = DocumentsResults {
         project: projects.iter().find(|p| p.name == filters.project).cloned(),
+        headers: filters.headers(),
+        sort: filters.order.map(|o| (o.column.name(), o.descending)),
         total: listing.total,
         start: filters.start,
         shown_to: filters.start + listing.items.len() as u64 - u64::from(!listing.items.is_empty()),
@@ -195,14 +351,6 @@ pub(crate) fn list(
             filters.status.as_deref(),
             "All statuses",
         ),
-        sorts: SORTS
-            .iter()
-            .map(|(sort, label)| Choice {
-                value: sort.api_name().to_owned(),
-                label: (*label).to_owned(),
-                selected: *sort == filters.sort,
-            })
-            .collect(),
         results,
     };
     Ok(render(StatusCode::OK, &page))
@@ -217,9 +365,10 @@ fn empty(session: &Session) -> Response {
         projects: Vec::new(),
         types: Vec::new(),
         statuses: Vec::new(),
-        sorts: Vec::new(),
         results: DocumentsResults {
             project: None,
+            headers: Vec::new(),
+            sort: None,
             items: Vec::new(),
             total: 0,
             start: 1,

@@ -1,3 +1,7 @@
+{% if let Some((column, descending)) = sort %}
+<input type="hidden" name="sort" value="{{ column }}" form="documents-filters">
+{% if *descending %}<input type="hidden" name="dir" value="desc" form="documents-filters">{% endif %}
+{% endif %}
 {% if let Some(project) = project %}
 <p class="lede">{{ project.title }} <code>{{ project.key }}</code>, {{ total }} live documents match</p>
 {% endif %}
@@ -7,7 +11,9 @@
 <div class="table-wrap">
   <table>
     <thead>
-      <tr><th scope="col">ID</th><th scope="col">Title</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col" class="num">Revision</th><th scope="col" class="num">Files</th><th scope="col">Updated (UTC)</th></tr>
+      <tr>
+        {% for header in headers %}<th scope="col"{% if !header.class.is_empty() %} class="{{ header.class }}"{% endif %}{% if let Some(sorted) = header.aria_sort %} aria-sort="{{ sorted }}"{% endif %}>{% if let Some(href) = header.href %}<a class="sort-link" href="{{ href }}" hx-get="{{ href }}" hx-target="#results" hx-push-url="true" data-focus-key="sort-{{ header.key }}">{{ header.label }}</a>{% else %}{{ header.label }}{% endif %}</th>{% endfor %}
+      </tr>
     </thead>
     <tbody>
       {% for doc in items %}

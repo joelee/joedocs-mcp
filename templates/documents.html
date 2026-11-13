@@ -7,7 +7,7 @@
 {% if projects.is_empty() %}
 <p class="empty">No projects yet. <a href="/admin/projects">Add one</a> to start.</p>
 {% else %}
-<form class="filters" method="get" action="/admin/documents"
+<form class="filters" id="documents-filters" method="get" action="/admin/documents"
       hx-get="/admin/documents" hx-trigger="change, submit" hx-target="#results" hx-push-url="true">
   <div>
     <label for="f-project">Project</label>
@@ -29,14 +29,6 @@
     <label for="f-status">Status</label>
     <select id="f-status" name="status">
       {% for choice in statuses %}
-      <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div>
-    <label for="f-sort">Order</label>
-    <select id="f-sort" name="sort">
-      {% for choice in sorts %}
       <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
       {% endfor %}
     </select>
