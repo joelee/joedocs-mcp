@@ -193,6 +193,8 @@ struct Terminal {
     secret: RefCell<Option<Vec<u8>>>,
     asked: RefCell<Vec<String>>,
     shown: RefCell<Vec<String>>,
+    /// Every question (`ask: ...`) and text shown (`show: ...`), in order.
+    events: RefCell<Vec<String>>,
 }
 
 impl Terminal {
@@ -204,6 +206,7 @@ impl Terminal {
             secret: RefCell::new(None),
             asked: RefCell::new(Vec::new()),
             shown: RefCell::new(Vec::new()),
+            events: RefCell::new(Vec::new()),
         }
     }
 
@@ -230,6 +233,7 @@ impl joedocs::client::Prompt for Terminal {
     }
     fn ask(&self, message: &str) -> std::io::Result<String> {
         self.asked.borrow_mut().push(message.to_owned());
+        self.events.borrow_mut().push(format!("ask: {message}"));
         Ok(
             if message.contains("press Enter") && self.secret.borrow().is_none() {
                 String::new()
@@ -240,6 +244,7 @@ impl joedocs::client::Prompt for Terminal {
     }
     fn ask_secret(&self, message: &str) -> std::io::Result<String> {
         self.asked.borrow_mut().push(message.to_owned());
+        self.events.borrow_mut().push(format!("ask: {message}"));
         Ok(if message.contains("new password") {
             PASSWORD.to_owned()
         } else {
@@ -252,6 +257,7 @@ impl joedocs::client::Prompt for Terminal {
             *self.secret.borrow_mut() = joedocs::totp::base32_decode(base32);
         }
         self.shown.borrow_mut().push(text.to_owned());
+        self.events.borrow_mut().push(format!("show: {text}"));
     }
 }
 
@@ -777,4 +783,40 @@ fn auth_commands_refuse_a_malformed_success_reply() {
             assert_eq!(refused.exit_code(), 70, "{args:?} with {body}: {refused}");
         }
     }
+}
+
+#[test]
+fn the_first_sign_in_asks_for_the_new_password_before_showing_the_secret_and_the_code() {
+    let server = Server::start().unwrap();
+    let terminal = server.first_sign_in().unwrap();
+    let events = terminal.events.borrow().clone();
+    let at = |what: &str| {
+        events
+            .iter()
+            .position(|e| e.contains(what))
+            .unwrap_or_else(|| panic!("{what}: {events:#?}"))
+    };
+    let choose = at("ask: Choose a new password");
+    let repeat = at("ask: Repeat the new password");
+    let secret = at("Secret:");
+    let code = at("ask: Code from your authenticator: ");
+    assert!(
+        choose < repeat && repeat < secret && secret < code,
+        "{events:#?}"
+    );
+    // The code is the last thing asked before the setup is sent.
+    assert_eq!(
+        events[code + 1..]
+            .iter()
+            .filter(|e| e.starts_with("ask: "))
+            .count(),
+        0,
+        "{events:#?}"
+    );
+    assert!(
+        events[..choose]
+            .iter()
+            .any(|e| e.contains("First choose your password")),
+        "the order is explained: {events:#?}"
+    );
 }

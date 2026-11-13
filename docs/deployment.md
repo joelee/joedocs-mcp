@@ -238,7 +238,7 @@ The admin commands can also run from another machine, through the server's admin
    joedocs auth logout
    ```
 
-   At this first sign-in it shows a TOTP secret, its `otpauth://` URI and a QR code: add it to Google Authenticator (or another TOTP app), type a code from it, then choose your password (12 or more characters). The machine keeps a device credential in `~/.local/state/joedocs/devices.toml` (`0600`), so later sign-ins there need only a code: when a session ends after `admin.session_hours`, the next command asks for one. A device unused for `admin.device_days` (30 by default) signs in with the password again.
+   At this first sign-in it asks you to choose your password (12 or more characters, typed twice), then shows a TOTP secret, its `otpauth://` URI and a QR code: add it to Google Authenticator (or another TOTP app) and type a code from it. The machine keeps a device credential in `~/.local/state/joedocs/devices.toml` (`0600`), so later sign-ins there need only a code: when a session ends after `admin.session_hours`, the next command asks for one. A device unused for `admin.device_days` (30 by default) signs in with the password again.
 
 `joedocs auth devices` lists your devices and `auth devices revoke NAME` ends one; `joedocs user disable alice` on the server (or as another signed-in user) ends all of a user's sessions and devices at once, and `user reset-totp alice` lets a user who lost their authenticator set up a new one. The server's `/admin/v1/` path must be reachable the same way as `/mcp` (for example through `tailscale serve`), and `server.allowed_hosts` must list the name you use.
 
@@ -262,7 +262,7 @@ The admin API can also serve pages for a browser under `/admin/`: browse, search
 
    `joedocs serve` then prints `JoeDocs web interface: http://127.0.0.1:8750/admin/`, and `joedocs status` says it is on.
 2. Create a user as in 6a step 2.
-3. Open `https://<your server>/admin/` and sign in with your user name and password and a code. At the first sign-in, the one-time password leads to the setup page: scan its QR code (or type the secret) into your authenticator, type a code, and choose your password. The browser keeps a web session for `admin.session_hours`; the password is not stored. The Users page creates and manages users, and Your account (in the session menu) changes your password and revokes your devices.
+3. Open `https://<your server>/admin/` and sign in with your user name and password and a code. At the first sign-in, the one-time password leads to the setup page: choose your password, then scan its QR code (or type the secret) into your authenticator and type a code. The browser keeps a web session for `admin.session_hours`; the password is not stored. The Users page creates and manages users, and Your account (in the session menu) changes your password and revokes your devices.
 
 **HTTPS.** Signing in is refused over plain HTTP except on the server itself (`http://localhost:8750/admin/`, `127.0.0.1` or `[::1]`), so reach it through `tailscale serve` or a TLS proxy (section 5), not through `bind` set to a Tailscale address. Over HTTPS the session cookie is `Secure` and host-only (`__Host-`).
 

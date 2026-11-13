@@ -8,6 +8,16 @@
   {% endif %}
   <form method="post" action="/admin/setup" class="stack">
     <input type="hidden" name="next" value="{{ next }}">
+    {% if totp.is_some() %}
+    <p>First choose your password; then add JoeDocs to your authenticator and type the code it shows, so the code is fresh when you send it.</p>
+    {% else %}
+    <p>Your password was reset. Choose your own to finish signing in.</p>
+    {% endif %}
+    <label for="password">New password</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required aria-describedby="password-hint">
+    <p class="hint" id="password-hint">At least 12 characters; a few unrelated words make a good one. Not your user name or a common password.</p>
+    <label for="password-again">Repeat the new password</label>
+    <input id="password-again" name="password_again" type="password" autocomplete="new-password" minlength="12" required>
     {% if let Some(totp) = totp %}
     <p>Add this account to an authenticator app (such as Google Authenticator) by scanning the code, or by typing the secret.</p>
     <figure class="qr" role="img" aria-label="QR code of the authenticator setup link">{{ totp.svg|safe }}</figure>
@@ -18,14 +28,7 @@
     </details>
     <label for="code">Code from your authenticator</label>
     <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
-    {% else %}
-    <p>Your password was reset. Choose your own to finish signing in.</p>
     {% endif %}
-    <label for="password">New password</label>
-    <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required aria-describedby="password-hint">
-    <p class="hint" id="password-hint">At least 12 characters; a few unrelated words make a good one. Not your user name or a common password.</p>
-    <label for="password-again">Repeat the new password</label>
-    <input id="password-again" name="password_again" type="password" autocomplete="new-password" minlength="12" required>
     <button type="submit">{% if totp.is_some() %}Confirm and sign in{% else %}Save and sign in{% endif %}</button>
   </form>
 </main>

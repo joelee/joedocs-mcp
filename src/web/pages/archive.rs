@@ -20,7 +20,18 @@ struct ArchivePage<'a> {
     chrome: Chrome<'a>,
     projects: Vec<Choice>,
     types: Vec<Choice>,
+    /// What the last action did, when the URL says.
+    notice: Option<String>,
+    results: ArchiveResults,
+}
+
+/// The results region, also sent alone to htmx when a filter changes.
+#[derive(Template)]
+#[template(path = "archive_results.html")]
+struct ArchiveResults {
     items: Vec<ArchivedInfo>,
+    /// The session's CSRF token, for the restore forms.
+    csrf: String,
 }
 
 /// `GET /admin/archive`, with `project` and `type`.
@@ -53,15 +64,37 @@ pub(crate) fn list(
         }))
         .collect()
     };
+    let results = ArchiveResults {
+        items,
+        csrf: session.csrf.clone(),
+    };
+    if request.wants_fragment() {
+        return Ok(render(StatusCode::OK, &results));
+    }
     let page = ArchivePage {
         title: "Archive",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Archive, ""),
         projects: choices(&names, project, "All projects"),
         types: choices(&store.settings().types, doc_type, "All types"),
-        items,
+        notice: notice(request),
+        results,
     };
     Ok(render(StatusCode::OK, &page))
+}
+
+/// The notice for `done=archived` and the archived `id`.
+fn notice(request: &WebRequest) -> Option<String> {
+    if request.query("done")? != "archived" {
+        return None;
+    }
+    let id = request
+        .query("id")?
+        .parse::<crate::document::DocumentId>()
+        .ok()?;
+    Some(format!(
+        "Archived {id}. Restore it from the list below to bring it back as a new revision."
+    ))
 }
 
 /// `POST /admin/archive/{id}/restore`: back to the document, which reports

@@ -84,9 +84,20 @@ The admin web interface lives in `src/web/`, with its Askama templates in `templ
 
 - **Templates** in `templates/` are checked and compiled by `cargo build`; a template error is a compile error. Each page module in `src/web/pages/` owns a `#[derive(Template)]` struct for its template. Askama escapes every value; use `|safe` only for HTML the code wrote itself from escaped parts (the Markdown renderer's output, a rendered fragment).
 - **No inline script or style.** The Content-Security-Policy allows no inline script, and no inline style except on pages with a Mermaid diagram. Behaviour goes in `src/web/assets/app.js` as event listeners (never `eval`, `hx-on` or `js:` values); styles go in `app.css`, with colours as the design tokens at its top (`light-dark()` pairs, at least 4.5:1 contrast in both themes). `tests/web.rs` checks every page for one `<h1>`, labelled controls, table headers, image `alt`, and no `style`, `on...` or inline `<script>`.
+- **Live filters.** A filter form that applies as it changes carries `hx-get` (its own path), `hx-trigger` (`change, submit` for selects, `input changed delay:300ms, submit` for text), `hx-target="#results"` and `hx-push-url="true"`; its results sit in `<section id="results" data-focus="keep" data-announce="...">`, rendered by their own template (`*_results.html`), which the handler sends alone when `WebRequest::wants_fragment`. The submit button sits in `<div class="filters-apply">`: `app.js` puts `js` on `<html>`, and `.js .filters-apply` hides the button from view but keeps it in the form, so Enter still submits and the button shows again when the keyboard reaches it.
+- **Sortable tables.** A table that shows every row is marked `<table data-sortable>`, and each header it sorts by `data-sort` (leave it off action columns). `app.js` turns those headers into buttons that cycle ascending, descending and the server's order, and sets `aria-sort`. A cell sorts by its `data-sort-value` when it has one (give every time cell its RFC 3339 value, empty for "never"), a `.num` column as numbers, and any other cell by its text, with numbers inside compared by value. A paged table sorts on the server instead, with header links (Documents, `src/web/pages/documents.rs`).
 - **Dialogs** open with invoker commands (`commandfor` and `command="show-modal"`) and close with a `formmethod="dialog"` button, so they work without JavaScript.
 - **Routes.** A new route is added to `Route` in `src/web/mod.rs` with its audit tool (the matching admin API operation), and to the route table in that module's documentation; a test requests every route in the table and checks its audit row. Every route but the sign-in page needs a session by default.
 - **Static files** are served under `/admin/assets/<hash>/<name>`; the hash changes with the content, so browsers never keep an old copy.
+- **Icons.** `src/web/assets/favicon.svg` is the source; `favicon.ico` (16, 32 and 48 pixels) and `apple-touch-icon.png` (180 pixels, square corners, because phones round them) are drawn from it with `rsvg-convert` (librsvg) and ImageMagick, which are needed only to redraw them, not to build. After changing the SVG:
+
+  ```bash
+  cd src/web/assets && t=$(mktemp -d)
+  for n in 16 32 48; do rsvg-convert -w $n -h $n favicon.svg -o $t/$n.png; done
+  magick $t/16.png $t/32.png $t/48.png favicon.ico
+  sed 's/ rx="14"//' favicon.svg > $t/square.svg
+  rsvg-convert -w 180 -h 180 $t/square.svg -o $t/touch.png && magick $t/touch.png -strip apple-touch-icon.png
+  ```
 - **Trying it.** `JOEDOCS__ADMIN__ENABLED=true JOEDOCS__ADMIN__WEB_UI=true cargo run -- serve` with a scratch `JOEDOCS__STORAGE__HOME` and `JOEDOCS__STORAGE__STATE_DIR`, a user from `cargo run -- user create dev` on the same store (its one-time password is the last line), then `http://127.0.0.1:8750/admin/`, where the first sign-in sets up TOTP.
 
 ### Vendored browser files

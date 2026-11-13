@@ -423,30 +423,36 @@ impl<'a> Remote<'a> {
     }
 
     /// Sets up TOTP (when due) and a new password with the setup ticket.
+    /// The password comes first and the code last, so the code is fresh
+    /// when it is sent.
     fn set_up(&self, user: &str, device: &str, setup: &Value) -> Result<SignedIn, Error> {
         let ticket = field(setup, "ticket")?;
         let totp = setup.get("totp").filter(|t| !t.is_null());
-        if let Some(totp) = totp {
-            let uri = field(totp, "uri")?;
-            self.prompt.show(&format!(
-                "Two-factor authentication is required. Add this account to your authenticator app:\n  Secret: {}\n  URI:    {uri}\n{}",
-                field(totp, "secret")?,
-                terminal_qr(&uri)
-            ));
+        self.prompt.show(if totp.is_some() {
+            "Two-factor authentication is required. First choose your password; then add this account to your authenticator app and type the code it shows."
         } else {
-            self.prompt
-                .show("Your password was reset: choose a new one.");
-        }
-        let mut code = String::new();
+            "Your password was reset: choose a new one."
+        });
+        let mut shown = false;
+        let mut accepted: Option<String> = None;
         let mut last = None;
         for _ in 0..ATTEMPTS {
-            if totp.is_some() && code.is_empty() {
-                code = self.ask("Code from your authenticator: ")?;
-            }
-            let password = self.new_password()?;
+            let password = match accepted.take() {
+                Some(password) => password,
+                None => self.new_password()?,
+            };
             let mut body = json!({"ticket": ticket, "password": password, "device": device});
-            if !code.is_empty() {
-                body["code"] = json!(code);
+            if let Some(totp) = totp {
+                if !shown {
+                    let uri = field(totp, "uri")?;
+                    self.prompt.show(&format!(
+                        "Add this account to your authenticator app:\n  Secret: {}\n  URI:    {uri}\n{}",
+                        field(totp, "secret")?,
+                        terminal_qr(&uri)
+                    ));
+                    shown = true;
+                }
+                body["code"] = json!(self.ask("Code from your authenticator: ")?);
             }
             let reply = self.send(reqwest::Method::POST, "auth/setup", None, Some(&body))?;
             match reply.into_result() {
@@ -465,8 +471,10 @@ impl<'a> Remote<'a> {
                     });
                 }
                 Err(Error::Auth(why)) if why.contains("not valid") && totp.is_some() => {
+                    // The password passed its checks; only a new code is
+                    // needed.
                     self.prompt.show("That code was not accepted.");
-                    code.clear();
+                    accepted = Some(password);
                     last = Some(Error::Auth(why));
                 }
                 Err(other) => return Err(other),

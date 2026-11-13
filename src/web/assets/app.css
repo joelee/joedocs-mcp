@@ -120,6 +120,9 @@ main:focus { outline: none; }
 }
 .sidenav a:hover { background: var(--surface-2); }
 .sidenav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+/* The Menu control shows only on narrow screens; on wide ones the list is
+   always there. */
+.nav-toggle { display: none; }
 
 main { grid-area: main; padding: var(--space-6); min-width: 0; max-width: 78rem; }
 
@@ -138,12 +141,23 @@ main { grid-area: main; padding: var(--space-6); min-width: 0; max-width: 78rem;
 }
 
 @media (max-width: 720px) {
-  .shell { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "nav" "main"; }
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 1fr; grid-template-areas: "top" "nav" "main"; }
   .topbar { flex-wrap: wrap; }
   .topbar-search { order: 3; flex-basis: 100%; max-width: none; }
+  .topbar [data-theme-toggle] { margin-left: auto; }
+  .session-menu .menu { min-width: 0; width: min(16rem, calc(100vw - 2rem)); }
   .sidenav { border-right: 0; border-bottom: 1px solid var(--border); padding: var(--space-2); }
-  .sidenav ul { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-  .sidenav a { padding: var(--space-1) var(--space-2); }
+  .nav-toggle {
+    display: flex; align-items: center; gap: var(--space-2); min-height: 44px;
+    padding: 0 var(--space-2); cursor: pointer; font-weight: 600; list-style: none;
+  }
+  .nav-toggle::-webkit-details-marker { display: none; }
+  /* The glyph is decoration: the empty alternative text keeps it out of
+     the control's name, which stays "Menu". */
+  .nav-toggle::before { content: "\2630"; content: "\2630" / ""; font-size: 1.1em; }
+  .nav-menu[open] > .nav-toggle::before { content: "\2715"; content: "\2715" / ""; }
+  .sidenav ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: var(--space-1); padding-bottom: var(--space-2); }
+  .sidenav a { padding: var(--space-2); min-height: 44px; display: flex; align-items: center; }
   main { padding: var(--space-4); }
 }
 
@@ -193,6 +207,14 @@ section { margin-bottom: var(--space-8); }
 
 /* --- Tables ---------------------------------------------------------- */
 
+/* Sortable column headers: the link names the column, the arrow shows the
+   order the table is in. */
+th .sort-link, th .sort-button { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: var(--space-1); min-height: 24px; }
+th .sort-button { background: none; border: 0; padding: 0; font: inherit; font-weight: inherit; text-align: inherit; cursor: pointer; }
+th .sort-link:hover, th .sort-link:focus-visible, th .sort-button:hover, th .sort-button:focus-visible { text-decoration: underline; }
+th .sort-link::after, th .sort-button::after { content: "\2195"; opacity: 0.45; font-size: 0.85em; }
+th[aria-sort="ascending"] .sort-link::after, th[aria-sort="ascending"] .sort-button::after { content: "\2191"; opacity: 1; }
+th[aria-sort="descending"] .sort-link::after, th[aria-sort="descending"] .sort-button::after { content: "\2193"; opacity: 1; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
 table { border-collapse: collapse; width: 100%; font-size: var(--text-sm); }
 th, td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -225,6 +247,17 @@ button:disabled, button[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 .stack { display: grid; gap: var(--space-2); }
 .filters { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end; margin-bottom: var(--space-4); }
 .filters > div { display: grid; gap: var(--space-1); }
+/* Filters apply as they change (htmx), so with scripts on the button is
+   hidden from view; it stays in the form so Enter still submits it. */
+.js .filters-apply {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+/* Shown again when the keyboard reaches it, so focus is never invisible. */
+.js .filters-apply:focus-within {
+  position: static; width: auto; height: auto; margin: 0;
+  overflow: visible; clip-path: none; white-space: normal;
+}
 
 .notice { padding: var(--space-3) var(--space-4); border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); }
 .notice.error { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); }
@@ -299,6 +332,11 @@ pre.report-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .hit p { margin: 0; }
 .hit-head { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; }
 .hit-link { font-weight: 600; }
+/* The document whose ID was searched for, above the word matches. */
+.id-match { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--radius); padding: var(--space-3) var(--space-4); margin-top: var(--space-3); }
+.id-match p { margin: 0; }
+.id-match .hit-meta { margin-top: var(--space-1); }
+.id-match-link { font-weight: 600; }
 .hit-file { font-family: var(--mono); font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
 .hit .hit-meta { margin-top: var(--space-1); }
 .hit .snippet { margin-top: var(--space-2); overflow-wrap: anywhere; }
@@ -410,3 +448,11 @@ summary.callout-title { cursor: pointer; }
 .qr { margin: var(--space-3) 0; max-width: 16rem; background: #fff; padding: var(--space-2); border-radius: var(--radius); }
 .qr svg { display: block; width: 100%; height: auto; }
 code.break { overflow-wrap: anywhere; }
+
+/* Last, so it wins over the smaller text of controls in tables and the
+   search filters: iOS zooms into a focused control whose text is under
+   16px, and small targets are hard to tap. */
+@media (max-width: 720px) {
+  input, select, textarea, .search-json input { font-size: 16px; }
+  button.link { min-height: 24px; }
+}

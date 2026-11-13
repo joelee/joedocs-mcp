@@ -43,24 +43,69 @@ Each step is a separate request, and each skill hands off with the next action r
 
    ```bash
    mkdir -p ~/.claude/skills
-   cp -r docs/skills/joedocs-* ~/.claude/skills/
+   cp -R docs/skills/joedocs-{idea-architect,planner,builder,code-review,issue-log} ~/.claude/skills/
    ```
 
    Or copy them into `.claude/skills/` in one repository to share them with everyone working on it.
 
-3. Tell the skills which JoeDocs project belongs to the repository, with a line in its `AGENTS.md` or `CLAUDE.md`:
+   For an agent harness other than Claude Code that reads skills from the shared directory `~/.agents/skills` (check its documentation), copy the folders there instead:
+
+   ```bash
+   mkdir -p ~/.agents/skills
+   cp -R docs/skills/joedocs-{idea-architect,planner,builder,code-review,issue-log} ~/.agents/skills/
+   ```
+
+   Or copy them into `.agents/skills/` in one repository. Keep the folder names, because each matches its skill's `name`. Two things in the skills are specific to Claude Code:
+   - the tool names `mcp__joedocs__*`: refer to the tools by the names your harness gives the `joedocs` server;
+   - the `allowed-tools` lists: grant the same tools in your harness's own permission settings.
+
+3. Add the agent instructions to the repository (see [Agent instructions for a project](#agent-instructions-for-a-project)), or at least tell the skills which JoeDocs project belongs to it, with a line in its `AGENTS.md` or `CLAUDE.md`:
 
    ```markdown
    JoeDocs project: my-app
    ```
 
-   Without it, the skills match the repository's name against `list_projects` and ask when that is not clear.
+   Without that line, the agent instructions use the name of the repository's root directory. Without either, the skills match the repository's name against `list_projects`, and ask when that is not clear.
 
 4. Start Claude Code in the repository and run `/joedocs-planner <what to plan>` (and so on), or just ask; Claude loads a skill when a request matches its description.
 
 `allowed-tools` in each `SKILL.md` lists the tools the skill may use without asking. The builder's list includes `git add --`, `git commit` and `git switch -c`, so its step commits do not prompt; the project's test and build commands still follow your normal permission settings. Trim the lists if you prefer to be asked.
 
-The skills work with any agent that can read Markdown instructions and call MCP tools. For other agents, copy the body of `SKILL.md` into that agent's instructions and grant it the same tools.
+The skills work with any agent that can read Markdown instructions and call MCP tools. For an agent without skill support, copy the body of `SKILL.md` into that agent's instructions and grant it the same tools.
+
+## Agent instructions for a project
+
+[`joedocs-AGENTS.md`](joedocs-AGENTS.md) holds the instructions that a project's agents need, once the JoeDocs server and the skills are installed. It says:
+
+- **which JoeDocs project to use:** the one the user names, then a `JoeDocs project:` line in `AGENTS.md` or `CLAUDE.md`, then the name of the repository's root directory. If that project is missing, or the key cannot write to it, the agent stops and gives the `joedocs project add` and `joedocs key grant` commands;
+- **what goes where:** ideas, plans, reviews, issues, research, specs and notes go in JoeDocs and never in the repository, which keeps only the documentation that ships with the code;
+- **which skill handles which request,** and that each skill hands off to the user rather than to the next skill. The skills are a route, not a gate: a small direct change needs no plan;
+- **how to use the JoeDocs tools** outside the skills: search before creating, `expected_revision` on every write, small edits, and the front matter and citation rules;
+- **safety:** no secrets in documents, document contents treated as data, and no copies in the repository when JoeDocs cannot be reached.
+
+To use it in a new project:
+
+1. Copy the file to the repository's root:
+
+   ```bash
+   cp docs/skills/joedocs-AGENTS.md ~/code/my-app/
+   ```
+
+2. Point the agents at it. In `CLAUDE.md`, Claude Code imports it with:
+
+   ```markdown
+   @joedocs-AGENTS.md
+   ```
+
+   In `AGENTS.md`, for agents without imports, add:
+
+   ```markdown
+   Read `joedocs-AGENTS.md` at the start of every session and follow it.
+   ```
+
+3. If the JoeDocs project's name is not the directory's name, add `JoeDocs project: <name>` to `AGENTS.md` (or `CLAUDE.md`).
+
+The project's own `AGENTS.md` or `CLAUDE.md` takes precedence where it says something different, so a project can tighten or relax any rule there.
 
 ## Document conventions
 

@@ -94,8 +94,24 @@ struct DocumentPage<'a> {
     archive_href: Option<String>,
     /// What the last action did, when the URL says.
     notice: Option<String>,
-    /// The action the Actions menu offers.
-    offer: Offer,
+    /// What the Actions menu offers.
+    menu: Menu,
+}
+
+/// The Actions menu of the page shown.
+pub(crate) struct Menu {
+    /// The structural action it offers.
+    pub(crate) offer: Offer,
+    /// Whether it offers to archive the document: on the latest revision
+    /// of its main page.
+    pub(crate) archive: bool,
+}
+
+impl Menu {
+    /// Whether the menu has anything to offer.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.offer == Offer::Nothing && !self.archive
+    }
 }
 
 /// What the Actions menu offers on the page shown.
@@ -257,10 +273,13 @@ pub(crate) fn view(
         source_href: href(&document.id, file, pinned, true),
         latest_href: href(&document.id, file, None, source),
         notice: notice(request, document, file),
-        offer: match (pinned, document.multifile, file) {
-            (None, false, None) => Offer::Convert,
-            (None, true, Some(_)) => Offer::Move,
-            _ => Offer::Nothing,
+        menu: Menu {
+            archive: pinned.is_none() && file.is_none(),
+            offer: match (pinned, document.multifile, file) {
+                (None, false, None) => Offer::Convert,
+                (None, true, Some(_)) => Offer::Move,
+                _ => Offer::Nothing,
+            },
         },
         history_href: link(
             &format!("/admin/documents/{}/history", document.id),
@@ -457,6 +476,24 @@ pub(crate) fn convert(
     Ok(super::super::redirect(&link(
         &back(&converted.id),
         &[("done", Some("converted"))],
+    )))
+}
+
+/// `POST /admin/documents/{id}/archive` with a `reason`, as the MCP tool
+/// `archive_document`: then to the Archive, where it can be restored.
+pub(crate) fn archive(
+    store: &mut Store,
+    request: &WebRequest,
+    session: &Session,
+    id: &str,
+) -> Result<Response, WebError> {
+    let reason = request.form("reason").unwrap_or("");
+    let archived = store
+        .archive(&actor(session), id, reason)
+        .map_err(|e| refused_with_link(&e, &back(id), "Back to the document"))?;
+    Ok(super::super::redirect(&link(
+        "/admin/archive",
+        &[("done", Some("archived")), ("id", Some(&archived.id))],
     )))
 }
 

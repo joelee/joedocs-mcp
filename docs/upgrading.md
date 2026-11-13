@@ -100,6 +100,12 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.5.1 to 0.5.2
+
+- **No migration:** the database stays at version 8, so going back to 0.5.1 needs only the older binary, not a restore.
+- **The web interface changes how it works, not what it can do:** filters apply as they change, tables sort by their headers, a document ID in the search bar opens the document, documents can be archived from their page, and the pages fit a phone. Links from 0.5.1, such as `/admin/documents?sort=title`, still work.
+- **The first sign-in asks for the password first.** On the setup page and in `joedocs auth login`, a new user chooses a password before the QR code and the authenticator code. Only the order of the questions changed; flags, exit codes and the admin API are the same.
+
 ### 0.5.0 to 0.5.1
 
 - **Migrations 7 and 8** run on the first start, making the database version 8: they add users, devices, user sessions and the sign-in lock (by user ID), and two nullable audit columns. Nothing existing changes. **Take the backup in step 1 first:** going back to 0.5.0 means restoring it, because 0.5.0 refuses a version 8 database.

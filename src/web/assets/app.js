@@ -4,6 +4,10 @@
 "use strict";
 
 (() => {
+  // Scripts run: features that only work with them (filters that apply as
+  // they change) can hide what is there for browsers without them.
+  document.documentElement.classList.add("js");
+
   const THEME_KEY = "joedocs-theme";
   // Whether buttons open dialogs by themselves (invoker commands).
   const NATIVE_COMMANDS = "command" in HTMLButtonElement.prototype;
@@ -27,6 +31,19 @@
   };
 
   applyTheme(storedTheme());
+
+  // The navigation is open in the page, so it shows without this script;
+  // on a narrow screen it folds behind its Menu control, and opens again
+  // when the screen is wide enough to show it beside the page.
+  const navMenu = document.querySelector(".nav-menu");
+  const narrow = matchMedia("(max-width: 720px)");
+  const fitNav = () => {
+    if (navMenu instanceof HTMLDetailsElement) {
+      navMenu.open = !narrow.matches;
+    }
+  };
+  fitNav();
+  narrow.addEventListener("change", fitNav);
 
   const toggleTheme = () => {
     const current =
@@ -166,7 +183,68 @@
     announce(form.dataset.busy);
   });
 
+  // Tables marked `data-sortable` show every row, so they sort here: each
+  // header marked `data-sort` becomes a button that cycles ascending,
+  // descending and the order the server sent. A cell sorts by its
+  // `data-sort-value` when it has one (times), a `.num` column as numbers,
+  // and any other as text with numbers in it compared by value (JD-9
+  // before JD-10). Without this script the headers are plain text.
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const cellValue = (row, index) => {
+    const cell = row.cells[index];
+    if (!cell) {
+      return "";
+    }
+    return cell.dataset.sortValue !== undefined ? cell.dataset.sortValue : cell.textContent.trim();
+  };
+  const setUpSorting = (root) => {
+    for (const table of root.querySelectorAll("table[data-sortable]:not([data-sort-ready])")) {
+      table.dataset.sortReady = "true";
+      const body = table.tBodies[0];
+      const head = table.tHead ? table.tHead.rows[0] : null;
+      if (!body || !head) {
+        continue;
+      }
+      const original = [...body.rows];
+      const headers = [...head.cells];
+      headers.forEach((th, index) => {
+        if (!th.hasAttribute("data-sort")) {
+          return;
+        }
+        const label = th.textContent.trim();
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "sort-button";
+        button.textContent = label;
+        th.replaceChildren(button);
+        const numeric = th.classList.contains("num");
+        button.addEventListener("click", () => {
+          const state = th.getAttribute("aria-sort");
+          const next =
+            state === "ascending" ? "descending" : state === "descending" ? null : "ascending";
+          for (const other of headers) {
+            other.removeAttribute("aria-sort");
+          }
+          const rows = original.slice();
+          if (next) {
+            th.setAttribute("aria-sort", next);
+            const sign = next === "ascending" ? 1 : -1;
+            rows.sort((a, b) => {
+              const x = cellValue(a, index);
+              const y = cellValue(b, index);
+              const order = numeric ? (Number(x) || 0) - (Number(y) || 0) : collator.compare(x, y);
+              return sign * order;
+            });
+          }
+          body.append(...rows);
+          announce(next ? `Sorted by ${label}, ${next}` : "Original order");
+        });
+      });
+    }
+  };
+
   drawDiagrams(document);
+  setUpSorting(document);
 
   // After htmx swaps a region in, move focus there so keyboard and
   // screen-reader users land on the new content, and announce it. htmx 4
@@ -174,19 +252,35 @@
   // region is `detail.ctx.target`. A region marked `data-focus="keep"`
   // (search results, which reload while the user types) leaves focus where
   // it is.
+  // A control marked `data-focus-key` that htmx replaces (a sort header
+  // link inside the results it reloads) gets focus back on its new copy.
+  let focusKey = null;
+  document.addEventListener("focusin", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const keyed = target ? target.closest("[data-focus-key]") : null;
+    focusKey = keyed ? keyed.dataset.focusKey : null;
+  });
+
   document.addEventListener("htmx:after:swap", (event) => {
     const target = event.detail && event.detail.ctx ? event.detail.ctx.target : null;
     const region = target instanceof HTMLElement ? target : null;
     if (!region) {
       return;
     }
-    if (region.dataset.focus !== "keep") {
+    const lost = !document.activeElement || document.activeElement === document.body;
+    const again = focusKey
+      ? [...region.querySelectorAll("[data-focus-key]")].find((el) => el.dataset.focusKey === focusKey)
+      : null;
+    if (lost && again instanceof HTMLElement) {
+      again.focus({ preventScroll: true });
+    } else if (region.dataset.focus !== "keep") {
       if (!region.hasAttribute("tabindex")) {
         region.setAttribute("tabindex", "-1");
       }
       region.focus({ preventScroll: false });
     }
     drawDiagrams(region);
+    setUpSorting(region);
     const label = region.dataset.announce;
     if (label) {
       announce(label);

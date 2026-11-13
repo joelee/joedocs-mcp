@@ -1,4 +1,15 @@
-{% if let Some(message) = error %}
+{% if let Some(id) = archived %}
+<p class="notice" role="status">{{ id }} is archived. <a href="/admin/archive">Find it in the Archive</a>, where it can be restored.</p>
+{% endif %}
+{% if let Some(hit) = id_match %}
+<div class="id-match">
+  <p class="hint">Document {{ hit.id }}</p>
+  <p class="hit-head"><a class="id-match-link" href="{{ hit.href }}">{{ hit.title }}</a> <code class="nowrap">{{ hit.id }}</code></p>
+  <p class="hit-meta hint">{{ hit.project }} · {{ hit.doc_type }} · <span class="badge badge-status-{{ hit.status }}">{{ hit.status }}</span> · updated <time datetime="{{ hit.updated }}">{{ hit.updated }}</time></p>
+</div>
+{% endif %}
+{% if id_match.is_some() && hits.is_empty() %}
+{% else if let Some(message) = error %}
 <p class="notice error" role="alert">{{ message }}</p>
 {% else if !searched %}
 <p class="empty">Type words to find, or pick a project, type, status or front matter filter.</p>

@@ -15,14 +15,14 @@
 <p class="empty">No API keys yet.{% if projects.is_empty() %} <a href="/admin/projects">Add a project</a> first, then create a key for it.{% endif %}</p>
 {% else %}
 <div class="table-wrap">
-  <table>
+  <table data-sortable>
     <thead>
-      <tr><th scope="col">Name</th><th scope="col">Grants</th><th scope="col">Created (UTC)</th><th scope="col">Last used (UTC)</th><th scope="col">State</th><th scope="col">Actions</th></tr>
+      <tr><th scope="col" data-sort>Name</th><th scope="col">Grants</th><th scope="col" data-sort>Created (UTC)</th><th scope="col" data-sort>Last used (UTC)</th><th scope="col" data-sort>State</th><th scope="col">Actions</th></tr>
     </thead>
     <tbody>
       {% for key in keys %}
       <tr data-key="{{ key.name }}">
-        <td><strong>{{ key.name }}</strong> <code class="hint">{{ key.id }}</code></td>
+        <td data-sort-value="{{ key.name }}"><strong>{{ key.name }}</strong> <code class="hint">{{ key.id }}</code></td>
         <td>
           {% if key.grants.is_empty() %}<span class="hint">none</span>{% endif %}
           <ul class="grants">
@@ -36,8 +36,8 @@
             {% endfor %}
           </ul>
         </td>
-        <td class="nowrap">{{ key.created }}</td>
-        <td class="nowrap">{% if let Some(at) = key.last_used %}{{ at }}{% else %}<span class="hint">never</span>{% endif %}</td>
+        <td class="nowrap" data-sort-value="{{ key.created }}">{{ key.created }}</td>
+        <td class="nowrap" data-sort-value="{% if let Some(at) = key.last_used %}{{ at }}{% endif %}">{% if let Some(at) = key.last_used %}{{ at }}{% else %}<span class="hint">never</span>{% endif %}</td>
         <td>{% if let Some(at) = key.revoked %}<span class="badge badge-status-rejected">revoked</span> <span class="hint">{{ at }}</span>{% else %}<span class="badge badge-status-approved">active</span>{% endif %}</td>
         <td>
           {% if key.revoked.is_none() %}

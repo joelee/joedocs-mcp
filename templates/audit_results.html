@@ -1,0 +1,30 @@
+{% if let Some(message) = error %}
+<p class="notice error" role="alert">{{ message }}</p>
+{% else if rows.is_empty() %}
+<p class="empty">No audit entries match.</p>
+{% else %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th scope="col">Time (UTC)</th><th scope="col">Key</th><th scope="col">Client</th><th scope="col">Tool</th><th scope="col">Document</th><th scope="col">Outcome</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr data-entry="{{ row.tool }} {% if let Some(id) = row.document_id %}{{ id }}{% else %}-{% endif %} {{ row.outcome }}">
+        <td class="nowrap"><time datetime="{{ row.at }}">{{ row.at }}</time></td>
+        <td>{{ row.key_name }}</td>
+        <td>{{ row.client }}</td>
+        <td><code>{{ row.tool }}</code></td>
+        <td class="nowrap">{% if let Some(id) = row.document_id %}<a href="/admin/documents/{{ id }}">{{ id }}</a>{% else %}<span class="hint">-</span>{% endif %}</td>
+        <td>{% if row.outcome == "ok" %}<span class="badge badge-status-approved">ok</span>{% else %}<span class="badge badge-status-rejected">{{ row.outcome }}</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<nav class="pager" aria-label="Pages">
+  <span class="hint">{{ start }} to {{ shown_to }} of {{ total }}</span>
+  {% if let Some(href) = previous %}<a href="{{ href }}">Newer</a>{% endif %}
+  {% if let Some(href) = next %}<a href="{{ href }}">Older</a>{% endif %}
+</nav>
+{% endif %}

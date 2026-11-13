@@ -1,0 +1,38 @@
+{% if let Some((column, descending)) = sort %}
+<input type="hidden" name="sort" value="{{ column }}" form="documents-filters">
+{% if *descending %}<input type="hidden" name="dir" value="desc" form="documents-filters">{% endif %}
+{% endif %}
+{% if let Some(project) = project %}
+<p class="lede">{{ project.title }} <code>{{ project.key }}</code>, {{ total }} live documents match</p>
+{% endif %}
+{% if items.is_empty() %}
+<p class="empty">No documents match. Try another type or status.</p>
+{% else %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        {% for header in headers %}<th scope="col"{% if !header.class.is_empty() %} class="{{ header.class }}"{% endif %}{% if let Some(sorted) = header.aria_sort %} aria-sort="{{ sorted }}"{% endif %}>{% if let Some(href) = header.href %}<a class="sort-link" href="{{ href }}" hx-get="{{ href }}" hx-target="#results" hx-push-url="true" data-focus-key="sort-{{ header.key }}">{{ header.label }}</a>{% else %}{{ header.label }}{% endif %}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for doc in items %}
+      <tr>
+        <td class="nowrap"><a href="/admin/documents/{{ doc.id }}"><code>{{ doc.id }}</code></a></td>
+        <td><a href="/admin/documents/{{ doc.id }}">{{ doc.title }}</a></td>
+        <td>{{ doc.doc_type }}</td>
+        <td><span class="badge badge-status-{{ doc.status }}">{{ doc.status }}</span></td>
+        <td class="num">{{ doc.revision }}</td>
+        <td class="num">{% if doc.multifile %}{{ doc.files + 1 }}{% else %}1{% endif %}</td>
+        <td><time datetime="{{ doc.updated }}">{{ doc.updated }}</time> <span class="hint">by {{ doc.updated_by }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<nav class="pager" aria-label="Pages">
+  <span class="hint">{{ start }} to {{ shown_to }} of {{ total }}</span>
+  {% if let Some(href) = previous %}<a href="{{ href }}">Previous</a>{% endif %}
+  {% if let Some(href) = next %}<a href="{{ href }}">Next</a>{% endif %}
+</nav>
+{% endif %}

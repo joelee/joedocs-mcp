@@ -225,6 +225,20 @@ pub enum Sort {
     CreatedAsc,
     /// By title, A to Z.
     Title,
+    /// By title, Z to A.
+    TitleDesc,
+    /// By type, A to Z.
+    TypeAsc,
+    /// By type, Z to A.
+    TypeDesc,
+    /// By status, A to Z.
+    StatusAsc,
+    /// By status, Z to A.
+    StatusDesc,
+    /// Fewest revisions first.
+    RevisionAsc,
+    /// Most revisions first.
+    RevisionDesc,
 }
 
 impl Sort {
@@ -235,6 +249,13 @@ impl Sort {
             Self::CreatedDesc => "d.seq DESC",
             Self::CreatedAsc => "d.seq ASC",
             Self::Title => "d.title COLLATE NOCASE ASC, d.seq ASC",
+            Self::TitleDesc => "d.title COLLATE NOCASE DESC, d.seq DESC",
+            Self::TypeAsc => "d.type ASC, d.seq ASC",
+            Self::TypeDesc => "d.type DESC, d.seq DESC",
+            Self::StatusAsc => "d.status ASC, d.seq ASC",
+            Self::StatusDesc => "d.status DESC, d.seq DESC",
+            Self::RevisionAsc => "d.revision ASC, d.seq ASC",
+            Self::RevisionDesc => "d.revision DESC, d.seq DESC",
         }
     }
 }
@@ -583,6 +604,48 @@ mod tests {
         query.status = Some("done");
         query.offset = 0;
         assert_eq!(ids(&query), (vec![4], 1));
+    }
+
+    #[test]
+    fn every_column_order_breaks_ties_by_sequence_in_its_direction() {
+        let conn = open_in_memory().unwrap();
+        let p = insert_project(&conn, "joedocs", "JD", "JoeDocs", "t").unwrap();
+        // `(seq, title, type, status, revision)`; seq 9 and 10 compare as
+        // numbers, not as the text of their IDs.
+        for (seq, title, doc_type, status, revision) in [
+            (10, "b", "plans", "draft", 2),
+            (9, "B", "ideas", "done", 1),
+            (2, "a", "plans", "draft", 2),
+        ] {
+            let mut row = doc(p, seq, &format!("x/{seq}.md"), "1");
+            row.title = title.into();
+            row.doc_type = doc_type.into();
+            row.status = status.into();
+            row.revision = revision;
+            insert_document(&conn, &row).unwrap();
+        }
+        let seqs = |sort| {
+            let query = ListQuery {
+                project_id: p,
+                doc_type: None,
+                status: None,
+                sort,
+                offset: 0,
+                limit: 10,
+            };
+            let (rows, _) = list_documents(&conn, &query).unwrap();
+            rows.into_iter().map(|d| d.seq).collect::<Vec<_>>()
+        };
+        assert_eq!(seqs(Sort::CreatedAsc), [2, 9, 10]);
+        assert_eq!(seqs(Sort::CreatedDesc), [10, 9, 2]);
+        assert_eq!(seqs(Sort::Title), [2, 9, 10]);
+        assert_eq!(seqs(Sort::TitleDesc), [10, 9, 2]);
+        assert_eq!(seqs(Sort::TypeAsc), [9, 2, 10]);
+        assert_eq!(seqs(Sort::TypeDesc), [10, 2, 9]);
+        assert_eq!(seqs(Sort::StatusAsc), [9, 2, 10]);
+        assert_eq!(seqs(Sort::StatusDesc), [10, 2, 9]);
+        assert_eq!(seqs(Sort::RevisionAsc), [9, 2, 10]);
+        assert_eq!(seqs(Sort::RevisionDesc), [10, 2, 9]);
     }
 
     #[test]

@@ -3989,3 +3989,714 @@ async fn disabling_or_resetting_a_user_ends_their_browser_sessions_for_good() ->
     );
     server.stop().await
 }
+
+// --- JD-41: 0.5.2 user experience --------------------------------------------------
+
+/// Headers of an htmx request for part of a page.
+fn htmx(cookie: &str) -> String {
+    format!("Cookie: {cookie}\r\nHX-Request: true\r\nHX-Request-Type: partial\r\n")
+}
+
+#[tokio::test]
+async fn filters_apply_on_change_and_htmx_gets_only_the_results() -> TestResult<()> {
+    let server = start_full(|_| {}, audit_fixture).await?;
+    let cookie = server.login().await?;
+    // `(path, the form's htmx trigger, a filtered query, a row it lists,
+    // a row it leaves out)`.
+    let pages = [
+        (
+            "/admin/documents",
+            "change, submit",
+            "/admin/documents?project=joedocs&type=plans",
+            "Rollout plan",
+            "Second doc",
+        ),
+        (
+            "/admin/archive",
+            "change, submit",
+            "/admin/archive?type=notes",
+            "data-archived=\"JD-4\"",
+            "No archived documents match",
+        ),
+        (
+            "/admin/audit",
+            "input changed delay:300ms, submit",
+            "/admin/audit?key=ci-bot&tool=archive_document",
+            "archive_document JD-4 ok",
+            "new_document JD-2 ok",
+        ),
+    ];
+    for (path, trigger, query, listed, absent) in pages {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}: {}", page.body);
+        for needle in [
+            format!("hx-get=\"{path}\""),
+            format!("hx-trigger=\"{trigger}\""),
+            "hx-target=\"#results\"".to_owned(),
+            "hx-push-url=\"true\"".to_owned(),
+            "id=\"results\"".to_owned(),
+            "data-focus=\"keep\"".to_owned(),
+            // The button stays for Enter and for browsers without scripts.
+            "class=\"filters-apply\"".to_owned(),
+        ] {
+            assert!(
+                page.body.contains(&needle),
+                "{path} {needle}: {}",
+                page.body
+            );
+        }
+        let fragment = server.send("GET", query, &htmx(&cookie), "").await?;
+        assert_eq!(fragment.status, 200, "{query}: {}", fragment.body);
+        assert!(
+            !fragment.body.contains("<html"),
+            "{query}: {}",
+            fragment.body
+        );
+        assert!(
+            !fragment.body.contains("class=\"filters"),
+            "only the results, not the filters: {query}"
+        );
+        assert!(fragment.body.contains(listed), "{query}: {}", fragment.body);
+        assert!(
+            !fragment.body.contains(absent),
+            "{query}: {}",
+            fragment.body
+        );
+        let whole = server.get(query, Some(&cookie)).await?;
+        assert!(whole.body.contains("<html"), "a plain request: {query}");
+        assert!(whole.body.contains(listed), "{query}");
+    }
+    // The project line follows the project picked.
+    let notes = server
+        .send("GET", "/admin/documents?project=notes", &htmx(&cookie), "")
+        .await?;
+    assert!(notes.body.contains("<code>NT</code>"), "{}", notes.body);
+    // A refused audit filter answers with its message as a fragment.
+    let refused = server
+        .send("GET", "/admin/audit?since=yesterday", &htmx(&cookie), "")
+        .await?;
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert!(!refused.body.contains("<html"), "{}", refused.body);
+    assert!(refused.body.contains("notice error"), "{}", refused.body);
+    server.stop().await
+}
+
+/// The titles of the Documents rows, in order.
+fn titles(body: &str) -> Vec<String> {
+    body.split("<td><a href=\"/admin/documents/")
+        .skip(1)
+        .filter_map(|part| {
+            let start = part.find("\">")? + 2;
+            let end = part[start..].find("</a>")?;
+            Some(part[start..start + end].to_owned())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn documents_sort_by_their_column_headers_across_pages() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &str| {
+        let path = format!("/admin/documents?project=joedocs{query}");
+        let cookie = cookie.clone();
+        let server = &server;
+        async move { server.get(&path, Some(&cookie)).await }
+    };
+    // Unsorted: every sortable header links to its ascending order; Files
+    // is not sortable, and the Order select is gone.
+    let plain = get("").await?;
+    assert_eq!(plain.status, 200, "{}", plain.body);
+    for column in ["id", "title", "type", "status", "revision", "updated"] {
+        let link = format!("href=\"/admin/documents?project=joedocs&#38;sort={column}\"");
+        assert!(plain.body.contains(&link), "{link}: {}", plain.body);
+    }
+    assert!(!plain.body.contains("sort=files"), "{}", plain.body);
+    assert!(!plain.body.contains("id=\"f-sort\""), "{}", plain.body);
+    assert!(!plain.body.contains("aria-sort"), "{}", plain.body);
+
+    // Ascending, then descending, then back to the default order.
+    let ascending = get("&sort=title").await?;
+    assert_eq!(
+        titles(&ascending.body),
+        ["Backlog", "Rollout plan", "Second doc"]
+    );
+    assert!(
+        ascending.body.contains("aria-sort=\"ascending\""),
+        "{}",
+        ascending.body
+    );
+    assert!(
+        ascending
+            .body
+            .contains("href=\"/admin/documents?project=joedocs&#38;sort=title&#38;dir=desc\""),
+        "{}",
+        ascending.body
+    );
+    // The filter form keeps the order through a hidden field it owns.
+    assert!(
+        ascending
+            .body
+            .contains("name=\"sort\" value=\"title\" form=\"documents-filters\""),
+        "{}",
+        ascending.body
+    );
+    let descending = get("&sort=title&dir=desc").await?;
+    assert_eq!(
+        titles(&descending.body),
+        ["Second doc", "Rollout plan", "Backlog"]
+    );
+    assert!(descending.body.contains("aria-sort=\"descending\""));
+    let title_header = descending
+        .body
+        .split("<th")
+        .find(|th| th.contains(">Title<"))
+        .ok_or("no Title header")?;
+    assert!(
+        title_header.contains("href=\"/admin/documents?project=joedocs\""),
+        "the third click goes back to the default order: {title_header}"
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn each_column_order_pages_and_the_0_5_1_orders_still_work() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &str| {
+        let path = format!("/admin/documents?project=joedocs{query}");
+        let cookie = cookie.clone();
+        let server = &server;
+        async move { server.get(&path, Some(&cookie)).await }
+    };
+    for (query, expected) in [
+        ("&sort=id", ["Rollout plan", "Second doc", "Backlog"]),
+        (
+            "&sort=id&dir=desc",
+            ["Backlog", "Second doc", "Rollout plan"],
+        ),
+        // Ties go by ID, in the same direction.
+        (
+            "&sort=revision&dir=desc",
+            ["Backlog", "Rollout plan", "Second doc"],
+        ),
+        ("&sort=type", ["Second doc", "Backlog", "Rollout plan"]),
+        ("&sort=status", ["Second doc", "Rollout plan", "Backlog"]),
+        ("&sort=updated", ["Rollout plan", "Second doc", "Backlog"]),
+    ] {
+        let page = get(query).await?;
+        assert_eq!(page.status, 200, "{query}: {}", page.body);
+        assert_eq!(titles(&page.body), expected, "{query}");
+    }
+
+    // Header links keep the filters and the page size, and start at the
+    // first page; the pager keeps the order.
+    let paged = get("&type=notes&sort=title&dir=desc&start=2&limit=1").await?;
+    assert_eq!(titles(&paged.body), ["Backlog"]);
+    assert!(
+        paged.body.contains(
+            "href=\"/admin/documents?project=joedocs&#38;type=notes&#38;sort=id&#38;limit=1\""
+        ),
+        "{}",
+        paged.body
+    );
+    assert!(
+        paged.body.contains(
+            "href=\"/admin/documents?project=joedocs&#38;type=notes&#38;sort=title&#38;dir=desc&#38;limit=1\""
+        ),
+        "the previous page keeps the order: {}",
+        paged.body
+    );
+
+    // The 0.5.1 orders still work.
+    for legacy in [
+        "updated_desc",
+        "updated_asc",
+        "created_desc",
+        "created_asc",
+        "title",
+    ] {
+        let page = get(&format!("&sort={legacy}")).await?;
+        assert_eq!(page.status, 200, "{legacy}: {}", page.body);
+    }
+    assert_eq!(
+        titles(&get("&sort=created_desc").await?.body),
+        ["Backlog", "Second doc", "Rollout plan"]
+    );
+    for bad in ["&sort=nope", "&sort=files", "&sort=title&dir=sideways"] {
+        let page = get(bad).await?;
+        assert_eq!(page.status, 400, "{bad}: {}", page.body);
+    }
+    server.stop().await
+}
+
+/// The first table in `body` after `from`, up to its end.
+fn table_after<'a>(body: &'a str, from: &str) -> TestResult<&'a str> {
+    let start = body.find(from).ok_or("no such place")?;
+    let table = body[start..].find("<table").ok_or("no table")? + start;
+    let end = body[table..].find("</table>").ok_or("no table end")? + table;
+    Ok(&body[table..end])
+}
+
+/// Checks a table the browser sorts: marked, with `data-sort` on every
+/// header but `unsorted`, and a sort value on every time cell.
+fn assert_sortable(table: &str, unsorted: &[&str]) {
+    assert!(table.starts_with("<table data-sortable"), "{table}");
+    for th in table.split("<th ").skip(1) {
+        let label = th
+            .split_once('>')
+            .map_or("", |(_, rest)| rest.split('<').next().unwrap_or(""));
+        let marked = th.starts_with("scope=\"col\" data-sort");
+        assert_eq!(marked, !unsorted.contains(&label), "{label}: {th}");
+    }
+    for cell in table.split("<td class=\"nowrap\"").skip(1) {
+        assert!(
+            cell.starts_with(" data-sort-value=\""),
+            "a time cell: {cell}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn tables_that_show_every_row_sort_in_the_browser_and_paged_ones_do_not() -> TestResult<()> {
+    let initial = Arc::new(std::sync::Mutex::new(String::new()));
+    let keep = Arc::clone(&initial);
+    let server = start_full(
+        |_| {},
+        move |store| {
+            audit_fixture(store)?;
+            let password = joedocs::password::initial_password(&joedocs::auth::OsRandom)?;
+            let hash = joedocs::password::hash(&password, &joedocs::auth::OsRandom)?;
+            store.create_user("alice", &hash, &joedocs::auth::OsRandom)?;
+            if let Ok(mut slot) = keep.lock() {
+                password.expose_secret().clone_into(&mut slot);
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    let password = initial.lock().map(|p| p.clone()).unwrap_or_default();
+    let (cookie, _, secret) = signed_in_user(&server, &password).await?;
+    let body = serde_json::json!({
+        "user": "alice", "password": USER_PASSWORD, "code": code_for(&server, &secret), "device": "laptop"
+    })
+    .to_string();
+    let api = server
+        .send(
+            "POST",
+            "/admin/v1/auth/login",
+            "content-type: application/json\r\n",
+            &body,
+        )
+        .await?;
+    assert_eq!(api.status, 200, "{}", api.body);
+    server.clock.advance(30);
+
+    let page = |path: &'static str| {
+        let cookie = cookie.clone();
+        let server = &server;
+        async move {
+            let page = server.get(path, Some(&cookie)).await?;
+            assert_eq!(page.status, 200, "{path}: {}", page.body);
+            TestResult::Ok(page.body)
+        }
+    };
+    let projects = page("/admin/projects").await?;
+    assert_sortable(table_after(&projects, "<main")?, &[]);
+    let keys = page("/admin/keys").await?;
+    assert_sortable(table_after(&keys, "<main")?, &["Grants", "Actions"]);
+    let users = page("/admin/users").await?;
+    assert_sortable(table_after(&users, "<main")?, &["Actions"]);
+    let account = page("/admin/account").await?;
+    assert!(account.contains("laptop"), "{account}");
+    assert_sortable(table_after(&account, "<main")?, &["Actions"]);
+    let archive = page("/admin/archive").await?;
+    assert_sortable(table_after(&archive, "id=\"results\"")?, &["Action"]);
+    let overview = page("/admin/").await?;
+    assert_sortable(table_after(&overview, "<main")?, &[]);
+    // The Overview's recent activity stays newest first.
+    let recent = overview.rfind("<table").ok_or("no second table")?;
+    assert!(!overview[recent..].starts_with("<table data-sortable"));
+    for path in [
+        "/admin/audit",
+        "/admin/search",
+        "/admin/documents/JD-1/history",
+    ] {
+        let body = page(path).await?;
+        assert!(!body.contains("data-sortable"), "{path}");
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn a_document_id_in_the_search_opens_that_document() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let before = server.audit()?.len();
+    // The top bar sends a plain request: an exact ID of a live document,
+    // in any case and with spaces around it, opens it.
+    for query in ["JD-2", "jd-2", "%20jD-2%20"] {
+        let reply = server
+            .get(&format!("/admin/search?q={query}"), Some(&cookie))
+            .await?;
+        assert_eq!(reply.status, 303, "{query}: {}", reply.body);
+        assert_eq!(
+            reply.header("location"),
+            Some("/admin/documents/JD-2"),
+            "{query}"
+        );
+    }
+    let rows = server.audit()?;
+    assert!(
+        rows[before..]
+            .iter()
+            .all(|(tool, _, outcome)| tool == "admin:documents.search" && outcome == "ok"),
+        "{:?}",
+        &rows[before..]
+    );
+    // Typing it into the live search lists it first and stays put.
+    let live = server
+        .send("GET", "/admin/search?q=jd-2", &htmx(&cookie), "")
+        .await?;
+    assert_eq!(live.status, 200, "{}", live.body);
+    assert!(live.body.contains("class=\"id-match\""), "{}", live.body);
+    let first = live
+        .body
+        .find("href=\"/admin/documents/")
+        .ok_or("no link")?;
+    assert!(
+        live.body[first..].starts_with("href=\"/admin/documents/JD-2\""),
+        "{}",
+        live.body
+    );
+    assert!(live.body.contains("Second doc"), "{}", live.body);
+    // An archived document's ID says where it went.
+    for headers in [format!("Cookie: {cookie}\r\n"), htmx(&cookie)] {
+        let archived = server
+            .send("GET", "/admin/search?q=JD-4", &headers, "")
+            .await?;
+        assert_eq!(archived.status, 200, "{}", archived.body);
+        assert!(
+            archived.body.contains("JD-4 is archived"),
+            "{}",
+            archived.body
+        );
+        assert!(
+            archived.body.contains("href=\"/admin/archive\""),
+            "{}",
+            archived.body
+        );
+    }
+    // Anything else searches as before.
+    for query in ["JD-99999", "JD-2%20plan", "JD-02", "rollout"] {
+        let page = server
+            .get(&format!("/admin/search?q={query}"), Some(&cookie))
+            .await?;
+        assert_ne!(page.status, 303, "{query}");
+        assert!(!page.body.contains("class=\"id-match\""), "{query}");
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn documents_are_archived_from_their_page_with_a_reason() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    // The latest revision of a document, single-file or multi-file, offers
+    // it; an older revision and a file page do not.
+    for (path, offered) in [
+        ("/admin/documents/JD-2", true),
+        ("/admin/documents/JD-3", true),
+        ("/admin/documents/JD-1?version=1", false),
+        ("/admin/documents/JD-3?file=items%2Fone", false),
+    ] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}: {}", page.body);
+        assert_eq!(
+            page.body.contains("commandfor=\"archive-dialog\""),
+            offered,
+            "{path}"
+        );
+        if offered {
+            for needle in [
+                "action=\"/admin/documents/",
+                "/archive\"",
+                "<label for=\"archive-reason\">",
+                "id=\"archive-reason\" name=\"reason\" required",
+            ] {
+                assert!(page.body.contains(needle), "{path} {needle}: {}", page.body);
+            }
+        }
+    }
+    // Refused: no reason, a blank one, no CSRF token, an unknown document.
+    for (path, fields, token) in [
+        ("/admin/documents/JD-2/archive", vec![], Some(csrf.as_str())),
+        (
+            "/admin/documents/JD-2/archive",
+            vec![("reason", "   ")],
+            Some(csrf.as_str()),
+        ),
+        (
+            "/admin/documents/JD-2/archive",
+            vec![("reason", "done")],
+            None,
+        ),
+        (
+            "/admin/documents/JD-99/archive",
+            vec![("reason", "done")],
+            Some(csrf.as_str()),
+        ),
+    ] {
+        let reply = server.post_form(path, &cookie, token, &fields).await?;
+        assert!(
+            (400..500).contains(&reply.status),
+            "{path} {fields:?}: {} {}",
+            reply.status,
+            reply.body
+        );
+    }
+    let still = server
+        .get("/admin/documents?project=joedocs", Some(&cookie))
+        .await?;
+    assert!(still.body.contains("Second doc"), "nothing was archived");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn an_archived_document_lands_on_the_archive_page_with_a_notice() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let before = server.audit()?.len();
+
+    let archived = server
+        .post_form(
+            "/admin/documents/JD-2/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "replaced by the backlog")],
+        )
+        .await?;
+    assert_eq!(archived.status, 303, "{}", archived.body);
+    let location = archived.header("location").ok_or("no location")?.to_owned();
+    assert_eq!(location, "/admin/archive?done=archived&id=JD-2");
+    let archive = server.get(&location, Some(&cookie)).await?;
+    assert!(
+        archive.body.contains("Archived JD-2."),
+        "the notice names it: {}",
+        archive.body
+    );
+    let row = row_of(&archive.body, "archived", "JD-2");
+    assert!(row.contains("replaced by the backlog"), "{row}");
+    let library = server
+        .get("/admin/documents?project=joedocs", Some(&cookie))
+        .await?;
+    assert!(!library.body.contains("Second doc"), "{}", library.body);
+    let rows = server.audit()?;
+    let tools: Vec<_> = rows[before..]
+        .iter()
+        .filter(|(tool, _, _)| tool == "admin:document.archive")
+        .map(|(_, client, outcome)| (client.as_str(), outcome.as_str()))
+        .collect();
+    assert_eq!(tools, [("joedocs-web", "ok")]);
+    // Archiving it again is refused, and the page says why.
+    let again = server
+        .post_form(
+            "/admin/documents/JD-2/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "twice")],
+        )
+        .await?;
+    assert!((400..500).contains(&again.status), "{}", again.body);
+    assert!(again.body.contains("JD-2"), "{}", again.body);
+    server.stop().await
+}
+
+/// Where each of `needles` first appears in `body`, in order.
+fn positions(body: &str, needles: &[&str]) -> TestResult<Vec<usize>> {
+    needles
+        .iter()
+        .map(|n| {
+            body.find(n)
+                .ok_or_else(|| format!("no {n} in the page").into())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn setup_asks_for_the_new_password_before_the_qr_code_and_the_code() -> TestResult<()> {
+    let (server, initial) = start_with_user(|_| {}).await?;
+    let signed = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[("user", "alice"), ("password", &initial)],
+        )
+        .await?;
+    let ticket = set_cookie(&signed, "joedocs_setup").ok_or("no setup cookie")?;
+    let setup = server.get("/admin/setup", Some(&ticket)).await?;
+    assert_eq!(setup.status, 200, "{}", setup.body);
+    let at = positions(
+        &setup.body,
+        &[
+            "First choose your password",
+            "name=\"password\"",
+            "name=\"password_again\"",
+            "class=\"qr\"",
+            "id=\"totp-secret\"",
+            "name=\"code\"",
+            "type=\"submit\"",
+        ],
+    )?;
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{at:?}: {}", setup.body);
+    assert_eq!(html_problems(&setup.body), Vec::<String>::new());
+
+    // After a password reset the page asks only for the password.
+    let secret = shown_secret(&setup.body).ok_or("no secret")?;
+    server
+        .post_public(
+            "/admin/setup",
+            Some(&ticket),
+            &[
+                ("code", &code_for(&server, &secret)),
+                ("password", USER_PASSWORD),
+                ("password_again", USER_PASSWORD),
+            ],
+        )
+        .await?;
+    let reset = joedocs_cli(server.dir.path(), &["user", "reset-password", "alice"])?;
+    let again = reset.lines().last().ok_or("no one-time password")?;
+    server.clock.advance(30);
+    let signed = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[
+                ("user", "alice"),
+                ("password", again),
+                ("code", &code_for(&server, &secret)),
+            ],
+        )
+        .await?;
+    let ticket = set_cookie(&signed, "joedocs_setup").ok_or("no setup cookie")?;
+    let page = server.get("/admin/setup", Some(&ticket)).await?;
+    assert!(
+        page.body.contains("name=\"password_again\""),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains("class=\"qr\""), "{}", page.body);
+    assert!(!page.body.contains("name=\"code\""), "{}", page.body);
+    server.stop().await
+}
+
+/// The `href` of the first `<link>` whose attributes contain `marker`.
+fn link_href<'a>(body: &'a str, marker: &str) -> TestResult<&'a str> {
+    let link = body
+        .split("<link ")
+        .skip(1)
+        .find(|l| {
+            l.split('>')
+                .next()
+                .is_some_and(|attrs| attrs.contains(marker))
+        })
+        .ok_or_else(|| format!("no <link {marker}>"))?;
+    let start = link.find("href=\"").ok_or("no href")? + 6;
+    let end = link[start..].find('"').ok_or("no href end")?;
+    Ok(&link[start..start + end])
+}
+
+#[tokio::test]
+async fn every_page_links_the_icons_served_as_hashed_assets() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let sign_in = server.get("/admin/login", None).await?;
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    let missing = server.get("/admin/documents/JD-99", Some(&cookie)).await?;
+    assert_eq!(missing.status, 404);
+    let mut fetched = Vec::new();
+    for page in [&sign_in, &home, &missing] {
+        let icons = [
+            (
+                link_href(&page.body, "rel=\"icon\" href=\"/admin/assets/")?,
+                "image/x-icon",
+            ),
+            (
+                link_href(&page.body, "type=\"image/svg+xml\"")?,
+                "image/svg+xml",
+            ),
+            (
+                link_href(&page.body, "rel=\"apple-touch-icon\"")?,
+                "image/png",
+            ),
+        ];
+        for (href, kind) in icons {
+            assert!(href.starts_with("/admin/assets/"), "{href}");
+            let file = server.get(href, None).await?;
+            assert_eq!(file.status, 200, "{href}");
+            assert_eq!(file.header("content-type"), Some(kind), "{href}");
+            assert_eq!(
+                file.header("cache-control"),
+                Some("public, max-age=31536000, immutable"),
+                "{href}"
+            );
+            fetched.push((href.to_owned(), file.bytes));
+        }
+    }
+    let ico = &fetched[0].1;
+    assert!(fetched[0].0.ends_with("/favicon.ico"), "{}", fetched[0].0);
+    assert_eq!(&ico[..4], &[0, 0, 1, 0], "an icon file");
+    assert_eq!(
+        u16::from_le_bytes([ico[4], ico[5]]),
+        3,
+        "16, 32 and 48 pixels"
+    );
+    let sizes: Vec<u8> = (0..3).map(|i| ico[6 + 16 * i]).collect();
+    assert_eq!(sizes, [16, 32, 48]);
+    let svg = String::from_utf8_lossy(&fetched[1].1);
+    assert!(svg.contains("<svg") && !svg.contains("<script"), "{svg}");
+    let png = &fetched[2].1;
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+    let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+    assert_eq!((width, height), (180, 180));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_navigation_folds_behind_a_menu_control_that_works_without_scripts() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    for path in [
+        "/admin/",
+        "/admin/documents",
+        "/admin/documents/JD-1",
+        "/admin/audit",
+    ] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}");
+        let nav = page
+            .body
+            .split("<nav class=\"sidenav\"")
+            .nth(1)
+            .and_then(|rest| rest.split("</nav>").next())
+            .ok_or("no navigation")?;
+        // Open in the page, so it shows without scripts; the script folds
+        // it on a narrow screen.
+        let at = positions(
+            nav,
+            &[
+                "<details class=\"nav-menu\" open>",
+                "<summary class=\"nav-toggle\">Menu</summary>",
+                "<ul>",
+                "href=\"/admin/documents\"",
+                "</ul>",
+                "</details>",
+            ],
+        )?;
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{path}: {nav}");
+    }
+    server.stop().await
+}
