@@ -63,8 +63,8 @@
   <p class="empty">No projects yet. <a href="/admin/projects">Add one</a>.</p>
   {% else %}
   <div class="table-wrap">
-    <table>
-      <thead><tr><th scope="col">Project</th><th scope="col">Key</th><th scope="col" class="num">Documents</th><th scope="col" class="num">Archived</th></tr></thead>
+    <table data-sortable>
+      <thead><tr><th scope="col" data-sort>Project</th><th scope="col" data-sort>Key</th><th scope="col" data-sort class="num">Documents</th><th scope="col" data-sort class="num">Archived</th></tr></thead>
       <tbody>
         {% for project in report.store.projects %}
         <tr>

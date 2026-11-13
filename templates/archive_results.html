@@ -2,18 +2,18 @@
 <p class="empty">No archived documents match.</p>
 {% else %}
 <div class="table-wrap">
-  <table>
+  <table data-sortable>
     <thead>
-      <tr><th scope="col">ID</th><th scope="col">Title</th><th scope="col">Project</th><th scope="col">Type</th><th scope="col">Archived (UTC)</th><th scope="col">By</th><th scope="col">Reason</th><th scope="col">Action</th></tr>
+      <tr><th scope="col" data-sort>ID</th><th scope="col" data-sort>Title</th><th scope="col" data-sort>Project</th><th scope="col" data-sort>Type</th><th scope="col" data-sort>Archived (UTC)</th><th scope="col" data-sort>By</th><th scope="col" data-sort>Reason</th><th scope="col">Action</th></tr>
     </thead>
     <tbody>
       {% for item in items %}
       <tr data-archived="{{ item.document.id }}">
-        <td class="nowrap"><code>{{ item.document.id }}</code></td>
+        <td class="nowrap" data-sort-value="{{ item.document.id }}"><code>{{ item.document.id }}</code></td>
         <td>{{ item.document.title }}</td>
         <td>{{ item.document.project }}</td>
         <td>{{ item.document.doc_type }}</td>
-        <td class="nowrap">{{ item.archived_at }}</td>
+        <td class="nowrap" data-sort-value="{{ item.archived_at }}">{{ item.archived_at }}</td>
         <td>{{ item.archived_by }}</td>
         <td>{{ item.reason }}</td>
         <td>

@@ -232,6 +232,8 @@ With `[admin] enabled = true` and `web_ui = true`, `joedocs serve` also serves p
 | Users | `user list`, `create` (the one-time password is shown once, on the reply), `disable`, `enable`, `unlock`, `reset-password` and `reset-totp`; for signed-in users only |
 | Your account (session menu) | change your password, list and revoke your devices; for signed-in users only |
 
+Tables that show every row (Projects, API keys, Users, your devices, Archive and the Overview's projects) sort in the browser: click a column header for ascending, again for descending, and a third time for the order the page came in. Audit, History and search results keep their own order.
+
 Filters apply as they change: picking a project, type or status on Documents or Archive, or typing in an Audit filter (after a pause of 300 ms), reloads the list in place and updates the address, so the view can be shared and reloaded. Without JavaScript, each filter form has its button and works as a plain form.
 
 The document view's Actions offer `document convert` and `move-file`, and a file's History offers `restore-file`. Every change asks for confirmation first and is written with the admin token's name as author and client `joedocs-web`. Document content cannot be edited in the browser.

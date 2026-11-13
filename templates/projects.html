@@ -15,9 +15,9 @@
 <p class="empty">No projects yet. Add one to start; API keys are then granted on it.</p>
 {% else %}
 <div class="table-wrap">
-  <table>
+  <table data-sortable>
     <thead>
-      <tr><th scope="col">Name</th><th scope="col">Key</th><th scope="col">Title</th><th scope="col" class="num">Documents</th><th scope="col" class="num">Archived</th></tr>
+      <tr><th scope="col" data-sort>Name</th><th scope="col" data-sort>Key</th><th scope="col" data-sort>Title</th><th scope="col" data-sort class="num">Documents</th><th scope="col" data-sort class="num">Archived</th></tr>
     </thead>
     <tbody>
       {% for project in projects %}

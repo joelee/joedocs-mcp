@@ -4229,3 +4229,101 @@ async fn each_column_order_pages_and_the_0_5_1_orders_still_work() -> TestResult
     }
     server.stop().await
 }
+
+/// The first table in `body` after `from`, up to its end.
+fn table_after<'a>(body: &'a str, from: &str) -> TestResult<&'a str> {
+    let start = body.find(from).ok_or("no such place")?;
+    let table = body[start..].find("<table").ok_or("no table")? + start;
+    let end = body[table..].find("</table>").ok_or("no table end")? + table;
+    Ok(&body[table..end])
+}
+
+/// Checks a table the browser sorts: marked, with `data-sort` on every
+/// header but `unsorted`, and a sort value on every time cell.
+fn assert_sortable(table: &str, unsorted: &[&str]) {
+    assert!(table.starts_with("<table data-sortable"), "{table}");
+    for th in table.split("<th ").skip(1) {
+        let label = th
+            .split_once('>')
+            .map_or("", |(_, rest)| rest.split('<').next().unwrap_or(""));
+        let marked = th.starts_with("scope=\"col\" data-sort");
+        assert_eq!(marked, !unsorted.contains(&label), "{label}: {th}");
+    }
+    for cell in table.split("<td class=\"nowrap\"").skip(1) {
+        assert!(
+            cell.starts_with(" data-sort-value=\""),
+            "a time cell: {cell}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn tables_that_show_every_row_sort_in_the_browser_and_paged_ones_do_not() -> TestResult<()> {
+    let initial = Arc::new(std::sync::Mutex::new(String::new()));
+    let keep = Arc::clone(&initial);
+    let server = start_full(
+        |_| {},
+        move |store| {
+            audit_fixture(store)?;
+            let password = joedocs::password::initial_password(&joedocs::auth::OsRandom)?;
+            let hash = joedocs::password::hash(&password, &joedocs::auth::OsRandom)?;
+            store.create_user("alice", &hash, &joedocs::auth::OsRandom)?;
+            if let Ok(mut slot) = keep.lock() {
+                password.expose_secret().clone_into(&mut slot);
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    let password = initial.lock().map(|p| p.clone()).unwrap_or_default();
+    let (cookie, _, secret) = signed_in_user(&server, &password).await?;
+    let body = serde_json::json!({
+        "user": "alice", "password": USER_PASSWORD, "code": code_for(&server, &secret), "device": "laptop"
+    })
+    .to_string();
+    let api = server
+        .send(
+            "POST",
+            "/admin/v1/auth/login",
+            "content-type: application/json\r\n",
+            &body,
+        )
+        .await?;
+    assert_eq!(api.status, 200, "{}", api.body);
+    server.clock.advance(30);
+
+    let page = |path: &'static str| {
+        let cookie = cookie.clone();
+        let server = &server;
+        async move {
+            let page = server.get(path, Some(&cookie)).await?;
+            assert_eq!(page.status, 200, "{path}: {}", page.body);
+            TestResult::Ok(page.body)
+        }
+    };
+    let projects = page("/admin/projects").await?;
+    assert_sortable(table_after(&projects, "<main")?, &[]);
+    let keys = page("/admin/keys").await?;
+    assert_sortable(table_after(&keys, "<main")?, &["Grants", "Actions"]);
+    let users = page("/admin/users").await?;
+    assert_sortable(table_after(&users, "<main")?, &["Actions"]);
+    let account = page("/admin/account").await?;
+    assert!(account.contains("laptop"), "{account}");
+    assert_sortable(table_after(&account, "<main")?, &["Actions"]);
+    let archive = page("/admin/archive").await?;
+    assert_sortable(table_after(&archive, "id=\"results\"")?, &["Action"]);
+    let overview = page("/admin/").await?;
+    assert_sortable(table_after(&overview, "<main")?, &[]);
+    // The Overview's recent activity stays newest first.
+    let recent = overview.rfind("<table").ok_or("no second table")?;
+    assert!(!overview[recent..].starts_with("<table data-sortable"));
+    for path in [
+        "/admin/audit",
+        "/admin/search",
+        "/admin/documents/JD-1/history",
+    ] {
+        let body = page(path).await?;
+        assert!(!body.contains("data-sortable"), "{path}");
+    }
+    server.stop().await
+}

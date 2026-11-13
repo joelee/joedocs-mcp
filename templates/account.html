@@ -32,14 +32,14 @@
   <p class="empty">No devices.</p>
   {% else %}
   <div class="table-wrap">
-    <table>
-      <thead><tr><th scope="col">Device</th><th scope="col">Created (UTC)</th><th scope="col">Last used (UTC)</th><th scope="col">Actions</th></tr></thead>
+    <table data-sortable>
+      <thead><tr><th scope="col" data-sort>Device</th><th scope="col" data-sort>Created (UTC)</th><th scope="col" data-sort>Last used (UTC)</th><th scope="col">Actions</th></tr></thead>
       <tbody>
         {% for device in devices %}
         <tr>
           <td><strong>{{ device.name }}</strong></td>
-          <td class="nowrap">{{ device.created }}</td>
-          <td class="nowrap">{% if let Some(at) = device.last_used %}{{ at }}{% else %}<span class="hint">never</span>{% endif %}</td>
+          <td class="nowrap" data-sort-value="{{ device.created }}">{{ device.created }}</td>
+          <td class="nowrap" data-sort-value="{% if let Some(at) = device.last_used %}{{ at }}{% endif %}">{% if let Some(at) = device.last_used %}{{ at }}{% else %}<span class="hint">never</span>{% endif %}</td>
           <td>
             <button type="button" class="danger" commandfor="revoke-device-{{ loop.index }}" command="show-modal">Revoke</button>
             <dialog id="revoke-device-{{ loop.index }}" aria-labelledby="revoke-device-{{ loop.index }}-heading">

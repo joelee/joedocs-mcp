@@ -170,7 +170,68 @@
     announce(form.dataset.busy);
   });
 
+  // Tables marked `data-sortable` show every row, so they sort here: each
+  // header marked `data-sort` becomes a button that cycles ascending,
+  // descending and the order the server sent. A cell sorts by its
+  // `data-sort-value` when it has one (times), a `.num` column as numbers,
+  // and any other as text with numbers in it compared by value (JD-9
+  // before JD-10). Without this script the headers are plain text.
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const cellValue = (row, index) => {
+    const cell = row.cells[index];
+    if (!cell) {
+      return "";
+    }
+    return cell.dataset.sortValue !== undefined ? cell.dataset.sortValue : cell.textContent.trim();
+  };
+  const setUpSorting = (root) => {
+    for (const table of root.querySelectorAll("table[data-sortable]:not([data-sort-ready])")) {
+      table.dataset.sortReady = "true";
+      const body = table.tBodies[0];
+      const head = table.tHead ? table.tHead.rows[0] : null;
+      if (!body || !head) {
+        continue;
+      }
+      const original = [...body.rows];
+      const headers = [...head.cells];
+      headers.forEach((th, index) => {
+        if (!th.hasAttribute("data-sort")) {
+          return;
+        }
+        const label = th.textContent.trim();
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "sort-button";
+        button.textContent = label;
+        th.replaceChildren(button);
+        const numeric = th.classList.contains("num");
+        button.addEventListener("click", () => {
+          const state = th.getAttribute("aria-sort");
+          const next =
+            state === "ascending" ? "descending" : state === "descending" ? null : "ascending";
+          for (const other of headers) {
+            other.removeAttribute("aria-sort");
+          }
+          const rows = original.slice();
+          if (next) {
+            th.setAttribute("aria-sort", next);
+            const sign = next === "ascending" ? 1 : -1;
+            rows.sort((a, b) => {
+              const x = cellValue(a, index);
+              const y = cellValue(b, index);
+              const order = numeric ? (Number(x) || 0) - (Number(y) || 0) : collator.compare(x, y);
+              return sign * order;
+            });
+          }
+          body.append(...rows);
+          announce(next ? `Sorted by ${label}, ${next}` : "Original order");
+        });
+      });
+    }
+  };
+
   drawDiagrams(document);
+  setUpSorting(document);
 
   // After htmx swaps a region in, move focus there so keyboard and
   // screen-reader users land on the new content, and announce it. htmx 4
@@ -206,6 +267,7 @@
       region.focus({ preventScroll: false });
     }
     drawDiagrams(region);
+    setUpSorting(region);
     const label = region.dataset.announce;
     if (label) {
       announce(label);
