@@ -4160,6 +4160,46 @@ async fn documents_sort_by_their_column_headers_across_pages() -> TestResult<()>
 }
 
 #[tokio::test]
+async fn documents_results_say_their_order_for_screen_readers() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    // `(query, what the results region announces when htmx swaps it in)`.
+    let cases = [
+        ("", "Documents updated. Most recently updated first."),
+        (
+            "&sort=title",
+            "Documents updated. Sorted by Title, ascending.",
+        ),
+        (
+            "&sort=revision&dir=desc",
+            "Documents updated. Sorted by Revision, descending.",
+        ),
+        (
+            "&sort=updated",
+            "Documents updated. Sorted by Updated, ascending.",
+        ),
+    ];
+    for (query, said) in cases {
+        let path = format!("/admin/documents?project=joedocs{query}");
+        let fragment = server.send("GET", &path, &htmx(&cookie), "").await?;
+        assert_eq!(fragment.status, 200, "{path}: {}", fragment.body);
+        let announcement = format!("<p hidden data-announcement>{said}</p>");
+        assert!(
+            fragment.body.contains(&announcement),
+            "{path}: {}",
+            fragment.body
+        );
+        assert_eq!(
+            fragment.body.matches("data-announcement").count(),
+            1,
+            "{path}: {}",
+            fragment.body
+        );
+    }
+    server.stop().await
+}
+
+#[tokio::test]
 async fn each_column_order_pages_and_the_0_5_1_orders_still_work() -> TestResult<()> {
     let server = start_full(|_| {}, fixture).await?;
     let cookie = server.login().await?;

@@ -44,6 +44,18 @@ impl Column {
             Self::Updated => "updated",
         }
     }
+
+    /// The column's name as its header shows it, without the time zone.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Id => "ID",
+            Self::Title => "Title",
+            Self::Type => "Type",
+            Self::Status => "Status",
+            Self::Revision => "Revision",
+            Self::Updated => "Updated",
+        }
+    }
 }
 
 /// An order picked with a column header. Without one, the library is most
@@ -82,6 +94,22 @@ impl Order {
                 None => return Err(invalid("sort", name)),
             },
         })
+    }
+
+    /// What a screen reader hears when the results change in this order.
+    fn announcement(order: Option<Self>) -> String {
+        match order {
+            None => "Documents updated. Most recently updated first.".to_owned(),
+            Some(Self { column, descending }) => format!(
+                "Documents updated. Sorted by {}, {}.",
+                column.label(),
+                if descending {
+                    "descending"
+                } else {
+                    "ascending"
+                }
+            ),
+        }
     }
 
     /// The store's order for this one, or the default.
@@ -148,6 +176,8 @@ struct DocumentsResults {
     headers: Vec<Header>,
     /// The order, kept by the filter form through fields in this region.
     sort: Option<(&'static str, bool)>,
+    /// What the region announces when htmx swaps it in: the order.
+    announcement: String,
     items: Vec<DocumentInfo>,
     total: u64,
     start: u64,
@@ -322,6 +352,7 @@ pub(crate) fn list(
         project: projects.iter().find(|p| p.name == filters.project).cloned(),
         headers: filters.headers(),
         sort: filters.order.map(|o| (o.column.name(), o.descending)),
+        announcement: Order::announcement(filters.order),
         total: listing.total,
         start: filters.start,
         shown_to: filters.start + listing.items.len() as u64 - u64::from(!listing.items.is_empty()),
@@ -369,6 +400,7 @@ fn empty(session: &Session) -> Response {
             project: None,
             headers: Vec::new(),
             sort: None,
+            announcement: Order::announcement(None),
             items: Vec::new(),
             total: 0,
             start: 1,

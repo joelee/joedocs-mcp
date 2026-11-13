@@ -2,6 +2,7 @@
 <input type="hidden" name="sort" value="{{ column }}" form="documents-filters">
 {% if *descending %}<input type="hidden" name="dir" value="desc" form="documents-filters">{% endif %}
 {% endif %}
+<p hidden data-announcement>{{ announcement }}</p>
 {% if let Some(project) = project %}
 <p class="lede">{{ project.title }} <code>{{ project.key }}</code>, {{ total }} live documents match</p>
 {% endif %}

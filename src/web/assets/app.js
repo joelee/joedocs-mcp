@@ -34,10 +34,12 @@
 
   // The navigation is open in the page, so it shows without this script;
   // on a narrow screen it folds behind its Menu control, and opens again
-  // when the screen is wide enough to show it beside the page.
-  const navMenu = document.querySelector(".nav-menu");
+  // when the screen is wide enough to show it beside the page. It is looked
+  // up each time: Back and Forward between pages htmx added to the history
+  // swap in a new body, with a new navigation.
   const narrow = matchMedia("(max-width: 720px)");
   const fitNav = () => {
+    const navMenu = document.querySelector(".nav-menu");
     if (navMenu instanceof HTMLDetailsElement) {
       navMenu.open = !narrow.matches;
     }
@@ -279,9 +281,17 @@
       }
       region.focus({ preventScroll: false });
     }
+    // A whole new body (Back or Forward) brings a navigation that has not
+    // been fitted to the screen. Results alone leave the Menu as it is.
+    if (region === document.body) {
+      fitNav();
+    }
     drawDiagrams(region);
     setUpSorting(region);
-    const label = region.dataset.announce;
+    // Results can say what changed (the Documents order); otherwise the
+    // region's own label is announced.
+    const said = region.querySelector(":scope > [data-announcement]");
+    const label = said ? said.textContent : region.dataset.announce;
     if (label) {
       announce(label);
     }
