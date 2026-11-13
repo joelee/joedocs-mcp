@@ -32,6 +32,19 @@
 
   applyTheme(storedTheme());
 
+  // The navigation is open in the page, so it shows without this script;
+  // on a narrow screen it folds behind its Menu control, and opens again
+  // when the screen is wide enough to show it beside the page.
+  const navMenu = document.querySelector(".nav-menu");
+  const narrow = matchMedia("(max-width: 720px)");
+  const fitNav = () => {
+    if (navMenu instanceof HTMLDetailsElement) {
+      navMenu.open = !narrow.matches;
+    }
+  };
+  fitNav();
+  narrow.addEventListener("change", fitNav);
+
   const toggleTheme = () => {
     const current =
       document.documentElement.dataset.theme ||

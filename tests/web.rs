@@ -4664,3 +4664,39 @@ async fn every_page_links_the_icons_served_as_hashed_assets() -> TestResult<()> 
     assert_eq!((width, height), (180, 180));
     server.stop().await
 }
+
+#[tokio::test]
+async fn the_navigation_folds_behind_a_menu_control_that_works_without_scripts() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    for path in [
+        "/admin/",
+        "/admin/documents",
+        "/admin/documents/JD-1",
+        "/admin/audit",
+    ] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}");
+        let nav = page
+            .body
+            .split("<nav class=\"sidenav\"")
+            .nth(1)
+            .and_then(|rest| rest.split("</nav>").next())
+            .ok_or("no navigation")?;
+        // Open in the page, so it shows without scripts; the script folds
+        // it on a narrow screen.
+        let at = positions(
+            nav,
+            &[
+                "<details class=\"nav-menu\" open>",
+                "<summary class=\"nav-toggle\">Menu</summary>",
+                "<ul>",
+                "href=\"/admin/documents\"",
+                "</ul>",
+                "</details>",
+            ],
+        )?;
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{path}: {nav}");
+    }
+    server.stop().await
+}

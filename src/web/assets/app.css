@@ -120,6 +120,9 @@ main:focus { outline: none; }
 }
 .sidenav a:hover { background: var(--surface-2); }
 .sidenav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+/* The Menu control shows only on narrow screens; on wide ones the list is
+   always there. */
+.nav-toggle { display: none; }
 
 main { grid-area: main; padding: var(--space-6); min-width: 0; max-width: 78rem; }
 
@@ -138,12 +141,23 @@ main { grid-area: main; padding: var(--space-6); min-width: 0; max-width: 78rem;
 }
 
 @media (max-width: 720px) {
-  .shell { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "nav" "main"; }
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 1fr; grid-template-areas: "top" "nav" "main"; }
   .topbar { flex-wrap: wrap; }
   .topbar-search { order: 3; flex-basis: 100%; max-width: none; }
+  .topbar [data-theme-toggle] { margin-left: auto; }
+  .session-menu .menu { min-width: 0; width: min(16rem, calc(100vw - 2rem)); }
   .sidenav { border-right: 0; border-bottom: 1px solid var(--border); padding: var(--space-2); }
-  .sidenav ul { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-  .sidenav a { padding: var(--space-1) var(--space-2); }
+  .nav-toggle {
+    display: flex; align-items: center; gap: var(--space-2); min-height: 44px;
+    padding: 0 var(--space-2); cursor: pointer; font-weight: 600; list-style: none;
+  }
+  .nav-toggle::-webkit-details-marker { display: none; }
+  /* The glyph is decoration: the empty alternative text keeps it out of
+     the control's name, which stays "Menu". */
+  .nav-toggle::before { content: "\2630"; content: "\2630" / ""; font-size: 1.1em; }
+  .nav-menu[open] > .nav-toggle::before { content: "\2715"; content: "\2715" / ""; }
+  .sidenav ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: var(--space-1); padding-bottom: var(--space-2); }
+  .sidenav a { padding: var(--space-2); min-height: 44px; display: flex; align-items: center; }
   main { padding: var(--space-4); }
 }
 
@@ -434,3 +448,11 @@ summary.callout-title { cursor: pointer; }
 .qr { margin: var(--space-3) 0; max-width: 16rem; background: #fff; padding: var(--space-2); border-radius: var(--radius); }
 .qr svg { display: block; width: 100%; height: auto; }
 code.break { overflow-wrap: anywhere; }
+
+/* Last, so it wins over the smaller text of controls in tables and the
+   search filters: iOS zooms into a focused control whose text is under
+   16px, and small targets are hard to tap. */
+@media (max-width: 720px) {
+  input, select, textarea, .search-json input { font-size: 16px; }
+  button.link { min-height: 24px; }
+}

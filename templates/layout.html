@@ -25,11 +25,14 @@
     </details>
   </header>
   <nav class="sidenav" aria-label="Main">
-    <ul>
-      {% for item in chrome.nav %}
-      <li><a href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
-      {% endfor %}
-    </ul>
+    <details class="nav-menu" open>
+      <summary class="nav-toggle">Menu</summary>
+      <ul>
+        {% for item in chrome.nav %}
+        <li><a href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
   </nav>
   <main id="main" tabindex="-1">
     {% block content %}{% endblock %}
