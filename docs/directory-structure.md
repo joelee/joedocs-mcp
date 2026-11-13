@@ -32,7 +32,8 @@
 │   ├── reference.md        Commands, MCP tools, search, front matter, errors
 │   ├── plan.md             JoeDocs design decisions and phased plan
 │   ├── media/              Images for the README (the banner)
-│   └── skills/             Agent skills that use JoeDocs (one folder per skill, with SKILL.md)
+│   └── skills/             Agent skills that use JoeDocs (one folder per skill, with SKILL.md),
+│                           and joedocs-AGENTS.md, instructions to copy into a project
 ├── src/
 │   ├── main.rs             Thin binary wrapper
 │   ├── lib.rs              load, execute, Error, exit codes

@@ -10,6 +10,7 @@ A more modern web interface: filters that apply as you change them, tables that 
 
 ### Added
 
+- **Agent instructions for a project** (`docs/skills/joedocs-AGENTS.md`): a file to copy into a new repository and import from its `CLAUDE.md` or `AGENTS.md`. It tells agents which JoeDocs project to use (the `JoeDocs project:` line, or else the repository's root directory name), to keep ideas, plans, reviews, issues, research, specs and notes in JoeDocs rather than in the repository, which skill handles which request, and how to use the JoeDocs tools safely.
 - **Web interface: an icon.** Browser tabs, bookmarks and phone home screens show a JoeDocs icon.
 - **Web interface: archive a document from its page.** A document's Actions menu offers Archive document, which asks for a reason and then shows the document on the Archive page, where it can be restored.
 - **Web interface: open a document by its ID.** Type `JD-33` (any case) into the search bar and press Enter to open that document. On the Search page it is listed first as you type, and an archived document's ID says it is in the Archive.
