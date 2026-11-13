@@ -88,7 +88,7 @@
 │   │   ├── mod.rs          Routes and their audit tools, request checks, rendering, security headers
 │   │   ├── session.rs      Session cookie, CSRF token, same-origin and HTTPS rules
 │   │   ├── assets.rs       Static files under content-hashed paths
-│   │   ├── assets/         app.css, app.js, and vendor/ (htmx, Pele and their licences)
+│   │   ├── assets/         app.css, app.js, the icons (favicon.svg and the .ico and touch .png drawn from it), and vendor/ (htmx, Pele and their licences)
 │   │   ├── markdown.rs     Obsidian-style Markdown to safe HTML (tests in markdown_tests.rs)
 │   │   ├── plantuml.rs     PlantUML text encoding for the configured server
 │   │   └── pages/          One module per workspace: login, setup, overview, documents, document, history, search, projects, keys, users (and Account), audit, archive, maintenance

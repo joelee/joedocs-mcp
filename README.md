@@ -199,6 +199,7 @@ Further out:
 - A document graph agents can query, for example "what depends on JD-12" (an idea to explore first).
 - Rewriting `[[links]]` to a renamed document in the same project.
 - Approval provenance: server-stamped status changes, and optionally a grant needed to approve.
+- Web interface appearance: a stylesheet of your own, named in the configuration, on top of the bundled one (an idea to explore first).
 - A homebrew-core formula.
 - From the design plan's "Later" list: per-type templates, documents as MCP resources, backlinks, embedding search, attachments, secret scanning on write.
 

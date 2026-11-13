@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-13
+
+A more modern web interface: filters that apply as you change them, tables that sort by their headers, a document ID in the search bar that opens the document, archiving from a document's page, pages that fit a phone, and an icon. The first sign-in asks for the password before the authenticator code. MCP clients, keys, tools, the admin API and the configuration are unchanged.
+
 ### Added
 
 - **Web interface: an icon.** Browser tabs, bookmarks and phone home screens show a JoeDocs icon.
@@ -238,7 +242,9 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/joelee/joedocs-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/joelee/joedocs-mcp/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/joelee/joedocs-mcp/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/joelee/joedocs-mcp/compare/v0.4.1...v0.4.2
