@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- **First sign-in asks for the password before the code.** The web setup page and `joedocs auth login` now ask you to choose your password first, then show the QR code and ask for the authenticator code, so the 30-second code is typed last and does not expire while you type the password twice. Only the order of the questions changed.
 - **Web interface: Documents sort by their column headers.** Click ID, Title, Type, Status, Revision or Updated to sort ascending, again for descending, and a third time for the default order (most recently updated first). The order holds across pages and filters, replacing the Order menu; links with the old `sort` values still work.
 - **Web interface: other tables sort by their headers too.** Projects, API keys, Users, your devices, Archive and the Overview's projects sort in the browser by any column: ascending, descending, then the original order.
 - **Web interface: filters apply as they change.** On Documents and Archive, picking a project, type or status reloads the list at once, and on Audit typing in a filter applies it after a short pause; there is no Show or Filter button to press. The address follows the filters, so a view can be shared or reloaded. Without JavaScript the button is still there.

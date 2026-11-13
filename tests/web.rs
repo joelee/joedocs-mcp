@@ -4513,3 +4513,81 @@ async fn an_archived_document_lands_on_the_archive_page_with_a_notice() -> TestR
     assert!(again.body.contains("JD-2"), "{}", again.body);
     server.stop().await
 }
+
+/// Where each of `needles` first appears in `body`, in order.
+fn positions(body: &str, needles: &[&str]) -> TestResult<Vec<usize>> {
+    needles
+        .iter()
+        .map(|n| {
+            body.find(n)
+                .ok_or_else(|| format!("no {n} in the page").into())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn setup_asks_for_the_new_password_before_the_qr_code_and_the_code() -> TestResult<()> {
+    let (server, initial) = start_with_user(|_| {}).await?;
+    let signed = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[("user", "alice"), ("password", &initial)],
+        )
+        .await?;
+    let ticket = set_cookie(&signed, "joedocs_setup").ok_or("no setup cookie")?;
+    let setup = server.get("/admin/setup", Some(&ticket)).await?;
+    assert_eq!(setup.status, 200, "{}", setup.body);
+    let at = positions(
+        &setup.body,
+        &[
+            "First choose your password",
+            "name=\"password\"",
+            "name=\"password_again\"",
+            "class=\"qr\"",
+            "id=\"totp-secret\"",
+            "name=\"code\"",
+            "type=\"submit\"",
+        ],
+    )?;
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{at:?}: {}", setup.body);
+    assert_eq!(html_problems(&setup.body), Vec::<String>::new());
+
+    // After a password reset the page asks only for the password.
+    let secret = shown_secret(&setup.body).ok_or("no secret")?;
+    server
+        .post_public(
+            "/admin/setup",
+            Some(&ticket),
+            &[
+                ("code", &code_for(&server, &secret)),
+                ("password", USER_PASSWORD),
+                ("password_again", USER_PASSWORD),
+            ],
+        )
+        .await?;
+    let reset = joedocs_cli(server.dir.path(), &["user", "reset-password", "alice"])?;
+    let again = reset.lines().last().ok_or("no one-time password")?;
+    server.clock.advance(30);
+    let signed = server
+        .post_public(
+            "/admin/sign-in",
+            None,
+            &[
+                ("user", "alice"),
+                ("password", again),
+                ("code", &code_for(&server, &secret)),
+            ],
+        )
+        .await?;
+    let ticket = set_cookie(&signed, "joedocs_setup").ok_or("no setup cookie")?;
+    let page = server.get("/admin/setup", Some(&ticket)).await?;
+    assert!(
+        page.body.contains("name=\"password_again\""),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains("class=\"qr\""), "{}", page.body);
+    assert!(!page.body.contains("name=\"code\""), "{}", page.body);
+    server.stop().await
+}
