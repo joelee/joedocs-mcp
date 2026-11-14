@@ -1,10 +1,11 @@
 //! The admin web interface, served by `joedocs serve` under `/admin/` when
 //! `admin.enabled` and `admin.web_ui` are both on (JD-32).
 //!
-//! Pages are rendered on the server with Askama templates; htmx only makes
-//! them faster, and every page and form also works as a plain link or form
-//! post. An admin signs in as a user with a name, a password and a TOTP
-//! code (0.5.1; at the first sign-in, after setting up TOTP), or with an
+//! Pages are rendered on the server with Askama templates, and need
+//! JavaScript: htmx swaps in partial updates and `app.js` wires the
+//! behaviour (see `docs/developer-guide.md` § Web interface). An admin
+//! signs in as a user with a name, a password and a TOTP code (0.5.1; at
+//! the first sign-in, after setting up TOTP), or with an
 //! admin token and a code (deprecated); the server then keeps a web session
 //! (`jdv_...` for a user, `jdw_...` for a token) in an `HttpOnly`,
 //! `SameSite=Strict` cookie, and neither the password nor the admin token

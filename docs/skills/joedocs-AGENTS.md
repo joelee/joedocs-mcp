@@ -64,7 +64,7 @@ When a request matches a skill, load that skill and follow it. A skill's rules a
 
 The usual path is: idea, accepted by the user; plan, approved by the user; build; review. Fixes found in review or as issues go back to the planner. Each skill does one step and then hands off with the next action. Do not start the next skill yourself. Name the next step for the user, for example: *"Plan JD-12 next with `/joedocs-planner plan JD-12`."*
 
-Approval belongs to the user. Accept an idea, approve a plan, or mark a plan `done`, only when the user says so.
+Approval belongs to the user. Accept an idea, approve a plan, or mark a plan `done`, only when the user says so. A plan's `approved` means approved and being built, and is not closed; `done` means implemented and closed, and is set only on the user's explicit sign-off, never because the build finished (`implementation_status: completed`). `parked`, when the server has it, is work the user has set aside to come back to later: an idea, a draft plan or an open issue, and only on the user's decision.
 
 The skills are a route, not a gate. A small, direct change that the user asks for (a typo, a one-line fix, a dependency bump, a question about the code) can be done without an idea or a plan. For anything larger, offer the planner, but do as the user decides.
 

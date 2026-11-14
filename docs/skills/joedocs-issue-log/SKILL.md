@@ -104,7 +104,8 @@ evidence says.
 4. `issues` must be one of the server's `types`, and `draft`, `review`,
    `done`, `rejected` and `superseded` must be among its `statuses`. If not,
    ask the user which type and statuses to use instead. Never assume the
-   statuses: read them from `list_projects`.
+   statuses: read them from `list_projects`. `parked` is optional: use it
+   only when the server lists it.
 
 ## Statuses
 
@@ -117,10 +118,14 @@ Issues use the server's statuses:
 | `done` | Fixed. | `resolution: fixed`, `fixed_in`. |
 | `rejected` | Closed without a fix. | `resolution: wont-fix` or `resolution: cannot-reproduce`. |
 | `superseded` | A duplicate of another issue. | `resolution: duplicate`, `duplicate_of`. |
+| `parked` | Deferred: set aside on the user's decision, to come back to later. Only when the server lists it. | The required keys. |
 
 "Open" means `draft` or `review`. `approved` is not used for issues. A closed
 issue can be reopened by setting it back to `draft` or `review` and removing
-`resolution` (and `fixed_in` or `duplicate_of`).
+`resolution` (and `fixed_in` or `duplicate_of`). A `parked` issue is neither
+open nor closed: release planning looks only at open issues, so it stays out
+of releases until it is set back to `draft` or `review`. Park an issue only
+when the user decides to.
 
 ## Front matter
 

@@ -32,8 +32,9 @@ state_dir = ""
 [documents]
 # Document types; each is a folder under every project. "all" is reserved.
 types = ["home", "plans", "ideas", "issues", "reviews", "research", "specs", "notes"]
-# Allowed values of the status front matter key.
-statuses = ["draft", "review", "approved", "rejected", "superseded", "done"]
+# Allowed values of the status front matter key. "parked" is work set aside
+# to do something more important first, to come back to later.
+statuses = ["draft", "review", "approved", "rejected", "superseded", "done", "parked"]
 # Type and status used when a new document names none.
 default_type = "home"
 default_status = "draft"

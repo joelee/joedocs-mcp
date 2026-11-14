@@ -447,7 +447,7 @@ Step commits:
 Verification: <commands and results>
 Coverage: <percentage and command | not measurable, why>
 Working tree: clean
-Next: review the branch, e.g. with joedocs-code-review (plan JD-31)
+Next: review the branch, e.g. with joedocs-code-review (plan JD-31); the plan stays `approved` until you sign it off as `done` through joedocs-planner
 ```
 
 Blocked:

@@ -170,6 +170,32 @@ fn update(id: &str, content: &str, expected: u64) -> Update {
 }
 
 #[test]
+fn a_document_can_be_parked_and_resumed_on_default_settings() {
+    let mut fx = fixture();
+    let created = fx
+        .store
+        .create(
+            &actor(),
+            NewDocument {
+                status: Some("parked".into()),
+                ..new_doc("Parked idea")
+            },
+        )
+        .unwrap();
+    let resumed = fx
+        .store
+        .change_front_matter(
+            &actor(),
+            &created.id,
+            &fields(json!({"status": "draft"})),
+            &[],
+            Some(1),
+        )
+        .unwrap();
+    assert_eq!(resumed.revision, 2);
+}
+
+#[test]
 fn init_is_idempotent_and_refuses_a_foreign_directory() {
     let fx = fixture();
     let git = git_for(&fx.paths);
