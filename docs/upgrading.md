@@ -100,6 +100,10 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.5.3 to 0.5.4
+
+- **Nothing changes for a server:** 0.5.4 adds a tool for developers (`just scratch-server`) only. No migration; the database stays at version 8.
+
 ### 0.5.2 to 0.5.3
 
 - **No migration:** the database stays at version 8, so going back to 0.5.2 needs only the older binary, not a restore.
