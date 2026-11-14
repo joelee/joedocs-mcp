@@ -277,7 +277,7 @@ pub(super) async fn stream(state: Arc<WebState>, request: WebRequest) -> Respons
         }
     };
     let (rx, behind) = state.board_signal.subscribe(marker);
-    let (tx, body) = mpsc::channel::<Result<Bytes, std::convert::Infallible>>(8);
+    let (tx, body): (Outgoing, _) = mpsc::channel(8);
     tokio::spawn(feed(state, request, place, rx, behind, tx));
     let mut response =
         Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(body)).into_response();
@@ -290,18 +290,45 @@ pub(super) async fn stream(state: Arc<WebState>, request: WebRequest) -> Respons
     response
 }
 
-/// Writes one stream's events until it should end.
+/// Writes one stream's events until it should end, holding its place
+/// among the open streams.
 async fn feed(
     state: Arc<WebState>,
     request: WebRequest,
     place: OpenStream,
-    mut rx: watch::Receiver<Signal>,
+    rx: watch::Receiver<Signal>,
     behind: bool,
-    tx: mpsc::Sender<Result<Bytes, std::convert::Infallible>>,
+    tx: Outgoing,
 ) {
     let _place = place;
-    let send = |bytes: Bytes| tx.send(Ok(bytes));
-    if send(Bytes::from_static(b"retry: 2000\n\n")).await.is_err() {
+    let shutdown = state.board_signal.shutdown.clone();
+    let keep_alive = state.options.board.keep_alive;
+    let session = || session_holds(&state, &request);
+    run_feed(rx, behind, tx, &shutdown, keep_alive, session).await;
+}
+
+/// The stream's outgoing body.
+type Outgoing = mpsc::Sender<Result<Bytes, std::convert::Infallible>>;
+
+/// One stream's event loop, apart from the server so tests can drive it:
+/// the retry line, a catch-up event when the page is `behind`, then an
+/// event per published signal and a comment line every `keep_alive`, when
+/// `session` (checked then) still holds.
+async fn run_feed<S, F>(
+    mut rx: watch::Receiver<Signal>,
+    behind: bool,
+    tx: Outgoing,
+    shutdown: &CancellationToken,
+    keep_alive: Duration,
+    session: S,
+) where
+    S: Fn() -> F,
+    F: std::future::Future<Output = bool>,
+{
+    // Every send gives way to shutdown and to the client going away: a
+    // stream never waits to deliver one more event before it ends.
+    let send = |bytes: Bytes| deliver(&tx, shutdown, bytes);
+    if !send(Bytes::from_static(b"retry: 2000\n\n")).await {
         return;
     }
     if behind {
@@ -309,13 +336,15 @@ async fn feed(
             generation: rx.borrow().generation,
             seen_ms: wall_ms(),
         };
-        if send(event(now)).await.is_err() {
+        if !send(event(now)).await {
             return;
         }
     }
-    rx.mark_unchanged();
-    let shutdown = state.board_signal.shutdown.clone();
-    let mut beat = tokio::time::interval(state.options.board.keep_alive);
+    // No `mark_unchanged` here: a receiver starts with the current value
+    // seen, so whatever the watcher publishes after the stream subscribed,
+    // even before this loop runs, is still sent (an extra refresh at
+    // worst, never a missed one).
+    let mut beat = tokio::time::interval(keep_alive);
     beat.reset();
     loop {
         let bytes = tokio::select! {
@@ -324,8 +353,8 @@ async fn feed(
                 Err(_) => break,
             },
             _ = beat.tick() => {
-                if !session_holds(&state, &request).await {
-                    let _ = send(Bytes::from_static(b"event: expired\ndata: -\n\n")).await;
+                if !session().await {
+                    send(Bytes::from_static(b"event: expired\ndata: -\n\n")).await;
                     break;
                 }
                 Bytes::from_static(b": keep-alive\n\n")
@@ -333,9 +362,19 @@ async fn feed(
             () = shutdown.cancelled() => break,
             () = tx.closed() => break,
         };
-        if send(bytes).await.is_err() {
+        if !send(bytes).await {
             break;
         }
+    }
+}
+
+/// Sends `bytes` on the stream unless the server shuts down or the client
+/// goes away first. Whether it was sent.
+async fn deliver(tx: &Outgoing, shutdown: &CancellationToken, bytes: Bytes) -> bool {
+    tokio::select! {
+        sent = tx.send(Ok(bytes)) => sent.is_ok(),
+        () = shutdown.cancelled() => false,
+        () = tx.closed() => false,
     }
 }
 
@@ -427,6 +466,102 @@ mod tests {
         let after = reads.load(Ordering::SeqCst);
         tokio::time::sleep(TICK * 3).await;
         assert_eq!(reads.load(Ordering::SeqCst), after, "stopped");
+    }
+
+    /// Reads what a feed sent, until `needle` shows or `within` passes.
+    async fn read_until(
+        out: &mut mpsc::Receiver<Result<Bytes, std::convert::Infallible>>,
+        needle: &str,
+        within: Duration,
+    ) -> String {
+        let mut seen = String::new();
+        let deadline = tokio::time::Instant::now() + within;
+        while !seen.contains(needle) {
+            match tokio::time::timeout_at(deadline, out.recv()).await {
+                Ok(Some(Ok(bytes))) => seen.push_str(&String::from_utf8_lossy(&bytes)),
+                _ => break,
+            }
+        }
+        seen
+    }
+
+    #[tokio::test]
+    async fn a_signal_published_before_the_loop_starts_is_sent() {
+        let (publish, rx) = watch::channel(Signal::default());
+        // The watcher publishes after the stream subscribed, before its
+        // loop runs.
+        publish.send_replace(Signal {
+            generation: 1,
+            seen_ms: 5,
+        });
+        let (tx, mut out) = mpsc::channel(8);
+        let shutdown = CancellationToken::new();
+        let stop = shutdown.clone();
+        let task = tokio::spawn(async move {
+            run_feed(rx, false, tx, &stop, Duration::from_secs(15), || async {
+                true
+            })
+            .await;
+        });
+        let seen = read_until(&mut out, "data: 1 5", Duration::from_secs(1)).await;
+        assert!(seen.contains("id: 1\ndata: 1 5"), "{seen:?}");
+        shutdown.cancel();
+        task.await.unwrap();
+        drop(publish);
+    }
+
+    #[tokio::test]
+    async fn an_unread_stream_ends_at_shutdown_and_gives_back_its_place() {
+        let read: Arc<MarkerSource> = Arc::new(|| None);
+        let signal = BoardSignal::new(read, WINDOW, CancellationToken::new());
+        let place = signal.try_open().unwrap();
+        let (publish, rx) = watch::channel(Signal::default());
+        // Room for the retry line only; nobody reads.
+        let (tx, out) = mpsc::channel(1);
+        let shutdown = CancellationToken::new();
+        let stop = shutdown.clone();
+        let task = tokio::spawn(async move {
+            let _place = place;
+            run_feed(rx, true, tx, &stop, Duration::from_secs(15), || async {
+                true
+            })
+            .await;
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("the stream ends within 1 s of shutdown")
+            .unwrap();
+        assert_eq!(
+            signal.open.load(Ordering::Acquire),
+            0,
+            "its place is given back"
+        );
+        drop((publish, out));
+    }
+
+    #[tokio::test]
+    async fn an_unread_stream_with_a_lapsed_session_ends_at_shutdown() {
+        let (publish, rx) = watch::channel(Signal::default());
+        let (tx, out) = mpsc::channel(1);
+        let shutdown = CancellationToken::new();
+        let stop = shutdown.clone();
+        let task = tokio::spawn(async move {
+            run_feed(rx, false, tx, &stop, Duration::from_millis(50), || async {
+                false
+            })
+            .await;
+        });
+        // The retry line fills the channel; at the first keep-alive the
+        // session has lapsed and `expired` cannot be delivered.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("the stream ends within 1 s of shutdown")
+            .unwrap();
+        drop((publish, out));
     }
 
     #[test]
