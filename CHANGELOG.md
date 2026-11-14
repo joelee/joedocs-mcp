@@ -4,8 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-14
+
+A `parked` status for work set aside to come back to later, clearer plan statuses in the agent skills, and a stated JavaScript requirement for the web interface. MCP tools, the admin API and the database are unchanged.
+
+### Added
+
+- **A `parked` status.** `documents.statuses` now ends with `parked`, for an idea, a draft plan or an issue set aside to do something more important first and come back to later. It is not a closed status, and the web interface shows it with its own badge. A server whose `config.toml` sets its own `statuses` keeps its list; add `"parked"` to it to use the status.
+
 ### Changed
 
+- **Plan statuses in the agent skills.** The skills and `docs/skills/joedocs-AGENTS.md` now say that an `approved` plan is approved and being built, not closed, and that a plan becomes `done` only when you sign it off as implemented: the planner records `signed_off_by`, and a finished build (`implementation_status: completed`) no longer reads as closing it. The planner can park a draft plan and the issue log can park an issue, on your decision.
 - **The web interface requires JavaScript.** It is now stated that the admin web interface needs a browser with JavaScript turned on. Nothing stops working in this release, but later features may not work without it, and pages without scripts are no longer supported.
 
 ## [0.5.2] - 2026-11-13
@@ -247,7 +256,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/joelee/joedocs-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/joelee/joedocs-mcp/compare/v0.4.3...v0.5.0

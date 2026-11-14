@@ -100,6 +100,12 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.5.2 to 0.5.3
+
+- **No migration:** the database stays at version 8, so going back to 0.5.2 needs only the older binary, not a restore.
+- **A new default status, `parked`,** for work set aside to come back to later. It is added only where the built-in list is used: a `config.toml` that sets `[documents] statuses` keeps exactly its own list, so add `"parked"` there to use it. After going back to 0.5.2 without `parked` in `config.toml`, parked documents can still be read and changed, but nothing can be set to `parked`, and `list` and `list_documents` refuse `parked` as a status filter; add it to `config.toml` to keep using it.
+- **The web interface requires JavaScript.** Nothing stops working in this release, but pages viewed without scripts are no longer supported.
+
 ### 0.5.1 to 0.5.2
 
 - **No migration:** the database stays at version 8, so going back to 0.5.1 needs only the older binary, not a restore.
