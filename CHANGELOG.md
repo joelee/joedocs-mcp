@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **The web interface requires JavaScript.** It is now stated that the admin web interface needs a browser with JavaScript turned on. Nothing stops working in this release, but later features may not work without it, and pages without scripts are no longer supported.
+
 ## [0.5.2] - 2026-11-13
 
 A more modern web interface: filters that apply as you change them, tables that sort by their headers, a document ID in the search bar that opens the document, archiving from a document's page, pages that fit a phone, and an icon. The first sign-in asks for the password before the authenticator code. MCP clients, keys, tools, the admin API and the configuration are unchanged.
