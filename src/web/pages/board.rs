@@ -366,6 +366,13 @@ fn grid(
     closed: &[String],
     view: &View,
 ) -> Result<BoardGrid, WebError> {
+    // The marker first: a write while the cards are read leaves the page
+    // behind its marker, so the stream announces it (an extra refresh at
+    // worst). Read last, it could name a revision the cards do not show.
+    let marker = store
+        .change_marker()
+        .map_err(|e| WebError::from_store(&e))?
+        .unwrap_or_default();
     let lit = attention(store, projects)?;
     let building = building(store, projects)?;
     let mut cards = Vec::new();
@@ -435,10 +442,7 @@ fn grid(
         }
     }
     Ok(BoardGrid {
-        marker: store
-            .change_marker()
-            .map_err(|e| WebError::from_store(&e))?
-            .unwrap_or_default(),
+        marker,
         columns,
         rows,
         titled: view.group != "none",
@@ -560,6 +564,11 @@ const STEP_CHARS: usize = 24;
 /// current step.
 fn building(store: &Store, projects: &[String]) -> Result<HashMap<String, Building>, WebError> {
     let mut found = HashMap::new();
+    // Without a `plans` type there is nothing to mark, and the search
+    // would refuse the unknown type.
+    if !store.settings().types.iter().any(|t| t == "plans") {
+        return Ok(found);
+    }
     for state in ["in-progress", "blocked"] {
         for id in matching(
             store,

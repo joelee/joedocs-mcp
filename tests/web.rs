@@ -5585,3 +5585,32 @@ async fn only_the_board_loads_its_script_which_is_a_cached_asset() -> TestResult
     );
     server.stop().await
 }
+
+#[tokio::test]
+async fn the_board_works_when_plans_is_not_a_type() -> TestResult<()> {
+    let server = start_full(
+        |config| {
+            config.documents.types = vec!["notes".into()];
+            config.documents.default_type = "notes".into();
+        },
+        |store| {
+            store.add_project("alpha", "AL", Some("Alpha"))?;
+            board_doc(
+                store,
+                ("alpha", "notes", "draft"),
+                "Only note",
+                serde_json::json!({}),
+            )?;
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    for path in ["/admin/board", "/admin/board?fragment=1"] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}: {}", page.body);
+        assert_eq!(board_cards(&page.body), ["AL-1"], "{path}");
+        assert!(!page.body.contains("data-building"), "{path}");
+    }
+    server.stop().await
+}
