@@ -102,7 +102,15 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+# Ctrl-C (or SIGTERM) while the server runs is how it is meant to stop, so
+# that ends the script cleanly (status 0, which `just` does not report as a
+# failure); during the build or the seeding it is an interruption (130).
+serving=false
+stopped() {
+    if $serving; then exit 0; fi
+    exit 130
+}
+trap stopped INT TERM
 
 if $fresh && [ -d "$scratch" ]; then
     echo "scratch-server: removing $scratch"
@@ -211,4 +219,5 @@ fi
 echo "  Stop with Ctrl-C; start over with: just scratch-server fresh"
 echo
 
+serving=true
 jd serve

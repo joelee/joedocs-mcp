@@ -2,7 +2,7 @@
 
 ## Setup
 
-Install `rustup`, `just`, `git`, `gitleaks` and `actionlint` with your package manager (on macOS: `brew install rustup just git gitleaks actionlint`), then run:
+Install `rustup`, `just` (1.54 or later; CI uses 1.59.0), `git`, `gitleaks` and `actionlint` with your package manager (on macOS: `brew install rustup just git gitleaks actionlint`), then run:
 
 ```bash
 just setup
@@ -116,6 +116,7 @@ just scratch-server --port 8761 --https-port 8444 --no-tailscale
 - **On a phone:** signing in needs HTTPS off loopback, so, unless `--no-tailscale` is given, the script adds a `tailscale serve` entry on port `8443` (`--https-port`) and prints `https://<machine>.<tailnet>.ts.net:8443/admin/`. The phone needs the Tailscale app on the same tailnet. The entry is removed when the server stops, also after Ctrl-C or an error; if one is ever left, `tailscale serve --https=8443 off` removes it. On Linux, if `tailscale serve` is refused, allow your user once with `sudo tailscale set --operator=$USER`; the script never uses `sudo`. A port that Tailscale already serves is refused.
 - **A proxy of your own** (Caddy, for example) can point at the loopback address. List the names it passes as `Host` in `SCRATCH_ALLOWED_HOSTS` (comma-separated), or the server answers `403`: `SCRATCH_ALLOWED_HOSTS=scratch.example.net just scratch-server`.
 - **It never touches real data:** every `joedocs` command it runs uses `.local/scratch/config.toml` (rewritten on each run) and none of your `JOEDOCS_*` variables, so the live server, the Docker stack's `.local/data` and your own configuration are left alone. The seeding key's token is never printed or written down.
+- **Stopping it** with Ctrl-C is the normal end: the script and `just` exit with status 0 (the recipe's `[continue]` attribute, `just` 1.54 or later). Ctrl-C during the build or the seeding exits with 130.
 - The script is bash, for Linux and macOS (`tailscale` from `PATH`, or the macOS app), and needs `curl`.
 
 ### Vendored browser files

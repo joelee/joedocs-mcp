@@ -136,5 +136,6 @@ docker-test port="18750":
     JOEDOCS_TEST_PHASE=after-restart cargo nextest run --locked --test deployment --run-ignored only
 
 # A throwaway server from the working tree with sample data, kept in .local/scratch, for trying the web interface on other devices (args: fresh, --port N, --https-port N, --no-tailscale)
+[continue]
 scratch-server *args:
     scripts/scratch-server.sh {{args}}
