@@ -99,7 +99,24 @@ The admin web interface lives in `src/web/`, with its Askama templates in `templ
   sed 's/ rx="14"//' favicon.svg > $t/square.svg
   rsvg-convert -w 180 -h 180 $t/square.svg -o $t/touch.png && magick $t/touch.png -strip apple-touch-icon.png
   ```
-- **Trying it.** `JOEDOCS__ADMIN__ENABLED=true JOEDOCS__ADMIN__WEB_UI=true cargo run -- serve` with a scratch `JOEDOCS__STORAGE__HOME` and `JOEDOCS__STORAGE__STATE_DIR`, a user from `cargo run -- user create dev` on the same store (its one-time password is the last line), then `http://127.0.0.1:8750/admin/`, where the first sign-in sets up TOTP.
+- **Trying it.** `just scratch-server` (see [Scratch server](#scratch-server)). By hand: `JOEDOCS__ADMIN__ENABLED=true JOEDOCS__ADMIN__WEB_UI=true cargo run -- serve` with a scratch `JOEDOCS__STORAGE__HOME` and `JOEDOCS__STORAGE__STATE_DIR`, a user from `cargo run -- user create dev` on the same store (its one-time password is the last line), then `http://127.0.0.1:8750/admin/`, where the first sign-in sets up TOTP.
+
+### Scratch server
+
+`just scratch-server` runs a throwaway server from the working tree, for trying the web interface in other browsers and on phones before a release:
+
+```bash
+just scratch-server                  # build, then serve until Ctrl-C
+just scratch-server fresh            # wipe the scratch store first
+just scratch-server --port 8761 --https-port 8444 --no-tailscale
+```
+
+- **The store** is `.local/scratch` (git-ignored), kept between runs. The first run fills it with sample data over MCP (`examples/scratch_seed.rs`): projects `demo`, with more than one page of documents in every type and status, diagrams, revisions, a multi-file backlog and an archived document, and `sandbox`. It also creates user `dev` and prints its one-time password once. The first sign-in sets a password and an authenticator; later runs keep both, and print how to reset them. `fresh` deletes `.local/scratch` and starts over.
+- **On this machine:** `http://127.0.0.1:8760/admin/` (`--port` changes it; `8750`, the default `server.bind`, is refused, as is a port in use).
+- **On a phone:** signing in needs HTTPS off loopback, so, unless `--no-tailscale` is given, the script adds a `tailscale serve` entry on port `8443` (`--https-port`) and prints `https://<machine>.<tailnet>.ts.net:8443/admin/`. The phone needs the Tailscale app on the same tailnet. The entry is removed when the server stops, also after Ctrl-C or an error; if one is ever left, `tailscale serve --https=8443 off` removes it. On Linux, if `tailscale serve` is refused, allow your user once with `sudo tailscale set --operator=$USER`; the script never uses `sudo`. A port that Tailscale already serves is refused.
+- **A proxy of your own** (Caddy, for example) can point at the loopback address. List the names it passes as `Host` in `SCRATCH_ALLOWED_HOSTS` (comma-separated), or the server answers `403`: `SCRATCH_ALLOWED_HOSTS=scratch.example.net just scratch-server`.
+- **It never touches real data:** every `joedocs` command it runs uses `.local/scratch/config.toml` (rewritten on each run) and none of your `JOEDOCS_*` variables, so the live server, the Docker stack's `.local/data` and your own configuration are left alone. The seeding key's token is never printed or written down.
+- The script is bash, for Linux and macOS (`tailscale` from `PATH`, or the macOS app), and needs `curl`.
 
 ### Vendored browser files
 
