@@ -82,12 +82,23 @@ web_ui = true
 TOML
 }
 
-# Stops the server started for seeding, whatever ends the script.
+# Whatever ends the script stops the server started for seeding and
+# removes the one `tailscale serve` entry this run added.
 seed_pid=""
-cleanup() {
+served=false
+stop_seed_server() {
     if [ -n "$seed_pid" ]; then
         kill "$seed_pid" 2>/dev/null || true
         wait "$seed_pid" 2>/dev/null || true
+        seed_pid=""
+    fi
+}
+cleanup() {
+    stop_seed_server
+    if $served; then
+        "$tailscale" serve --https="$https_port" off >/dev/null 2>&1 ||
+            echo "scratch-server: could not remove the serve entry; run: tailscale serve --https=$https_port off" >&2
+        served=false
     fi
 }
 trap cleanup EXIT
@@ -106,8 +117,44 @@ if [ ! -d "$scratch/state" ]; then
 elif [ ! -e "$scratch/seeded" ]; then
     fail "an earlier first run did not finish; start over with: just scratch-server fresh"
 fi
+# Tailscale, unless turned off or not installed: the tailnet name joins
+# allowed_hosts, and the HTTPS port must not already be served.
+tailscale=""
+ts_name=""
+if $use_tailscale; then
+    if command -v tailscale >/dev/null 2>&1; then
+        tailscale="$(command -v tailscale)"
+    elif [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]; then
+        tailscale=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+    else
+        echo "scratch-server: tailscale not found; serving on loopback only"
+    fi
+fi
+if [ -n "$tailscale" ]; then
+    ts_name="$("$tailscale" status --json 2>/dev/null |
+        sed -n '/"Self": {/,/"DNSName"/p' |
+        sed -n 's/.*"DNSName": *"\([^"]*\)".*/\1/p' | head -n 1)"
+    ts_name="${ts_name%.}"
+    [ -n "$ts_name" ] || fail "tailscale is not connected (no name in tailscale status); use --no-tailscale"
+    if "$tailscale" serve status --json 2>/dev/null | grep -q "\"$https_port\""; then
+        fail "tailscale already serves HTTPS port $https_port; pick another --https-port"
+    fi
+fi
+
+# Extra names for a proxy of your own (comma-separated), checked so they
+# cannot break the TOML they are written into.
+extra_hosts=()
+if [ -n "${SCRATCH_ALLOWED_HOSTS:-}" ]; then
+    IFS=, read -r -a extra_hosts <<<"$SCRATCH_ALLOWED_HOSTS"
+    for name in "${extra_hosts[@]}"; do
+        case "$name" in
+            '' | *[!A-Za-z0-9.:-]*) fail "SCRATCH_ALLOWED_HOSTS: \"$name\" is not a host name" ;;
+        esac
+    done
+fi
+
 mkdir -p "$scratch"
-write_config
+write_config "$ts_name" ${extra_hosts[@]+"${extra_hosts[@]}"}
 
 # The sample data goes in over MCP, as an agent would write it, with a key
 # whose token stays in this shell: never printed, never written to disk.
@@ -129,8 +176,7 @@ seed() {
     done
     (cd "$root" && SCRATCH_MCP_URL="http://127.0.0.1:$port/mcp" SCRATCH_TOKEN="$token" \
         cargo run --locked --quiet --example scratch_seed)
-    cleanup
-    seed_pid=""
+    stop_seed_server
     touch "$scratch/seeded"
 }
 
@@ -141,9 +187,20 @@ if $first_run; then
     seed
 fi
 
+if [ -n "$tailscale" ]; then
+    if ! out="$("$tailscale" serve --bg --https="$https_port" "http://127.0.0.1:$port" 2>&1)"; then
+        echo "$out" >&2
+        fail "tailscale serve was refused. If it needs root, allow your user once with: sudo tailscale set --operator=\$USER (or use --no-tailscale)"
+    fi
+    served=true
+fi
+
 echo
 echo "JoeDocs scratch server (store: $scratch)"
 echo "  On this machine:  http://127.0.0.1:$port/admin/"
+if $served; then
+    echo "  Over HTTPS:       https://$ts_name:$https_port/admin/  (tailnet only; phones need the Tailscale app)"
+fi
 if $first_run; then
     echo "  User: dev   one-time password: $password"
     echo "  The first sign-in sets a password and an authenticator (scan the QR code)."
