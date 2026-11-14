@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-14
+
+A live Board in the web interface: the documents of several projects as cards in status columns, kept up to date as agents work, with a light for what needs you and a mark for plans being built. Three new configuration keys, and the agent skills mark what needs you. MCP tools and the database are unchanged.
+
+### Added
+
+- **The Board** (`/admin/board`, in the navigation under Overview). Every live document of the chosen projects as a card, in a column per status and a row per type, per project, or one row, filtered by project, type and status (closed statuses hidden by default), and sorted by last update, creation or document ID. The filters are in the address. A card shows its title, ID, type and revision, who changed it last and how long ago. It updates by itself as documents change, from any writer, a local `joedocs` command included: a card flashes when it changes and moves to its new column when its status changes, with Pause and Resume. A card whose `attention` front matter key holds text lights up and shows it; an approved plan being built (`implementation_status` `in-progress` or `blocked`) shows 🏗️ with its `current_step`. Each card has a menu (open, preview, history, copy its ID or link), and a preview opens after hovering it or focusing it for a moment; the Board's own menu copies a link to the Board with its filters. Read-only: nothing on it changes a document.
+- **Configuration:** `documents.closed_statuses` (the statuses the Board hides unless asked; default `done`, `rejected`, `superseded`), `admin.board_refresh_ms` (500 to 10000, default 1000) and `admin.board_preview_ms` (0 to 10000, default 2000). See the configuration reference.
+- **Configuration warnings.** An empty `documents.closed_statuses` (the default is used) or a name in it that is not a status (ignored) does not stop the server: `joedocs serve` logs a warning, `joedocs check` reports it and exits with 1, and `joedocs status` lists it. Over the admin API, the `check` text includes it and the `status` reply has a new `config_warnings` list.
+- **Web interface routes** `GET /admin/board`, `GET /admin/board/preview/{id}` and `GET /admin/board/stream` (Server-Sent Events that say only that something changed), audited as `admin:documents.board`, `admin:documents.get` and `admin:documents.board_stream`. At most 32 Board streams are open at once.
+- **Audit page:** a "Leave out Board" quick filter, for the rows the Board writes on each refresh.
+- **`just board-drive`** (developers): a scripted run of agent writes against `just scratch-server`, the Board's demo.
+
+### Changed
+
+- **Agent skills mark what needs you.** The planner, builder, idea architect, code review and issue log set the `attention` front matter key when they need you (a plan waiting for approval, a builder stopped for review or blocked, a finished build waiting for your sign-off, an idea waiting for your decision, a review with Critical or Major findings, a critical issue) and remove it once you have answered. The builder accepts `attention` changes on an approved plan.
+- **Web interface:** the light and dark toggle and the session menu sit at the right end of the top bar on every screen width.
+
 ## [0.5.4] - 2026-11-14
 
 A tool for developers: `just scratch-server` runs a throwaway server from the working tree, with sample data, to try the web interface on other devices. Servers, their configuration, the MCP tools and the admin API are unchanged.
@@ -264,7 +282,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/joelee/joedocs-mcp/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.1...v0.5.2
