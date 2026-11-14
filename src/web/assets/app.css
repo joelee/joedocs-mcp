@@ -509,7 +509,8 @@ main:has(.board-page) { max-width: none; }
 .bcard-id { font-family: var(--mono); }
 .bcard-who { overflow-wrap: anywhere; }
 /* An approved plan being built: at the bottom right of the card. */
-.bcard-build { margin-left: auto; font-size: 0.95rem; line-height: 1; }
+.bcard-build { margin-left: auto; display: inline-flex; gap: var(--space-1); align-items: center; font-size: 0.95rem; line-height: 1; }
+.bcard-step { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); }
 .bcard-reason { margin: var(--space-1) 0 0; font-size: 0.75rem; color: var(--warn); }
 .bcard-attention { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn), 0 0 14px -2px color-mix(in srgb, var(--warn) 55%, transparent); animation: bcard-glow 2.8s ease-in-out infinite; }
 @keyframes bcard-glow { 50% { box-shadow: 0 0 0 1px var(--warn), 0 0 22px 0 color-mix(in srgb, var(--warn) 75%, transparent); } }

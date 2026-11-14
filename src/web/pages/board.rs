@@ -133,8 +133,8 @@ struct Card {
     updated_by: String,
     /// The `attention` reason, when the card is lit.
     attention: Option<String>,
-    /// `in-progress` or `blocked` for an approved plan being built.
-    building: Option<String>,
+    /// For an approved plan being built: its state and current step.
+    building: Option<Building>,
     /// The key of the row the card sits in.
     row: String,
 }
@@ -464,7 +464,12 @@ fn sort_cards(cards: &mut [Card], view: &View) {
     }
 }
 
-fn card(d: DocumentInfo, attention: Option<String>, building: Option<String>, group: &str) -> Card {
+fn card(
+    d: DocumentInfo,
+    attention: Option<String>,
+    building: Option<Building>,
+    group: &str,
+) -> Card {
     let row = match group {
         "project" => d.project.clone(),
         "none" => "all".to_owned(),
@@ -539,9 +544,21 @@ fn attention(store: &Store, projects: &[String]) -> Result<HashMap<String, Strin
     Ok(lit)
 }
 
-/// Plans whose builder has started and not finished, with their
-/// `implementation_status`.
-fn building(store: &Store, projects: &[String]) -> Result<HashMap<String, String>, WebError> {
+/// A plan's build, as its builder records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Building {
+    /// `implementation_status`: `in-progress` or `blocked`.
+    state: String,
+    /// `current_step` when it is a string, cut to [`STEP_CHARS`].
+    step: Option<String>,
+}
+
+/// The longest `current_step` a card shows, in characters.
+const STEP_CHARS: usize = 24;
+
+/// Plans whose builder has started and not finished, with their state and
+/// current step.
+fn building(store: &Store, projects: &[String]) -> Result<HashMap<String, Building>, WebError> {
     let mut found = HashMap::new();
     for state in ["in-progress", "blocked"] {
         for id in matching(
@@ -551,7 +568,21 @@ fn building(store: &Store, projects: &[String]) -> Result<HashMap<String, String
             "implementation_status",
             json!(state),
         )? {
-            found.insert(id, state.to_owned());
+            let step = store
+                .get(&id, None)
+                .ok()
+                .and_then(|fetched| split_front_matter(&fetched.markdown).0)
+                .and_then(|front| {
+                    let step = front.get("current_step")?.as_str()?.trim().to_owned();
+                    (!step.is_empty()).then(|| step.chars().take(STEP_CHARS).collect())
+                });
+            found.insert(
+                id,
+                Building {
+                    state: state.to_owned(),
+                    step,
+                },
+            );
         }
     }
     Ok(found)

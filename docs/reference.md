@@ -243,7 +243,7 @@ The web interface needs JavaScript. A browser with it turned off may still show 
 
 The Board shows every live document of the chosen projects as a card, in a column per status (in `documents.statuses` order, each with its count and colour) and a row per type, per project, or one row. It only reads. A filter band picks projects, types and statuses (with no status chosen, every status that is not in `documents.closed_statuses`), "Only needing attention", the grouping and the order (last updated, created, or document ID by number; descending or ascending). The filters are in the address, so a Board link carries them.
 
-A card shows the title (the link to the document), the ID, type and revision, who changed it last and how long ago. A card whose main file has an `attention` front matter key holding text lights up and shows that text (a closed status never lights up); an approved plan whose `implementation_status` is `in-progress` or `blocked` shows 🏗️, being built.
+A card shows the title (the link to the document), the ID, type and revision, who changed it last and how long ago. A card whose main file has an `attention` front matter key holding text lights up and shows that text (a closed status never lights up); an approved plan whose `implementation_status` is `in-progress` or `blocked` shows 🏗️, being built, with its `current_step` beside it.
 
 | Route | What it is | Audit tool |
 | --- | --- | --- |

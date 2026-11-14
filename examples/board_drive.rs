@@ -151,11 +151,16 @@ impl Drive {
         Ok(plan)
     }
 
-    /// A builder picks the plan up and edits it twice.
+    /// A builder picks the plan up and works through two more steps,
+    /// recording each as `current_step`.
     async fn build(&self, plan: &str) -> Result<()> {
-        self.front(plan, json!({"implementation_status": "in-progress"}), &[])
-            .await?;
-        self.say(&format!("{plan}: the builder picked it up (in-progress)"))?;
+        self.front(
+            plan,
+            json!({"implementation_status": "in-progress", "current_step": "STEP-01"}),
+            &[],
+        )
+        .await?;
+        self.say(&format!("{plan}: the builder picked it up (STEP-01)"))?;
         self.wait().await;
         for n in 2..=3 {
             self.call(
@@ -163,7 +168,9 @@ impl Drive {
                 json!({"document_id": plan, "content": format!("\nStep {n}.\n"), "summary": "Board drive"}),
             )
             .await?;
-            self.say(&format!("{plan}: edited (a new revision)"))?;
+            self.front(plan, json!({"current_step": format!("STEP-0{n}")}), &[])
+                .await?;
+            self.say(&format!("{plan}: edited, now at STEP-0{n}"))?;
             tokio::time::sleep(self.pause / 2).await;
         }
         self.wait().await;
@@ -231,8 +238,12 @@ impl Drive {
 
     /// The build completes and the plan is closed; the issue is archived.
     async fn close(&self, plan: &str, issue: &str) -> Result<()> {
-        self.front(plan, json!({"implementation_status": "completed"}), &[])
-            .await?;
+        self.front(
+            plan,
+            json!({"implementation_status": "completed"}),
+            &["current_step"],
+        )
+        .await?;
         self.say(&format!("{plan}: build completed, awaiting sign-off"))?;
         self.wait().await;
         self.front(plan, json!({"status": "done"}), &[]).await?;

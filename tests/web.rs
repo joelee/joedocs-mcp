@@ -4881,7 +4881,7 @@ fn board_fixture(store: &mut Store) -> TestResult<()> {
             "plans",
             "approved",
             "Building plan",
-            json!({"implementation_status": "in-progress"}),
+            json!({"implementation_status": "in-progress", "current_step": "STEP-02"}),
         ),
         (
             "plans",
@@ -5026,8 +5026,12 @@ async fn the_board_shows_open_documents_by_status_and_type() -> TestResult<()> {
         "{building}"
     );
     assert!(
-        building.contains("aria-label=\"Being built\""),
+        building.contains("aria-label=\"Being built, STEP-02\""),
         "{building}"
+    );
+    assert!(
+        building.contains("<span class=\"bcard-step\">STEP-02</span>"),
+        "the current step beside the mark: {building}"
     );
     assert!(!board_card(&page.body, "AL-3").contains("data-building"));
     // Board sits right under Overview.
