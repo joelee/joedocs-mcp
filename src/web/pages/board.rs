@@ -96,6 +96,8 @@ impl View {
 #[derive(Template)]
 #[template(path = "board_grid.html")]
 struct BoardGrid {
+    /// The store's change marker when the grid was read, for the stream.
+    marker: String,
     columns: Vec<Column>,
     rows: Vec<Row>,
     /// Whether rows have titles (not when ungrouped).
@@ -430,6 +432,10 @@ fn grid(
         }
     }
     Ok(BoardGrid {
+        marker: store
+            .change_marker()
+            .map_err(|e| WebError::from_store(&e))?
+            .unwrap_or_default(),
         columns,
         rows,
         titled: view.group != "none",

@@ -1,4 +1,4 @@
-<div class="board-grid{% if !titled %} board-untitled{% endif %}" data-board-grid>
+<div class="board-grid{% if !titled %} board-untitled{% endif %}" data-board-grid data-marker="{{ marker }}">
   <div class="board-columns" aria-hidden="true">
     <div class="board-corner"></div>
     {% for column in columns %}<div class="board-column-head" data-column="{{ column.status }}"><span class="badge badge-status-{{ column.status }}">{{ column.status }}</span> <span class="board-count">{{ column.count }}</span></div>{% endfor %}

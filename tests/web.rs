@@ -43,6 +43,16 @@ async fn start_full(
     edit: impl FnOnce(&mut Config),
     setup: impl FnOnce(&mut Store) -> TestResult<()>,
 ) -> TestResult<Server> {
+    start_options(edit, |_| {}, setup).await
+}
+
+/// As [`start_full`], with `options` changing the server options built
+/// from the configuration (for settings with no key, such as timings).
+async fn start_options(
+    edit: impl FnOnce(&mut Config),
+    options: impl FnOnce(&mut ServerOptions),
+    setup: impl FnOnce(&mut Store) -> TestResult<()>,
+) -> TestResult<Server> {
     let mut config = Config::default();
     config.admin.enabled = true;
     config.admin.web_ui = true;
@@ -67,7 +77,9 @@ async fn start_full(
         joedocs::totp::base32_decode(created.totp_secret.expose_secret()).ok_or("bad base32")?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let options = ServerOptions::from_config(&config);
+    let mut server_options = ServerOptions::from_config(&config);
+    options(&mut server_options);
+    let options = server_options;
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(async move {
         serve(listener, Shared::new(store), &options, async {
@@ -2422,6 +2434,19 @@ async fn every_route_writes_one_audit_row_with_its_documented_tool() -> TestResu
                 reply
             }
             ("POST", _) => server.post_form(&path, &cookie, Some(&csrf), &[]).await?,
+            // A stream stays open: read its head, then close it.
+            (_, "/admin/board/stream") => {
+                let stream = server.open_stream("", &cookie, "").await?;
+                let status = stream.status;
+                drop(stream);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                Reply {
+                    status,
+                    head: String::new(),
+                    body: String::new(),
+                    bytes: Vec::new(),
+                }
+            }
             _ => server.get(&path, Some(&cookie)).await?,
         };
         assert!(reply.status < 500, "{method} {path}: {}", reply.body);
@@ -5207,5 +5232,297 @@ async fn the_board_preview_shows_facts_and_opening_text_without_drawing() -> Tes
             .await?;
         assert_eq!(refused.status, status, "{id}: {}", refused.body);
     }
+    server.stop().await
+}
+
+/// An open Board stream: the reply's status and head, and what has been
+/// read of its body so far.
+struct EventStream {
+    status: u16,
+    head: String,
+    stream: TcpStream,
+    seen: String,
+}
+
+impl EventStream {
+    /// Reads until `needle` appears after what earlier waits consumed, or
+    /// `within` passes, or the stream ends. Whether it appeared.
+    async fn wait_for(&mut self, needle: &str, within: std::time::Duration) -> TestResult<bool> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            if let Some(at) = self.seen.find(needle) {
+                self.seen.drain(..at + needle.len());
+                return Ok(true);
+            }
+            let mut chunk = [0_u8; 4096];
+            match tokio::time::timeout_at(deadline, self.stream.read(&mut chunk)).await {
+                Err(_) | Ok(Ok(0)) => return Ok(false),
+                Ok(Ok(n)) => self.seen.push_str(&String::from_utf8_lossy(&chunk[..n])),
+                Ok(Err(error)) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Whether the server ends the stream within `within`: the last chunk
+    /// of the reply (the connection may stay open for another request), or
+    /// the connection closed.
+    async fn ends_within(&mut self, within: std::time::Duration) -> TestResult<bool> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            if self.seen.contains("\r\n0\r\n\r\n") || self.seen.starts_with("0\r\n\r\n") {
+                return Ok(true);
+            }
+            let mut chunk = [0_u8; 4096];
+            match tokio::time::timeout_at(deadline, self.stream.read(&mut chunk)).await {
+                Err(_) => return Ok(false),
+                Ok(Ok(0) | Err(_)) => return Ok(true),
+                Ok(Ok(n)) => self.seen.push_str(&String::from_utf8_lossy(&chunk[..n])),
+            }
+        }
+    }
+}
+
+impl Server {
+    /// Opens `/admin/board/stream?<query>` with `cookie` and extra header
+    /// lines, and reads the reply head.
+    async fn open_stream(
+        &self,
+        query: &str,
+        cookie: &str,
+        headers: &str,
+    ) -> TestResult<EventStream> {
+        let request = format!(
+            "GET /admin/board/stream?{query} HTTP/1.1\r\nHost: {}\r\nCookie: {cookie}\r\nAccept: text/event-stream\r\n{headers}\r\n",
+            self.host()
+        );
+        let mut stream = TcpStream::connect(self.addr).await?;
+        stream.write_all(request.as_bytes()).await?;
+        let mut raw = Vec::new();
+        let head_end = loop {
+            let mut chunk = [0_u8; 4096];
+            let n =
+                tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut chunk))
+                    .await??;
+            if n == 0 {
+                break raw.len();
+            }
+            raw.extend_from_slice(&chunk[..n]);
+            if let Some(at) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                break at;
+            }
+        };
+        let head = String::from_utf8_lossy(&raw[..head_end]).into_owned();
+        let seen =
+            String::from_utf8_lossy(raw.get(head_end + 4..).unwrap_or_default()).into_owned();
+        let status = head.split(' ').nth(1).ok_or("no status")?.parse()?;
+        Ok(EventStream {
+            status,
+            head,
+            stream,
+            seen,
+        })
+    }
+}
+
+/// The value of header `name` in a reply head.
+fn head_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().skip(1).find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim()
+            .eq_ignore_ascii_case(name)
+            .then_some(value.trim())
+    })
+}
+
+/// The Board fixture, with AL-4 archived (for a restore by another process).
+fn stream_fixture(store: &mut Store) -> TestResult<()> {
+    board_fixture(store)?;
+    store.archive(
+        &joedocs::store::Actor::new("laptop-key", "claude-code"),
+        "AL-4",
+        "gone",
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_board_stream_needs_a_session_and_the_same_site() -> TestResult<()> {
+    let server = start_full(|_| {}, stream_fixture).await?;
+    let before = server.audit()?.len();
+    let anonymous = server.get("/admin/board/stream", None).await?;
+    assert_eq!(anonymous.status, 303, "{}", anonymous.body);
+    let cookie = server.login().await?;
+    let cross = server
+        .send(
+            "GET",
+            "/admin/board/stream",
+            &format!("Cookie: {cookie}\r\nSec-Fetch-Site: cross-site\r\n"),
+            "",
+        )
+        .await?;
+    assert_eq!(cross.status, 403, "{}", cross.body);
+    let foreign = server
+        .send(
+            "GET",
+            "/admin/board/stream",
+            &format!("Cookie: {cookie}\r\nOrigin: https://evil.example\r\n"),
+            "",
+        )
+        .await?;
+    assert_eq!(foreign.status, 403, "{}", foreign.body);
+    let outcomes: Vec<String> = server.audit()?[before..]
+        .iter()
+        .filter(|(t, _, _)| t == "admin:documents.board_stream")
+        .map(|(_, _, o)| o.clone())
+        .collect();
+    assert_eq!(outcomes, ["no_session", "forbidden", "forbidden"]);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_stream_signals_writes_from_this_server_and_other_processes() -> TestResult<()> {
+    let server = start_full(|config| config.admin.board_refresh_ms = 500, stream_fixture).await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    let marker = data_values(&page.body, "marker").pop().ok_or("no marker")?;
+    let same_site = "Sec-Fetch-Site: same-origin\r\n";
+    let mut stream = server
+        .open_stream(&format!("marker={marker}"), &cookie, same_site)
+        .await?;
+    assert_eq!(stream.status, 200, "{}", stream.head);
+    assert_eq!(
+        head_value(&stream.head, "content-type"),
+        Some("text/event-stream")
+    );
+    assert_eq!(head_value(&stream.head, "x-accel-buffering"), Some("no"));
+    assert_eq!(head_value(&stream.head, "cache-control"), Some("no-store"));
+    let wait = std::time::Duration::from_millis(1500);
+    assert!(stream.wait_for("retry: 2000", wait).await?);
+    assert!(
+        !stream
+            .wait_for("data: ", std::time::Duration::from_millis(700))
+            .await?,
+        "nothing changed since the page: {}",
+        stream.seen
+    );
+    // A write through the web interface (this process).
+    let csrf = server.csrf(&cookie).await?;
+    let archived = server
+        .post_form(
+            "/admin/documents/AL-1/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "done")],
+        )
+        .await?;
+    assert!(archived.status < 400, "{}", archived.body);
+    assert!(
+        stream.wait_for("id: 1\ndata: 1 ", wait).await?,
+        "{}",
+        stream.seen
+    );
+    // A write by another process: a local joedocs command.
+    joedocs_cli(server.dir.path(), &["archive", "restore", "AL-4"])?;
+    assert!(
+        stream.wait_for("id: 2\ndata: 2 ", wait).await?,
+        "{}",
+        stream.seen
+    );
+    assert!(!stream.seen.contains("Draft plan"), "no document content");
+    // A stream opened with an old marker hears at once.
+    let mut stale = server
+        .open_stream(&format!("marker={marker}"), &cookie, same_site)
+        .await?;
+    assert!(
+        stale
+            .wait_for("data: ", std::time::Duration::from_millis(500))
+            .await?
+    );
+    let rows = server.audit()?;
+    let streams = rows
+        .iter()
+        .filter(|(t, _, o)| t == "admin:documents.board_stream" && o == "ok")
+        .count();
+    assert_eq!(streams, 2);
+    drop((stream, stale));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_stream_ends_at_session_expiry_and_server_shutdown() -> TestResult<()> {
+    let server = start_options(
+        |_| {},
+        |options| {
+            if let Some(web) = &mut options.web {
+                web.board.keep_alive = std::time::Duration::from_millis(200);
+            }
+        },
+        stream_fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let same_site = "Sec-Fetch-Site: same-origin\r\n";
+    let mut stream = server.open_stream("", &cookie, same_site).await?;
+    assert_eq!(stream.status, 200);
+    assert!(
+        stream
+            .wait_for(": keep-alive", std::time::Duration::from_secs(2))
+            .await?
+    );
+    server.clock.advance(9 * 3600);
+    assert!(
+        stream
+            .wait_for("event: expired", std::time::Duration::from_secs(2))
+            .await?,
+        "{}",
+        stream.seen
+    );
+    assert!(
+        stream
+            .ends_within(std::time::Duration::from_secs(2))
+            .await?
+    );
+    let cookie = server.login().await?;
+    let mut open = server.open_stream("", &cookie, same_site).await?;
+    assert_eq!(open.status, 200);
+    let started = std::time::Instant::now();
+    server.stop().await?;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(open.ends_within(std::time::Duration::from_secs(1)).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
+    let server = start_full(|_| {}, stream_fixture).await?;
+    let cookie = server.login().await?;
+    let mut open = Vec::new();
+    for _ in 0..32 {
+        let stream = server.open_stream("", &cookie, "").await?;
+        assert_eq!(stream.status, 200, "{}", stream.head);
+        open.push(stream);
+    }
+    let refused = server.get("/admin/board/stream", Some(&cookie)).await?;
+    assert_eq!(refused.status, 503, "{}", refused.body);
+    assert!(
+        refused.body.contains("Too many open boards"),
+        "{}",
+        refused.body
+    );
+    let rows = server.audit()?;
+    assert_eq!(
+        rows.last().map(|(t, _, o)| (t.as_str(), o.as_str())),
+        Some(("admin:documents.board_stream", "busy"))
+    );
+    drop(open.pop());
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let again = server.open_stream("", &cookie, "").await?;
+    assert_eq!(again.status, 200, "a closed stream frees its place");
+    drop(again);
+    drop(open);
     server.stop().await
 }

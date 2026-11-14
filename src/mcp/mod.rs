@@ -100,6 +100,7 @@ impl ServerOptions {
                     closed_statuses: config.documents.closed_statuses(),
                     refresh_ms: config.admin.board_refresh_ms,
                     preview_ms: config.admin.board_preview_ms,
+                    keep_alive: std::time::Duration::from_secs(15),
                 },
             }),
             config_warnings: crate::config::warning_lines(config),
@@ -207,7 +208,7 @@ pub fn router(shared: &Arc<Shared>, options: &ServerOptions, ct: &CancellationTo
         .route("/health", get(|| async { "ok" }))
         .merge(mcp);
     if let Some(web) = &options.web {
-        app = app.merge(crate::web::routes(shared, web, options));
+        app = app.merge(crate::web::routes(shared, web, options, ct));
     }
     match &options.admin {
         Some(admin) => app.nest("/admin/v1", admin_api::routes(shared, admin, options)),
