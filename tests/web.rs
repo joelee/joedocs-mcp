@@ -5092,3 +5092,120 @@ async fn the_board_filters_groups_and_sorts_from_the_address() -> TestResult<()>
     assert!(!page.body.contains("name=\"status\" value=\"done\" checked"));
     server.stop().await
 }
+
+/// A document body with every kind of block the preview must flatten.
+const PREVIEW_BODY: &str = "# Rich plan\n\nOpening <script>alert(1)</script> paragraph\nwrapped on two lines.\n\n- first item\n- second item\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n```plantuml\n@startuml\nA -> B\n@enduml\n```\n\n```rust\nfn main() {}\n```\n\n> [!note] A callout\n> Callout text.\n";
+
+/// The Board fixture plus BE-3, a plan with every kind of block and
+/// `attention`, BE-4, a long note, and AL-4 archived.
+fn preview_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewDocument};
+    board_fixture(store)?;
+    let actor = Actor::new("laptop-key", "claude-code");
+    store.create(
+        &actor,
+        NewDocument {
+            project: "beta".into(),
+            doc_type: Some("plans".into()),
+            title: "Rich plan".into(),
+            content: PREVIEW_BODY.into(),
+            front_matter: front(serde_json::json!({"attention": "Approve me"})),
+            ..NewDocument::default()
+        },
+    )?;
+    store.create(
+        &actor,
+        NewDocument {
+            project: "beta".into(),
+            title: "Long note".into(),
+            content: "word ".repeat(400),
+            ..NewDocument::default()
+        },
+    )?;
+    store.archive(&actor, "AL-4", "gone")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_board_preview_shows_facts_and_opening_text_without_drawing() -> TestResult<()> {
+    let server = start_full(
+        |config| config.admin.web_plantuml_url = "https://plantuml.example.net/plantuml".into(),
+        preview_fixture,
+    )
+    .await?;
+    let anonymous = server.get("/admin/board/preview/BE-3", None).await?;
+    assert_eq!(anonymous.status, 303);
+    let cookie = server.login().await?;
+    let before = server.audit()?.len();
+    let preview = server
+        .get("/admin/board/preview/BE-3", Some(&cookie))
+        .await?;
+    assert_eq!(preview.status, 200, "{}", preview.body);
+    let rows = server.audit()?;
+    assert_eq!(
+        rows[before..]
+            .iter()
+            .map(|(t, _, o)| (t.as_str(), o.as_str()))
+            .collect::<Vec<_>>(),
+        [("admin:documents.get", "ok")]
+    );
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    assert_eq!(
+        preview.header("content-security-policy"),
+        home.header("content-security-policy")
+    );
+    let body = &preview.body;
+    assert!(!body.contains("<html"), "a fragment: {body}");
+    for part in [
+        "data-preview-id=\"BE-3\"",
+        ">Rich plan<",
+        ">BE-3<",
+        ">beta<",
+        ">plans<",
+        ">draft<",
+        ">r1<",
+        ">laptop-key<",
+        "Approve me",
+        "<p>Opening &#60;script&#62;alert(1)&#60;/script&#62; paragraph wrapped on two lines.</p>",
+        "<p>first item</p>",
+        "<p>second item</p>",
+        "<p>[code]</p>",
+        "A callout Callout text.",
+        "href=\"/admin/documents/BE-3\"",
+    ] {
+        assert!(body.contains(part), "{part}: {body}");
+    }
+    assert_eq!(body.matches("<p>[diagram]</p>").count(), 2, "{body}");
+    assert!(!body.contains("<script"), "{body}");
+    assert!(!body.contains("<img"), "nothing is drawn: {body}");
+    assert!(
+        !body.contains("plantuml.example.net"),
+        "nothing is sent: {body}"
+    );
+    assert!(!body.contains("flowchart"), "no diagram source: {body}");
+    let long = server
+        .get("/admin/board/preview/BE-4", Some(&cookie))
+        .await?;
+    let section = long
+        .body
+        .split("<div class=\"board-preview-text\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</div>").next())
+        .unwrap_or_default();
+    let text: usize = section
+        .split("<p>")
+        .skip(1)
+        .filter_map(|p| p.split("</p>").next())
+        .map(|p| p.chars().count())
+        .sum();
+    assert!(text > 0 && text <= 700, "{text}: {}", long.body);
+    assert!(long.body.contains("…"), "a cut is shown: {}", long.body);
+    // As on the document page: unknown is 404, archived 409 `archived`.
+    for (id, status) in [("NOPE-1", 404), ("AL-4", 409)] {
+        let refused = server
+            .get(&format!("/admin/board/preview/{id}"), Some(&cookie))
+            .await?;
+        assert_eq!(refused.status, status, "{id}: {}", refused.body);
+    }
+    server.stop().await
+}

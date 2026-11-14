@@ -21,6 +21,26 @@ use crate::store::{
 /// The longest `attention` reason a card shows, in characters.
 const REASON_CHARS: usize = 80;
 
+/// The most opening text a preview shows, in characters.
+const PREVIEW_CHARS: usize = 700;
+
+/// The card preview: the document's facts and its opening text.
+#[derive(Template)]
+#[template(path = "board_preview.html")]
+struct Preview {
+    id: String,
+    title: String,
+    project: String,
+    doc_type: String,
+    status: String,
+    revision: u64,
+    updated: String,
+    updated_by: String,
+    attention: Option<String>,
+    paragraphs: Vec<String>,
+    cut: bool,
+}
+
 #[derive(Template)]
 #[template(path = "board.html")]
 struct BoardPage<'a> {
@@ -190,6 +210,139 @@ pub(crate) fn page(
         grid,
     };
     Ok(render(StatusCode::OK, &page))
+}
+
+/// `GET /admin/board/preview/{id}`: the facts and the opening text of a
+/// live document, with code and diagrams left out: nothing is drawn, and
+/// nothing is sent to a diagram server.
+pub(crate) fn preview(store: &Store, id: &str) -> Result<Response, WebError> {
+    let fetched = store.get(id, None).map_err(|e| WebError::from_store(&e))?;
+    let attention = attention_reason(&fetched.markdown);
+    let (_, body) = split_front_matter(&fetched.markdown);
+    let d = fetched.document;
+    let (mut paragraphs, cut) = opening_text(body);
+    if paragraphs.first().is_some_and(|p| p == &d.title) {
+        paragraphs.remove(0);
+    }
+    let page = Preview {
+        id: d.id,
+        title: d.title,
+        project: d.project,
+        doc_type: d.doc_type,
+        status: d.status,
+        revision: d.revision,
+        updated: d.updated,
+        updated_by: d.updated_by,
+        attention,
+        paragraphs,
+        cut,
+    };
+    Ok(render(StatusCode::OK, &page))
+}
+
+/// The opening paragraphs of a Markdown body as plain text, at most
+/// [`PREVIEW_CHARS`] characters, and whether it was cut. Headings and list
+/// items are paragraphs of their own, without their marks; quotes and
+/// callouts lose theirs; a fenced block is `[diagram]` (Mermaid, `PlantUML`)
+/// or `[code]`.
+fn opening_text(body: &str) -> (Vec<String>, bool) {
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut fence: Option<&str> = None;
+    let flush = |current: &mut String, paragraphs: &mut Vec<String>| {
+        let text = current.trim();
+        if !text.is_empty() {
+            paragraphs.push(text.to_owned());
+        }
+        current.clear();
+    };
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(open) = fence {
+            if trimmed.starts_with(open) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(open) = ["```", "~~~"].into_iter().find(|f| trimmed.starts_with(f)) {
+            flush(&mut current, &mut paragraphs);
+            let lang = trimmed.trim_start_matches(['`', '~']).trim();
+            let label = if matches!(lang, "mermaid" | "plantuml" | "puml") {
+                "[diagram]"
+            } else {
+                "[code]"
+            };
+            paragraphs.push(label.to_owned());
+            fence = Some(open);
+            continue;
+        }
+        if trimmed.is_empty() {
+            flush(&mut current, &mut paragraphs);
+            continue;
+        }
+        let (own_line, text) = strip_marks(trimmed);
+        if own_line {
+            flush(&mut current, &mut paragraphs);
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(text);
+        if own_line {
+            flush(&mut current, &mut paragraphs);
+        }
+    }
+    flush(&mut current, &mut paragraphs);
+    let mut left = PREVIEW_CHARS;
+    let mut kept = Vec::new();
+    let mut cut = false;
+    for paragraph in paragraphs {
+        if left == 0 {
+            cut = true;
+            break;
+        }
+        let count = paragraph.chars().count();
+        if count > left {
+            kept.push(paragraph.chars().take(left).collect());
+            cut = true;
+            break;
+        }
+        left -= count;
+        kept.push(paragraph);
+    }
+    (kept, cut)
+}
+
+/// A line without its heading, list, quote or callout marks, and whether
+/// it stands on its own (a heading or a list item).
+fn strip_marks(line: &str) -> (bool, &str) {
+    if line.starts_with('#') {
+        return (true, line.trim_start_matches('#').trim_start());
+    }
+    for mark in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(mark) {
+            return (
+                true,
+                rest.strip_prefix("[ ] ")
+                    .or_else(|| rest.strip_prefix("[x] "))
+                    .unwrap_or(rest),
+            );
+        }
+    }
+    if let Some((number, rest)) = line.split_once(". ")
+        && !number.is_empty()
+        && number.bytes().all(|b| b.is_ascii_digit())
+    {
+        return (true, rest);
+    }
+    let text = line.trim_start_matches(['>', ' ']);
+    let text = text
+        .strip_prefix("[!")
+        .and_then(|t| t.split_once(']'))
+        .map_or(text, |(_, rest)| {
+            rest.trim_start_matches(['-', '+']).trim_start()
+        });
+    (false, text)
 }
 
 /// `KEY-12` as (`KEY`, 12), so IDs sort by their number.
@@ -424,6 +577,20 @@ mod tests {
         let mut ids = vec!["JD-10", "AB-3", "JD-2", "JD-1"];
         ids.sort_by_key(|id| id_order(id));
         assert_eq!(ids, ["AB-3", "JD-1", "JD-2", "JD-10"]);
+    }
+
+    #[test]
+    fn opening_text_keeps_prose_and_marks_code_and_diagrams() {
+        let body = "# Title\n\nOne\ntwo.\n\n1. first\n2. second\n- [ ] task\n\n~~~puml\nx\n~~~\n";
+        let (text, cut) = opening_text(body);
+        assert_eq!(
+            text,
+            ["Title", "One two.", "first", "second", "task", "[diagram]"]
+        );
+        assert!(!cut);
+        let (text, cut) = opening_text(&"a".repeat(PREVIEW_CHARS + 5));
+        assert_eq!(text[0].chars().count(), PREVIEW_CHARS);
+        assert!(cut);
     }
 
     #[test]

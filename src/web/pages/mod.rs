@@ -201,6 +201,7 @@ pub(crate) fn page(
         Route::Logout => Ok(login::logout(store, session)),
         Route::Home => overview::page(store, state, session),
         Route::Board => board::page(store, state, request, session),
+        Route::BoardPreview(id) => board::preview(store, id),
         Route::DocumentsList => documents::list(store, request, session),
         Route::Document(id) => document::view(store, state, request, session, id),
         Route::History(id) => history::history(store, request, session, id),

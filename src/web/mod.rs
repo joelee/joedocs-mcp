@@ -38,6 +38,7 @@
 //! | `POST /admin/users/{name}/reset-totp` | `admin:users.reset_totp` |
 //! | `GET /admin/` | `admin:status` |
 //! | `GET /admin/board` | `admin:documents.board` |
+//! | `GET /admin/board/preview/{id}` | `admin:documents.get` |
 //! | `GET /admin/documents` | `admin:documents.list` |
 //! | `GET /admin/documents/{id}` | `admin:documents.get` |
 //! | `GET /admin/documents/{id}/history` | `admin:documents.history` |
@@ -193,6 +194,7 @@ pub(crate) enum Route {
     UserAction(String, pages::users::UserAction),
     Home,
     Board,
+    BoardPreview(String),
     DocumentsList,
     Document(String),
     History(String),
@@ -260,6 +262,9 @@ impl Route {
             }
             ("/admin/", _) if get => Self::Home,
             ("/admin/board", _) if get => Self::Board,
+            (_, ["board", "preview", id]) if get && !id.is_empty() => {
+                Self::BoardPreview(percent_decode(id))
+            }
             (_, ["documents"]) if get => Self::DocumentsList,
             (_, ["documents", id]) if get && !id.is_empty() => Self::Document(percent_decode(id)),
             (_, ["documents", id, "history"]) if get && !id.is_empty() => {
@@ -328,7 +333,7 @@ impl Route {
             Self::Home => "admin:status",
             Self::Board => "admin:documents.board",
             Self::DocumentsList => "admin:documents.list",
-            Self::Document(_) | Self::Download(_) => "admin:documents.get",
+            Self::Document(_) | Self::Download(_) | Self::BoardPreview(_) => "admin:documents.get",
             Self::History(_) => "admin:documents.history",
             Self::Diff(_) => "admin:documents.diff",
             Self::Search => "admin:documents.search",
