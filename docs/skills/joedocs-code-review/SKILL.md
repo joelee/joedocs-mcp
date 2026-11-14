@@ -299,6 +299,24 @@ the body as `content`, `summary: "Code review: <verdict>"`, and:
 
 The returned document ID is the review ID. Do not number reviews yourself.
 
+### The attention key
+
+`attention` is a front matter key holding a short reason, one line, that a
+document needs the user now. The web interface's Board (JoeDocs 0.5.5) lights
+a card while its main file has the key with non-empty text, and shows the
+text. A light that stays on after the need has passed teaches the user to
+ignore it, so set the key only when the user is needed, and remove it as soon
+as they are not: `change_document_front_matter` with `remove: ["attention"]`
+and `expected_revision`, in the same call as the status change when there is
+one. Never clear it by writing `false` or an empty string: remove the key.
+
+- **Set it** only when the review has a Critical or Major finding (it blocks
+  the merge or release): `attention: "Blocking: <n> Critical or Major
+  findings"`, in the `new_document` front matter or the round's update.
+  Medium, Low and Info findings never set it.
+- **Remove it** in the re-review round where no Critical or Major finding is
+  left open, in the same call as that round's front matter.
+
 ### Front matter
 
 JoeDocs writes `id`, `title`, `project`, `type`, `revision`, `created*`,

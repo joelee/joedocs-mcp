@@ -302,6 +302,25 @@ subagents:
    with `revision_kind: challenge`, attributing accepted, rejected, partially
    accepted and unresolved findings.
 
+## The attention key
+
+`attention` is a front matter key holding a short reason, one line, that a
+document needs the user now. The web interface's Board (JoeDocs 0.5.5) lights
+a card while its main file has the key with non-empty text, and shows the
+text. A light that stays on after the need has passed teaches the user to
+ignore it, so set the key only when the user is needed, and remove it as soon
+as they are not: `change_document_front_matter` with `remove: ["attention"]`
+and `expected_revision`, in the same call as the status change when there is
+one. Never clear it by writing `false` or an empty string: remove the key.
+
+- **Set it** when a revision is published that waits for the user's
+  decision (a draft or a revised idea the user is to accept, revise, park or
+  reject): `attention: "Waiting for your decision"`, in the same call.
+- **Remove it** with the decision: `update_document` cannot remove a key, so
+  right after the decision revision call `change_document_front_matter` with
+  `remove: ["attention"]`. A revision that needs nothing from the user (a
+  challenge round the user did not ask to decide) leaves the key as it is.
+
 ## Publishing
 
 **A new idea:** `new_document` with the `project`, `type: "ideas"`,

@@ -66,6 +66,8 @@ The usual path is: idea, accepted by the user; plan, approved by the user; build
 
 Approval belongs to the user. Accept an idea, approve a plan, or mark a plan `done`, only when the user says so. A plan's `approved` means approved and being built, and is not closed; `done` means implemented and closed, and is set only on the user's explicit sign-off, never because the build finished (`implementation_status: completed`). `parked`, when the server has it, is work the user has set aside to come back to later: an idea, a draft plan or an open issue, and only on the user's decision.
 
+The `attention` front matter key holds a short reason that a document needs the user now (a decision, an approval, a review, a sign-off). The Board lights such cards. Set it only when the user is needed, and remove it (`change_document_front_matter` with `remove`) as soon as they have answered; never leave it set as a reminder.
+
 The skills are a route, not a gate. A small, direct change that the user asks for (a typo, a one-line fix, a dependency bump, a question about the code) can be done without an idea or a plan. For anything larger, offer the planner, but do as the user decides.
 
 In Claude Code, the user can run a skill as `/joedocs-planner <request>`, or just ask. A skill loads when the request matches its description. Agents without skill support should read the skill's `SKILL.md` and follow it.

@@ -365,6 +365,7 @@ web_research_used: false
 confidence: high                # high | medium | low
 planner_model: <model id>       # leave out when unknown
 implementation_status: not-started
+attention: "Waiting for your approval"  # while a draft waits; see The attention key
 ```
 
 The builder may later set only `implementation_status` (`not-started`,
@@ -635,6 +636,29 @@ it back to `draft`, and it needs approving again. Never park an `approved`
 plan: the builder's approval check would refuse it once resumed. An approved
 plan that waits keeps `approved`, with `implementation_status` `not-started`
 or `blocked`.
+
+## The attention key
+
+`attention` is a front matter key holding a short reason, one line, that a
+document needs the user now. The web interface's Board (JoeDocs 0.5.5) lights
+a card while its main file has the key with non-empty text, and shows the
+text. A light that stays on after the need has passed teaches the user to
+ignore it, so set the key only when the user is needed, and remove it as soon
+as they are not: `change_document_front_matter` with `remove: ["attention"]`
+and `expected_revision`, in the same call as the status change when there is
+one. Never clear it by writing `false` or an empty string: remove the key.
+
+- **Set it** when a plan is published as a draft, or revised, and waits for
+  the user's approval: `attention: "Waiting for your approval"` (in the
+  `new_document` front matter, or with the revision).
+- **Remove it** when the user decides. Approval is one `update_document`
+  call, which cannot remove a key, so right after it call
+  `change_document_front_matter` with `remove: ["attention"]` and the
+  approval revision as `expected_revision`; the builder's approval check
+  accepts that change. Closing, parking, rejecting or superseding a plan
+  removes it in the same call that sets the status.
+- Never set it on an approved plan: from approval on, the builder sets it at
+  its stops (see `joedocs-builder`).
 
 ## Responses
 
