@@ -28,6 +28,15 @@
   let paused = false;
   let waiting = false;
   let eventAt = 0;
+  // A failed grid fetch is retried after 2 s, doubling to 30 s; a fetch
+  // slower than 10 s counts as failed (JD-49 D-01).
+  const RETRY_FIRST_MS = 2000;
+  const RETRY_MAX_MS = 30000;
+  const FETCH_TIMEOUT_MS = 10000;
+  let retryDelay = 0;
+  let retryTimer = null;
+  // Signed out: nothing more is fetched until the page is reloaded.
+  let ended = false;
   // Counters shown with `?debug=1` (developer use).
   const stats = {
     events: 0, refreshes: 0, transitions: 0, skipped: 0, latency: 0, maxLatency: 0,
@@ -117,7 +126,9 @@
   };
 
   const signedOut = () => {
+    ended = true;
     close();
+    clearTimeout(retryTimer);
     live("offline", "Signed out: reload to sign in");
   };
   const loginPage = (res) => res.redirected && new URL(res.url).pathname === "/admin/login";
@@ -205,7 +216,27 @@
     return `/admin/board?${params}`;
   };
 
-  // `instant`: a filter change, applied at once and without animation.
+  // A failed fetch is tried again, backing off, until one succeeds. While
+  // paused or hidden it waits: Resume or showing the page catches up.
+  const retryLater = () => {
+    if (ended) {
+      return;
+    }
+    retryDelay = retryDelay ? Math.min(retryDelay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (paused) {
+        waiting = true;
+      } else if (!document.hidden) {
+        refresh(false);
+      }
+    }, retryDelay);
+  };
+
+  // `instant`: a filter change, the user's own action, applied at once and
+  // without animation even while paused. An automatic refresh that arrives
+  // while paused is held: Resume fetches the latest grid.
   function refresh(instant) {
     if (busy) {
       again = true;
@@ -214,7 +245,10 @@
     busy = true;
     lastRefresh = performance.now();
     stats.refreshes += 1;
-    fetch(fragmentUrl(), { credentials: "same-origin" })
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let fetched = false;
+    fetch(fragmentUrl(), { credentials: "same-origin", signal: controller.signal })
       .then((res) => {
         if (loginPage(res)) {
           signedOut();
@@ -225,10 +259,34 @@
         }
         return res.text();
       })
-      .then((html) => (html ? apply(html, instant) : null))
-      .catch(() => live("offline", "Disconnected"))
+      .then((html) => {
+        if (!html) {
+          return null;
+        }
+        fetched = true;
+        if (paused && !instant) {
+          waiting = true;
+          live("paused", "Paused, changes waiting");
+          return null;
+        }
+        return apply(html, instant);
+      })
+      .catch(() => {
+        fetched = false;
+        live("offline", "Disconnected, retrying");
+      })
       .finally(() => {
+        clearTimeout(timeout);
         busy = false;
+        if (fetched) {
+          retryDelay = 0;
+          clearTimeout(retryTimer);
+          if (!paused && source?.readyState === EventSource.OPEN) {
+            live("live", "Live");
+          }
+        } else {
+          retryLater();
+        }
         if (again) {
           again = false;
           refreshSoon();
@@ -497,7 +555,10 @@
   // Hover anywhere on a card, or focus on its link, for the configured
   // time opens its preview. Leaving one card must not cancel the next
   // card's wait (the cause of "only on the action button" in the spike).
-  const startHover = (card) => {
+  // `by`: "pointer" or "focus". A preview waiting on focus is cancelled
+  // when focus leaves its card; one waiting on the pointer is not.
+  let hoverBy = null;
+  const startHover = (card, by) => {
     clearTimeout(leaveTimer);
     if (!previewMs || previewCard === card || hoverCard === card) {
       return;
@@ -506,6 +567,7 @@
       closePreview();
     }
     hoverCard = card;
+    hoverBy = by;
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(() => {
       hoverCard = null;
@@ -531,7 +593,7 @@
     }
     const card = target.closest(".bcard");
     if (card && board.contains(card)) {
-      startHover(card);
+      startHover(card, "pointer");
     } else if (target.closest("[data-board-preview]")) {
       clearTimeout(leaveTimer);
     }
@@ -547,9 +609,11 @@
   document.addEventListener("focusin", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (target?.matches(".bcard-link") && board.contains(target)) {
-      startHover(target.closest(".bcard"));
-    } else if (previewCard && !target?.closest("[data-board-preview], [data-board-menu]")) {
-      hidePreview();
+      startHover(target.closest(".bcard"), "focus");
+    } else if (!target?.closest("[data-board-preview], [data-board-menu]")) {
+      if (previewCard || (hoverCard && hoverBy === "focus")) {
+        hidePreview();
+      }
     }
   });
   document.addEventListener("keydown", (event) => {
@@ -589,10 +653,23 @@
       paused = !paused;
       pause.setAttribute("aria-pressed", String(paused));
       pause.textContent = paused ? "Resume" : "Pause";
-      live(paused ? "paused" : "live", paused ? "Paused" : "Live");
-      if (!paused && waiting) {
-        waiting = false;
-        refresh(false);
+      if (paused && (timer || retryTimer)) {
+        // A refresh already queued waits for Resume; one in flight is held
+        // when it arrives (refresh).
+        clearTimeout(timer);
+        clearTimeout(retryTimer);
+        timer = null;
+        retryTimer = null;
+        waiting = true;
+      }
+      if (paused) {
+        live("paused", waiting ? "Paused, changes waiting" : "Paused");
+      } else {
+        live("live", "Live");
+        if (waiting) {
+          waiting = false;
+          refresh(false);
+        }
       }
       return;
     }
