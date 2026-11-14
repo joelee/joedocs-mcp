@@ -82,6 +82,17 @@ web_ui = true
 TOML
 }
 
+# Stops the server started for seeding, whatever ends the script.
+seed_pid=""
+cleanup() {
+    if [ -n "$seed_pid" ]; then
+        kill "$seed_pid" 2>/dev/null || true
+        wait "$seed_pid" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
 if $fresh && [ -d "$scratch" ]; then
     echo "scratch-server: removing $scratch"
     rm -rf "$scratch"
@@ -90,13 +101,44 @@ fi
 (cd "$root" && cargo build --locked --quiet)
 
 first_run=false
-[ -d "$scratch/state" ] || first_run=true
+if [ ! -d "$scratch/state" ]; then
+    first_run=true
+elif [ ! -e "$scratch/seeded" ]; then
+    fail "an earlier first run did not finish; start over with: just scratch-server fresh"
+fi
 mkdir -p "$scratch"
 write_config
+
+# The sample data goes in over MCP, as an agent would write it, with a key
+# whose token stays in this shell: never printed, never written to disk.
+seed() {
+    local token
+    jd project add demo --key DEMO --title "Demo" >/dev/null
+    jd project add sandbox --key SBX --title "Sandbox" >/dev/null
+    token="$(jd key create scratch-seed --grant demo:write --grant sandbox:write | tail -n 1)"
+    # Not through jd: in a function, $! would be a subshell, and killing it
+    # would leave the server running. env replaces itself with joedocs.
+    env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
+        JOEDOCS_CONFIG_FILE="$config" "$bin" serve >"$scratch/seed-server.log" 2>&1 &
+    seed_pid=$!
+    local tries=0
+    until curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        [ "$tries" -le 30 ] || fail "the server did not start; see $scratch/seed-server.log"
+        sleep 1
+    done
+    (cd "$root" && SCRATCH_MCP_URL="http://127.0.0.1:$port/mcp" SCRATCH_TOKEN="$token" \
+        cargo run --locked --quiet --example scratch_seed)
+    cleanup
+    seed_pid=""
+    touch "$scratch/seeded"
+}
 
 if $first_run; then
     jd init >/dev/null
     password="$(jd user create dev | tail -n 1)"
+    echo "scratch-server: writing sample data (first run)"
+    seed
 fi
 
 echo
