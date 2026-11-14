@@ -228,6 +228,7 @@ impl Default for DocumentsConfig {
                 "rejected",
                 "superseded",
                 "done",
+                "parked",
             ]),
             default_type: "home".to_owned(),
             default_status: "draft".to_owned(),
@@ -410,6 +411,22 @@ mod tests {
         assert_eq!(config.documents.default_type, "home");
         assert_eq!(config.documents.default_status, "draft");
         assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn default_statuses_end_with_parked() {
+        assert_eq!(
+            Config::default().documents.statuses,
+            [
+                "draft",
+                "review",
+                "approved",
+                "rejected",
+                "superseded",
+                "done",
+                "parked"
+            ]
+        );
     }
 
     #[test]

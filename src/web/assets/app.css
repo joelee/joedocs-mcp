@@ -199,6 +199,7 @@ section { margin-bottom: var(--space-8); }
 .badge-status-review { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .badge-status-approved, .badge-status-done { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .badge-status-rejected, .badge-status-superseded { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.badge-status-parked { background: var(--accent-soft); color: var(--accent); border: 1px dashed var(--accent); }
 .chip {
   display: inline-block; padding: 0 0.5em; margin: 0 0.15em 0.15em 0;
   border-radius: 999px; font-size: var(--text-sm);
