@@ -5526,3 +5526,58 @@ async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
     drop(open);
     server.stop().await
 }
+
+#[tokio::test]
+async fn only_the_board_loads_its_script_which_is_a_cached_asset() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let board = server.get("/admin/board", Some(&cookie)).await?;
+    let at = board
+        .body
+        .find("/board.js\"")
+        .ok_or("board.js not linked")?;
+    let start = board.body[..at]
+        .rfind("/admin/assets/")
+        .ok_or("no asset path")?;
+    let path = &board.body[start..at + "/board.js".len()];
+    assert!(
+        board.body[..start].ends_with("<script src=\""),
+        "a script: {path}"
+    );
+    let script = server.get(path, None).await?;
+    assert_eq!(script.status, 200, "{path}");
+    assert!(
+        script
+            .header("content-type")
+            .is_some_and(|t| t.starts_with("text/javascript"))
+    );
+    assert_eq!(
+        script.header("cache-control"),
+        Some("public, max-age=31536000, immutable")
+    );
+    for other in ["/admin/", "/admin/documents", "/admin/audit"] {
+        let page = server.get(other, Some(&cookie)).await?;
+        assert!(!page.body.contains("board.js"), "{other} does not load it");
+    }
+    // The page carries what the script needs: settings, the status
+    // indicator, Pause, both menus and the preview container.
+    for part in [
+        "data-refresh-ms=\"1000\"",
+        "data-preview-ms=\"2000\"",
+        "data-board-live",
+        "data-board-pause",
+        "data-board-actions",
+        "data-board-menu",
+        "data-board-actions-menu",
+        "data-board-preview",
+        "data-card-menu",
+        "aria-label=\"Actions for AL-1\"",
+    ] {
+        assert!(board.body.contains(part), "{part}");
+    }
+    assert!(
+        !board.body.contains(">Apply<"),
+        "filters apply as they change"
+    );
+    server.stop().await
+}

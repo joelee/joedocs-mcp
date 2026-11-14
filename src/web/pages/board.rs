@@ -53,6 +53,8 @@ struct BoardPage<'a> {
     view: View,
     refresh_ms: u32,
     preview_ms: u32,
+    /// `?debug=1`: show the page script's counters (developer use).
+    debug: bool,
     grid: BoardGrid,
 }
 
@@ -209,6 +211,7 @@ pub(crate) fn page(
         view,
         refresh_ms: board.refresh_ms,
         preview_ms: board.preview_ms,
+        debug: request.query("debug") == Some("1"),
         grid,
     };
     Ok(render(StatusCode::OK, &page))
