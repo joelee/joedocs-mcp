@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-14
+
+A tool for developers: `just scratch-server` runs a throwaway server from the working tree, with sample data, to try the web interface on other devices. Servers, their configuration, the MCP tools and the admin API are unchanged.
+
+### Added
+
+- **`just scratch-server`** (developers). Builds the working tree and serves a scratch store kept in `.local/scratch`, filled on its first run with sample documents (more than a page of them, in every type and status, with diagrams, revisions, a multi-file backlog and an archived one) and a user `dev` whose one-time password it prints. It prints the loopback address for this machine or a proxy of your own (`SCRATCH_ALLOWED_HOSTS`), and, through `tailscale serve`, an HTTPS address for phones, removed when it stops. `fresh` starts over. It never uses your `JOEDOCS_*` variables or touches a real store. See the developer guide.
+
 ## [0.5.3] - 2026-11-14
 
 A `parked` status for work set aside to come back to later, clearer plan statuses in the agent skills, and a stated JavaScript requirement for the web interface. MCP tools, the admin API and the database are unchanged.
@@ -256,7 +264,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/joelee/joedocs-mcp/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/joelee/joedocs-mcp/compare/v0.5.0...v0.5.1

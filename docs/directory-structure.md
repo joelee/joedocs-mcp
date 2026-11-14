@@ -20,6 +20,8 @@
 ├── config.example.toml     Every config key with its default (checked by a test)
 ├── deny.toml               cargo-deny: advisories, licences, bans, sources
 ├── justfile                Local and CI entry points
+├── scripts/scratch-server.sh  just scratch-server: a throwaway server from the working tree, kept in .local/scratch (git-ignored)
+├── examples/scratch_seed.rs   The scratch server's sample data, written over MCP (not published)
 ├── rust-toolchain.toml     Pinned toolchain and components
 ├── .config/nextest.toml    Test runner profiles (default, ci)
 ├── .env.example            Supported secret variables with placeholders

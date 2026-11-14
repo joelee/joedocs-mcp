@@ -193,6 +193,7 @@ Planned:
 - Members and key ownership for user accounts: users who manage only their own MCP keys, within the projects an admin grants them, and keys stopped with their owner.
 - More agent skills: research notes, decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
+- A live Board in the web interface: documents as cards in status columns, grouped by type across several projects, updated as agents work, with animation.
 - More ways to install: `cargo binstall joedocs` (the release binaries, no compiling), an Arch Linux AUR package `joedocs-bin`, and a container image on GitHub Container Registry, published with each release.
 
 Further out:
