@@ -161,7 +161,9 @@ the builder can run.
    `unplanned-query` but must not publish; say so.
 5. `plans` must be one of the server's `types`, and `draft`, `approved`,
    `superseded` and `rejected` must be among its `statuses`. If not, ask the
-   user which type and statuses to use instead.
+   user which type and statuses to use instead. Closing a plan also needs
+   `done`; parking one needs `parked`, which is optional (see Closing and
+   parking a plan).
 
 ## Step 2: record the repository baseline
 
@@ -608,6 +610,31 @@ to `{"status": "superseded", "superseded_by": "<new ID>"}` with
 `change_document_front_matter`, leaving its body unchanged. **Cancelling** a
 plan the user no longer wants: set `status: rejected` the same way, with a
 change log row.
+
+## Closing and parking a plan
+
+A plan's status says where it stands: `approved` means approved and being
+built, and is **not** closed; `done` means implemented, and is closed.
+
+**Closing a plan.** Only the user closes a plan, by signing it off as
+implemented, typically after its review and release. On that explicit
+sign-off, and only then, call `change_document_front_matter` with
+`expected_revision` and
+`set: {"status": "done", "signed_off_by": "<the user's name, as they give it>"}`.
+Leave the body unchanged: an approved plan's body is fixed, and the builder's
+work log already records the completion. `implementation_status: completed`
+never closes a plan by itself, and neither does a passing review, a merge or a
+release. `signed_off_by` is recorded as stated, not verified; the history
+shows when the plan was closed and with which key.
+
+**Parking a plan.** When the user decides to set a `draft` or `review` plan
+aside, to do something more important first and come back to it later, set
+`status: parked` the same way, if the server lists `parked` in its `statuses`
+(`list_projects`); otherwise tell the user it is not available. Resuming sets
+it back to `draft`, and it needs approving again. Never park an `approved`
+plan: the builder's approval check would refuse it once resumed. An approved
+plan that waits keeps `approved`, with `implementation_status` `not-started`
+or `blocked`.
 
 ## Responses
 
