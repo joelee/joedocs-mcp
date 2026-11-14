@@ -224,6 +224,10 @@ pub struct AuditQuery<'a> {
     pub outcome: Option<&'a str>,
     /// Every outcome but this one (`ok` for the refusals).
     pub outcome_not: Option<&'a str>,
+    /// Every tool but this one.
+    pub tool_not: Option<&'a str>,
+    /// Every tool that does not start with this text (case included).
+    pub tool_not_prefix: Option<&'a str>,
     /// Entries to skip.
     pub offset: u64,
     /// Most entries to return.
@@ -264,7 +268,8 @@ pub fn list_audit(
         AND (?3 IS NULL OR key_name = ?3) AND (?4 IS NULL OR tool = ?4)
         AND (?5 IS NULL OR substr(tool, 1, length(?5)) = ?5)
         AND (?6 IS NULL OR document_id = ?6) AND (?7 IS NULL OR outcome = ?7)
-        AND (?8 IS NULL OR outcome <> ?8)";
+        AND (?8 IS NULL OR outcome <> ?8) AND (?9 IS NULL OR tool <> ?9)
+        AND (?10 IS NULL OR substr(tool, 1, length(?10)) <> ?10)";
     let conditions = params![
         query.since,
         query.until,
@@ -274,6 +279,8 @@ pub fn list_audit(
         query.document_id,
         query.outcome,
         query.outcome_not,
+        query.tool_not,
+        query.tool_not_prefix,
     ];
     let total = conn.query_row(
         &format!("SELECT count(*) FROM audit_log {filter}"),
@@ -282,7 +289,7 @@ pub fn list_audit(
     )?;
     let mut stmt = conn.prepare(&format!(
         "SELECT at, api_key_id, key_name, client, tool, document_id, outcome, user_name
-         FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?9 OFFSET ?10"
+         FROM audit_log {filter} ORDER BY at DESC, rowid DESC LIMIT ?11 OFFSET ?12"
     ))?;
     let rows = stmt
         .query_map(
@@ -295,6 +302,8 @@ pub fn list_audit(
                 query.document_id,
                 query.outcome,
                 query.outcome_not,
+                query.tool_not,
+                query.tool_not_prefix,
                 query.limit,
                 query.offset,
             ],
@@ -762,6 +771,13 @@ mod tests {
             ..all.clone()
         };
         assert_eq!(read(&percent).1, 0, "`%` is literal");
+        let not_admin = AuditQuery {
+            tool_not_prefix: Some("admin:"),
+            ..all.clone()
+        };
+        let (left, total) = read(&not_admin);
+        assert_eq!(total, 3, "{left:?}");
+        assert!(left.iter().all(|t| !t.starts_with("admin:")), "{left:?}");
         let upper = AuditQuery {
             tool_prefix: Some("ADMIN:"),
             ..all.clone()

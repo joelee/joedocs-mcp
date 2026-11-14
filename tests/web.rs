@@ -2226,6 +2226,68 @@ fn page_entries(body: &str) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn the_audit_page_can_leave_out_board_rows() -> TestResult<()> {
+    let server = start_full(
+        |_| {},
+        |store| {
+            use joedocs::store::Actor;
+            fixture(store)?;
+            let web = Actor::new("admin", "joedocs-web");
+            for tool in [
+                "admin:documents.board",
+                "admin:documents.board_stream",
+                "admin:documents.get",
+            ] {
+                store.audit("admin-id", &web, tool, None, "ok")?;
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let all = server.get("/admin/audit?key=admin", Some(&cookie)).await?;
+    assert!(
+        all.body
+            .contains("href=\"/admin/audit?tool_not=admin%3Adocuments.board*\""),
+        "{}",
+        all.body
+    );
+    assert!(all.body.contains(">Leave out Board</a>"), "{}", all.body);
+    let tools = |body: &str| -> Vec<String> {
+        page_entries(body)
+            .iter()
+            .filter_map(|e| e.split(' ').next().map(str::to_owned))
+            .collect()
+    };
+    assert!(tools(&all.body).contains(&"admin:documents.board".to_owned()));
+    let left = server
+        .get(
+            "/admin/audit?key=admin&tool_not=admin%3Adocuments.board*",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(left.status, 200, "{}", left.body);
+    let left_tools = tools(&left.body);
+    assert!(
+        left_tools
+            .iter()
+            .all(|t| !t.starts_with("admin:documents.board")),
+        "{left_tools:?}"
+    );
+    assert!(
+        left_tools.contains(&"admin:documents.get".to_owned()),
+        "{left_tools:?}"
+    );
+    assert!(
+        left.body
+            .contains("name=\"tool_not\" value=\"admin:documents.board*\""),
+        "the filter form keeps it: {}",
+        left.body
+    );
+    server.stop().await
+}
+
+#[tokio::test]
 async fn the_audit_page_filters_and_pages_as_joedocs_audit_does() -> TestResult<()> {
     let expected = Arc::new(std::sync::Mutex::new(Vec::new()));
     let record = Arc::clone(&expected);

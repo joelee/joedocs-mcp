@@ -19,10 +19,12 @@
   <div><label for="a-document">Document</label><input id="a-document" name="document" value="{{ self.value("document") }}" placeholder="JD-42" autocomplete="off"></div>
   <div><label for="a-outcome">Outcome</label><input id="a-outcome" name="outcome" value="{{ self.value("outcome") }}" placeholder="ok" autocomplete="off"></div>
   {% if !self.value("outcome_not").is_empty() %}<input type="hidden" name="outcome_not" value="{{ self.value("outcome_not") }}">{% endif %}
+  {% if !self.value("tool_not").is_empty() %}<input type="hidden" name="tool_not" value="{{ self.value("tool_not") }}">{% endif %}
   {% if let Some(limit) = limit %}<input type="hidden" name="limit" value="{{ limit }}">{% endif %}
   <div class="filters-apply"><button type="submit">Filter</button></div>
 </form>
 {% if !self.value("outcome_not").is_empty() %}<p class="hint">Showing outcomes other than <code>{{ self.value("outcome_not") }}</code>. <a href="/admin/audit">Show all</a></p>{% endif %}
+{% if !self.value("tool_not").is_empty() %}<p class="hint">Leaving out tools matching <code>{{ self.value("tool_not") }}</code>. <a href="/admin/audit">Show all</a></p>{% endif %}
 
 <section id="results" class="results" aria-label="Audit entries" data-focus="keep" data-announce="Audit entries updated">
 {{ results|safe }}

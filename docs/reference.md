@@ -226,7 +226,7 @@ With `[admin] enabled = true` and `web_ui = true`, `joedocs serve` also serves p
 | Search | `search` over every project or one, with type, status, `key=value` and JSON filters; the results reload as you type. A search for exactly a document's ID (`JD-33`, any case) from the top bar opens that document; on the Search page that document is listed first, and an archived one's ID points to the Archive |
 | Projects | `project list` and `project add` |
 | API keys | `key list`, `create`, `grant`, `ungrant`, `rotate` and `revoke`; a new or rotated token is shown once, on the reply to that request |
-| Audit | `audit` with its filters, and quick filters for admin calls, refusals and the last 24 hours |
+| Audit | `audit` with its filters, and quick filters for admin calls, refusals, the last 24 hours, and "Leave out Board" (every tool but `admin:documents.board*`, the Board's frequent rows; 0.5.5) |
 | Archive | `archive list` and `archive restore` |
 | Maintenance | `check`, `reindex` and a backup download, and the commands that run only on the server |
 | Users | `user list`, `create` (the one-time password is shown once, on the reply), `disable`, `enable`, `unlock`, `reset-password` and `reset-totp`; for signed-in users only |

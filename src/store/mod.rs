@@ -599,6 +599,18 @@ impl Store {
         &self.settings
     }
 
+    /// A marker that changes whenever a revision is recorded: the history
+    /// commit the index reflects, read from the database, so a write by
+    /// another process (a local `joedocs` command) shows too. `None` before
+    /// the first commit. Cheap: one indexed read.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors.
+    pub fn change_marker(&self) -> Result<Option<String>, Error> {
+        Ok(db::history_head(&self.conn)?)
+    }
+
     /// The store clock's current time, formatted as in the database.
     #[must_use]
     pub fn now(&self) -> String {
