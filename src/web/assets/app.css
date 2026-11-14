@@ -457,3 +457,56 @@ code.break { overflow-wrap: anywhere; }
   input, select, textarea, .search-json input { font-size: 16px; }
   button.link { min-height: 24px; }
 }
+
+/* --- Board (0.5.5) -------------------------------------------------------- */
+
+/* The Board takes the whole width of the window. */
+main:has(.board-page) { max-width: none; }
+
+.board-head-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-3); }
+.board-title { display: flex; gap: var(--space-2); align-items: center; }
+.board-title h1 { margin: 0; }
+
+.board-filters { margin-bottom: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: var(--space-2) var(--space-3); }
+.board-filters summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-filters-title { font-weight: 600; }
+.board-filters-summary { color: var(--muted); font-size: var(--text-sm); }
+.board-filters[open] .board-filters-summary { display: none; }
+.board-filters form { display: grid; gap: var(--space-2); margin-top: var(--space-2); justify-items: start; }
+.board-filters fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: center; }
+.board-filters legend { float: left; width: 5.5rem; margin-right: var(--space-2); color: var(--muted); font-size: var(--text-sm); }
+.board-filters .check { display: inline-flex; gap: var(--space-1); align-items: center; }
+.board-filters-selects label { display: inline-flex; gap: var(--space-2); align-items: center; color: var(--muted); font-size: var(--text-sm); }
+
+/* Rows are grids of the same columns: a title column, then one per status,
+   sharing the width and scrolling sideways when they do not fit. */
+.board { overflow-x: auto; padding-bottom: var(--space-4); }
+.board-grid { display: grid; gap: var(--space-3); width: 100%; min-width: min-content; }
+.board-columns, .board-row { display: grid; grid-auto-flow: column; grid-template-columns: 6.5rem; grid-auto-columns: minmax(15rem, 1fr); gap: var(--space-2); align-items: start; }
+/* Ungrouped: no title column at all, so no cell falls into it. */
+.board-untitled .board-columns, .board-untitled .board-row { grid-template-columns: none; }
+.board-untitled .board-row-title, .board-untitled .board-corner { display: none; }
+.board-column-head { display: flex; gap: var(--space-2); align-items: center; padding: 0 var(--space-2); }
+.board-count { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.board-row-title { margin: 0; padding-top: var(--space-2); font-size: var(--text-sm); text-transform: capitalize; color: var(--muted); position: sticky; left: 0; z-index: 2; background: var(--bg); overflow-wrap: anywhere; }
+.board-cell { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); background: var(--surface-2); border-radius: var(--radius-lg); min-height: 2.75rem; }
+/* Each cell takes its status colour, as the status badges do. */
+.board-cell-review { background: var(--warn-soft); }
+.board-cell-approved, .board-cell-done { background: var(--ok-soft); }
+.board-cell-rejected, .board-cell-superseded { background: var(--bad-soft); }
+.board-cell-parked { background: var(--accent-soft); }
+
+.bcard { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); box-shadow: var(--shadow); }
+.bcard-top { display: flex; gap: var(--space-1); align-items: start; }
+.bcard-link { flex: 1; display: block; font-weight: 600; line-height: 1.3; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+/* The title link covers the card: one link per card. */
+.bcard-link::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.bcard-link:focus-visible { outline: none; }
+.bcard:has(.bcard-link:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bcard-meta { display: flex; flex-wrap: wrap; gap: 0 var(--space-2); margin: 2px 0 0; font-size: 0.75rem; color: var(--muted); }
+.bcard-id { font-family: var(--mono); }
+.bcard-who { overflow-wrap: anywhere; }
+/* An approved plan being built: at the bottom right of the card. */
+.bcard-build { margin-left: auto; font-size: 0.95rem; line-height: 1; }
+.bcard-reason { margin: var(--space-1) 0 0; font-size: 0.75rem; color: var(--warn); }
+.bcard-attention { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn), 0 0 14px -2px color-mix(in srgb, var(--warn) 55%, transparent); }

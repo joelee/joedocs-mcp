@@ -599,8 +599,9 @@ async fn web_requests_are_audited_with_the_web_client() -> TestResult<()> {
 // --- STEP-04: shell, design system and Overview -------------------------------
 
 /// The pages every signed-in page links to, with their navigation labels.
-const NAVIGATION: [(&str, &str); 7] = [
+const NAVIGATION: [(&str, &str); 8] = [
     ("/admin/", "Overview"),
+    ("/admin/board", "Board"),
     ("/admin/documents", "Documents"),
     ("/admin/projects", "Projects"),
     ("/admin/keys", "API keys"),
@@ -4800,5 +4801,294 @@ async fn the_navigation_folds_behind_a_menu_control_that_works_without_scripts()
         )?;
         assert!(at.windows(2).all(|w| w[0] < w[1]), "{path}: {nav}");
     }
+    server.stop().await
+}
+
+// --- JD-47: the Board -------------------------------------------------------
+
+/// Front matter fields from a JSON object.
+fn front(value: serde_json::Value) -> joedocs::document::front_matter::Fields {
+    match value {
+        serde_json::Value::Object(map) => map.into_iter().collect(),
+        _ => joedocs::document::front_matter::Fields::new(),
+    }
+}
+
+/// Creates one document as `laptop-key` and returns its ID.
+fn board_doc(
+    store: &mut Store,
+    (project, doc_type, status): (&str, &str, &str),
+    title: &str,
+    fields: serde_json::Value,
+) -> TestResult<String> {
+    use joedocs::store::{Actor, NewDocument};
+    let created = store.create(
+        &Actor::new("laptop-key", "claude-code"),
+        NewDocument {
+            project: project.into(),
+            doc_type: Some(doc_type.into()),
+            status: Some(status.into()),
+            title: title.into(),
+            content: format!("# {title}\n"),
+            front_matter: front(fields),
+            multifile: title.contains("backlog"),
+            ..NewDocument::default()
+        },
+    )?;
+    Ok(created.id)
+}
+
+/// Two projects for the Board: `alpha` (AL) with plans, notes and ideas in
+/// several statuses, `attention` values and builder states, and `beta` (BE).
+fn board_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewFile};
+    use serde_json::json;
+    store.add_project("alpha", "AL", Some("Alpha"))?;
+    store.add_project("beta", "BE", Some("Beta"))?;
+    let docs = [
+        (
+            "plans",
+            "draft",
+            "Draft plan",
+            json!({"attention": "Needs a decision"}),
+        ),
+        (
+            "plans",
+            "approved",
+            "Building plan",
+            json!({"implementation_status": "in-progress"}),
+        ),
+        (
+            "plans",
+            "approved",
+            "Built plan",
+            json!({"implementation_status": "completed"}),
+        ),
+        (
+            "notes",
+            "done",
+            "Closed note",
+            json!({"attention": "closed attention"}),
+        ),
+        ("notes", "review", "False note", json!({"attention": false})),
+        ("ideas", "review", "Empty idea", json!({"attention": ""})),
+    ];
+    for (doc_type, status, title, fields) in docs {
+        board_doc(store, ("alpha", doc_type, status), title, fields)?;
+    }
+    for n in 7..=10 {
+        board_doc(
+            store,
+            ("alpha", "notes", "draft"),
+            &format!("Filler {n}"),
+            json!({}),
+        )?;
+    }
+    board_doc(store, ("beta", "issues", "draft"), "Beta issue", json!({}))?;
+    let backlog = board_doc(store, ("beta", "notes", "draft"), "Beta backlog", json!({}))?;
+    store.create_file(
+        &Actor::new("laptop-key", "claude-code"),
+        &NewFile {
+            document_id: backlog,
+            file: "items/one".into(),
+            content: "Item.\n".into(),
+            front_matter: front(json!({"attention": "only on a file"})),
+            expected_revision: None,
+            summary: None,
+        },
+    )?;
+    Ok(())
+}
+
+/// The `data-id` of every card on a Board page or fragment, in order.
+fn board_cards(body: &str) -> Vec<String> {
+    body.split("<article class=\"bcard")
+        .skip(1)
+        .filter_map(|part| {
+            let start = part.find("data-id=\"")? + 9;
+            Some(part[start..].split('"').next()?.to_owned())
+        })
+        .collect()
+}
+
+/// The card of `id`, from its opening tag to its end.
+fn board_card<'a>(body: &'a str, id: &str) -> &'a str {
+    let marker = format!("data-id=\"{id}\"");
+    body.find(&marker)
+        .and_then(|at| {
+            let start = body[..at].rfind("<article")?;
+            let end = body[at..].find("</article>")? + at;
+            Some(&body[start..end])
+        })
+        .unwrap_or("")
+}
+
+/// The `data-` attribute `name` of every element that has one, in order.
+fn data_values(body: &str, name: &str) -> Vec<String> {
+    let marker = format!("data-{name}=\"");
+    body.split(&marker)
+        .skip(1)
+        .filter_map(|part| part.split('"').next().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_board_shows_open_documents_by_status_and_type() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let anonymous = server.get("/admin/board", None).await?;
+    assert_eq!(anonymous.status, 303, "{}", anonymous.body);
+    let cookie = server.login().await?;
+    let before = server.audit()?.len();
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    let rows = server.audit()?;
+    let board_rows = rows[before..]
+        .iter()
+        .filter(|(t, _, _)| t == "admin:documents.board")
+        .count();
+    assert_eq!(board_rows, 1, "{:?}", &rows[before..]);
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    assert_eq!(
+        page.header("content-security-policy"),
+        home.header("content-security-policy"),
+        "the Board keeps the default policy"
+    );
+    // Columns: every status but the closed ones, in documents.statuses
+    // order; rows: types with cards, in documents.types order.
+    assert_eq!(
+        data_values(&page.body, "column"),
+        ["draft", "review", "approved", "parked"]
+    );
+    assert_eq!(
+        data_values(&page.body, "row-key"),
+        ["plans", "ideas", "issues", "notes"]
+    );
+    let cards = board_cards(&page.body);
+    for id in [
+        "AL-1", "AL-2", "AL-3", "AL-5", "AL-6", "AL-7", "BE-1", "BE-2",
+    ] {
+        assert!(cards.contains(&id.to_owned()), "{id}: {cards:?}");
+    }
+    assert!(
+        !cards.contains(&"AL-4".to_owned()),
+        "done is closed: {cards:?}"
+    );
+    let lit = board_card(&page.body, "AL-1");
+    for part in [
+        "href=\"/admin/documents/AL-1\"",
+        ">Draft plan</a>",
+        ">AL-1<",
+        ">plans<",
+        ">r1<",
+        ">laptop-key<",
+        "<time datetime=\"",
+        "bcard-attention",
+        "Needs a decision",
+    ] {
+        assert!(lit.contains(part), "{part}: {lit}");
+    }
+    assert!(page.body.contains("class=\"board-cell board-cell-draft\""));
+    for unlit in ["AL-5", "AL-6", "BE-2"] {
+        let card = board_card(&page.body, unlit);
+        assert!(
+            !card.is_empty() && !card.contains("bcard-attention"),
+            "{unlit}: {card}"
+        );
+    }
+    let building = board_card(&page.body, "AL-2");
+    assert!(
+        building.contains("data-building=\"in-progress\""),
+        "{building}"
+    );
+    assert!(
+        building.contains("aria-label=\"Being built\""),
+        "{building}"
+    );
+    assert!(!board_card(&page.body, "AL-3").contains("data-building"));
+    // Board sits right under Overview.
+    let overview = page.body.find("href=\"/admin/\"").ok_or("overview link")?;
+    let board = page.body.find(">Board</a>").ok_or("board link")?;
+    let documents = page
+        .body
+        .find("href=\"/admin/documents\"")
+        .ok_or("documents")?;
+    assert!(overview < board && board < documents);
+    // The grid alone, for the page script.
+    let fragment = server.get("/admin/board?fragment=1", Some(&cookie)).await?;
+    assert_eq!(fragment.status, 200);
+    assert!(
+        fragment
+            .body
+            .trim_start()
+            .starts_with("<div class=\"board-grid")
+    );
+    assert!(!fragment.body.contains("<html"));
+    assert_eq!(board_cards(&fragment.body), cards);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_filters_groups_and_sorts_from_the_address() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    let page = get("").await?;
+    let done = get("status=done").await?;
+    assert_eq!(data_values(&done.body, "column"), ["done"]);
+    assert_eq!(board_cards(&done.body), ["AL-4"]);
+    assert!(
+        !board_card(&done.body, "AL-4").contains("bcard-attention"),
+        "a closed status is never lit"
+    );
+    let beta = get("project=beta").await?;
+    assert!(
+        board_cards(&beta.body)
+            .iter()
+            .all(|id| id.starts_with("BE-"))
+    );
+    assert_eq!(
+        data_values(&get("type=plans").await?.body, "row-key"),
+        ["plans"]
+    );
+    assert_eq!(board_cards(&get("attention=1").await?.body), ["AL-1"]);
+    assert_eq!(
+        data_values(&get("group=project").await?.body, "row-key"),
+        ["alpha", "beta"]
+    );
+    let ungrouped = get("group=none").await?;
+    assert_eq!(data_values(&ungrouped.body, "row-key"), ["all"]);
+    assert!(ungrouped.body.contains("board-untitled"));
+    assert_eq!(
+        board_cards(&get("project=alpha&type=notes&sort=id&dir=asc").await?.body),
+        ["AL-7", "AL-8", "AL-9", "AL-10", "AL-5"],
+        "by number within each cell: draft, then review"
+    );
+    assert_eq!(
+        board_cards(&get("project=alpha&type=notes&sort=id&dir=desc").await?.body),
+        ["AL-10", "AL-9", "AL-8", "AL-7", "AL-5"]
+    );
+    // The filter band reflects the address.
+    assert!(
+        beta.body
+            .contains("name=\"project\" value=\"beta\" checked")
+    );
+    assert!(
+        !beta
+            .body
+            .contains("name=\"project\" value=\"alpha\" checked")
+    );
+    assert!(done.body.contains("name=\"status\" value=\"done\" checked"));
+    assert!(
+        page.body
+            .contains("name=\"status\" value=\"draft\" checked")
+    );
+    assert!(!page.body.contains("name=\"status\" value=\"done\" checked"));
     server.stop().await
 }

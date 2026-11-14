@@ -37,6 +37,7 @@
 //! | `POST /admin/users/{name}/reset-password` | `admin:users.reset_password` |
 //! | `POST /admin/users/{name}/reset-totp` | `admin:users.reset_totp` |
 //! | `GET /admin/` | `admin:status` |
+//! | `GET /admin/board` | `admin:documents.board` |
 //! | `GET /admin/documents` | `admin:documents.list` |
 //! | `GET /admin/documents/{id}` | `admin:documents.get` |
 //! | `GET /admin/documents/{id}/history` | `admin:documents.history` |
@@ -97,6 +98,19 @@ pub struct WebOptions {
     pub session_hours: u32,
     /// `admin.web_plantuml_url`, or empty.
     pub plantuml_url: String,
+    /// The Board's settings.
+    pub board: BoardOptions,
+}
+
+/// The Board's settings, from `[documents]` and `[admin]` (JD-47).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardOptions {
+    /// The closed statuses in effect (`DocumentsConfig::closed_statuses`).
+    pub closed_statuses: Vec<String>,
+    /// `admin.board_refresh_ms`.
+    pub refresh_ms: u32,
+    /// `admin.board_preview_ms`.
+    pub preview_ms: u32,
 }
 
 /// The extra directive a page that loads Pele needs: Pele sets `style`
@@ -178,6 +192,7 @@ pub(crate) enum Route {
     UsersCreate,
     UserAction(String, pages::users::UserAction),
     Home,
+    Board,
     DocumentsList,
     Document(String),
     History(String),
@@ -244,6 +259,7 @@ impl Route {
                 }
             }
             ("/admin/", _) if get => Self::Home,
+            ("/admin/board", _) if get => Self::Board,
             (_, ["documents"]) if get => Self::DocumentsList,
             (_, ["documents", id]) if get && !id.is_empty() => Self::Document(percent_decode(id)),
             (_, ["documents", id, "history"]) if get && !id.is_empty() => {
@@ -310,6 +326,7 @@ impl Route {
             Self::UsersCreate => "admin:users.create",
             Self::UserAction(_, action) => action.operation(),
             Self::Home => "admin:status",
+            Self::Board => "admin:documents.board",
             Self::DocumentsList => "admin:documents.list",
             Self::Document(_) | Self::Download(_) => "admin:documents.get",
             Self::History(_) => "admin:documents.history",

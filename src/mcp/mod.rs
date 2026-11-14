@@ -96,6 +96,11 @@ impl ServerOptions {
             web: (config.admin.enabled && config.admin.web_ui).then(|| crate::web::WebOptions {
                 session_hours: config.admin.session_hours,
                 plantuml_url: config.admin.web_plantuml_url.clone(),
+                board: crate::web::BoardOptions {
+                    closed_statuses: config.documents.closed_statuses(),
+                    refresh_ms: config.admin.board_refresh_ms,
+                    preview_ms: config.admin.board_preview_ms,
+                },
             }),
             config_warnings: crate::config::warning_lines(config),
         }

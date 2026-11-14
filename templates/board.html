@@ -1,0 +1,58 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="board-page">
+<div class="page-head board-head-bar">
+  <div class="board-title">
+    <h1>Board</h1>
+  </div>
+</div>
+
+<details class="board-filters" open>
+  <summary><span class="board-filters-title">Filters</span> <span class="board-filters-summary" data-board-summary></span></summary>
+  <form method="get" action="/admin/board" data-board-filters>
+    <fieldset>
+      <legend>Projects</legend>
+      {% for choice in projects %}<label class="check"><input type="checkbox" name="project" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
+    </fieldset>
+    <fieldset>
+      <legend>Types</legend>
+      {% for choice in types %}<label class="check"><input type="checkbox" name="type" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
+    </fieldset>
+    <fieldset>
+      <legend>Statuses</legend>
+      {% for choice in statuses %}<label class="check"><input type="checkbox" name="status" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
+    </fieldset>
+    <fieldset>
+      <legend>Show</legend>
+      <label class="check"><input type="checkbox" name="attention" value="1"{% if view.attention_only %} checked{% endif %}> Only needing attention</label>
+    </fieldset>
+    <fieldset class="board-filters-selects">
+      <label>Group by
+        <select name="group">
+          <option value="none"{% if view.group == "none" %} selected{% endif %}>None</option>
+          <option value="type"{% if view.group == "type" %} selected{% endif %}>Type</option>
+          <option value="project"{% if view.group == "project" %} selected{% endif %}>Project</option>
+        </select>
+      </label>
+      <label>Sort by
+        <select name="sort">
+          <option value="updated"{% if view.sort == "updated" %} selected{% endif %}>Last updated</option>
+          <option value="created"{% if view.sort == "created" %} selected{% endif %}>Created</option>
+          <option value="id"{% if view.sort == "id" %} selected{% endif %}>Document ID</option>
+        </select>
+      </label>
+      <label>Order
+        <select name="dir">
+          <option value="desc"{% if view.dir == "desc" %} selected{% endif %}>Descending</option>
+          <option value="asc"{% if view.dir == "asc" %} selected{% endif %}>Ascending</option>
+        </select>
+      </label>
+    </fieldset>
+  </form>
+</details>
+
+<section id="board" class="board" aria-label="Board" data-board data-refresh-ms="{{ refresh_ms }}" data-preview-ms="{{ preview_ms }}">
+{{ grid|safe }}
+</section>
+</div>
+{% endblock %}
