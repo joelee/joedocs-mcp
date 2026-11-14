@@ -315,7 +315,12 @@ one. Never clear it by writing `false` or an empty string: remove the key.
   findings"`, in the `new_document` front matter or the round's update.
   Medium, Low and Info findings never set it.
 - **Remove it** in the re-review round where no Critical or Major finding is
-  left open, in the same call as that round's front matter.
+  left open. A round is one `update_document` call, which merges front matter
+  and cannot remove a key, so follow it with `change_document_front_matter`
+  and `remove: ["attention"]`, passing the revision the round returned as
+  `expected_revision` (as the planner and idea architect skills do). The
+  review keeps its status (`review` while Medium or Low findings remain) and
+  its counts from the round.
 
 ### Front matter
 
@@ -518,7 +523,9 @@ When an earlier review is given or clearly related:
 Write the whole re-review in **one** `update_document` call, with
 `expected_revision` set to the revision you read and
 `summary: "Re-review R<n>: <verdict>"`. The first review is round 1, so the
-first re-review is R2.
+first re-review is R2. The one exception: when the round resolves the last
+Critical or Major finding, a second call removes `attention` (see The
+attention key), because `update_document` cannot remove a key.
 
 - **Keep every earlier finding** where it is, with its ID and text unchanged.
   Put its disposition directly under its heading:
