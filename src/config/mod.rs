@@ -212,6 +212,37 @@ pub struct DocumentsConfig {
     /// Most live sub-files a multi-file document may hold, besides its main
     /// file.
     pub max_files: u32,
+    /// Statuses the web interface's Board hides unless asked: work that is
+    /// closed. An empty list, or a name not in `statuses`, is a warning,
+    /// not an error (see [`DocumentsConfig::closed_statuses`]).
+    pub closed_statuses: Vec<String>,
+}
+
+/// `config.warnings()` as `key: message` lines, for reports.
+#[must_use]
+pub fn warning_lines(config: &Config) -> Vec<String> {
+    config.warnings().iter().map(ToString::to_string).collect()
+}
+
+/// The default of `documents.closed_statuses`.
+pub const DEFAULT_CLOSED_STATUSES: [&str; 3] = ["done", "rejected", "superseded"];
+
+impl DocumentsConfig {
+    /// The closed statuses in effect: the configured list, or the default
+    /// when it is empty, keeping only names in `statuses`, in that order.
+    #[must_use]
+    pub fn closed_statuses(&self) -> Vec<String> {
+        let chosen: Vec<&str> = if self.closed_statuses.is_empty() {
+            DEFAULT_CLOSED_STATUSES.to_vec()
+        } else {
+            self.closed_statuses.iter().map(String::as_str).collect()
+        };
+        self.statuses
+            .iter()
+            .filter(|s| chosen.contains(&s.as_str()))
+            .cloned()
+            .collect()
+    }
 }
 
 impl Default for DocumentsConfig {
@@ -234,6 +265,7 @@ impl Default for DocumentsConfig {
             default_status: "draft".to_owned(),
             index_file: true,
             max_files: 500,
+            closed_statuses: owned(&DEFAULT_CLOSED_STATUSES),
         }
     }
 }
@@ -261,6 +293,13 @@ pub struct AdminConfig {
     /// off, every request carrying an admin token is refused, on the admin
     /// API and the web interface alike.
     pub token_login: bool,
+    /// The Board's refresh window in milliseconds (500 to 10000): it takes
+    /// the first change at once, then at most one refresh per window.
+    pub board_refresh_ms: u32,
+    /// How long a pointer rests on a Board card, or keyboard focus stays on
+    /// it, before its preview opens, in milliseconds (0 to 10000; 0 turns
+    /// hover and focus previews off).
+    pub board_preview_ms: u32,
 }
 
 impl Default for AdminConfig {
@@ -272,6 +311,8 @@ impl Default for AdminConfig {
             web_plantuml_url: String::new(),
             device_days: 30,
             token_login: true,
+            board_refresh_ms: 1000,
+            board_preview_ms: 2000,
         }
     }
 }

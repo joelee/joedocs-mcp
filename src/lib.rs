@@ -249,7 +249,11 @@ pub fn execute(
         Command::Document { command } => {
             admin::document(&mut open_store(loaded, ctx)?, command, out)?;
         }
-        Command::Check => admin::check(&open_store(loaded, ctx)?, out)?,
+        Command::Check => admin::check(
+            &open_store(loaded, ctx)?,
+            &config::warning_lines(loaded.config()),
+            out,
+        )?,
         Command::Systemd { command } => systemd_command(command, loaded, ctx, out)?,
         Command::Project { command } => {
             admin::project(&mut open_store(loaded, ctx)?, command, out)?;
@@ -1149,7 +1153,7 @@ pub fn restore(
     )?;
     let manifest = extracted.commit();
     admin::report_restore(&manifest, &paths, &configured, out)?;
-    admin::check(&store, out)
+    admin::check(&store, &config::warning_lines(loaded.config()), out)
 }
 
 /// Rebuilds the index when it is behind the history (an interrupted write,

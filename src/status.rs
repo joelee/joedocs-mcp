@@ -53,6 +53,11 @@ pub struct StatusReport {
     pub history: DirSize,
     /// What the store holds.
     pub store: Summary,
+    /// Configuration problems that did not stop the server
+    /// (`Config::warnings`), as `key: message`. Absent from a 0.5.4 or
+    /// older server's report: none.
+    #[serde(default)]
+    pub config_warnings: Vec<String>,
 }
 
 /// The result of probing `GET /health`.
@@ -103,14 +108,16 @@ pub fn collect(
     loaded: &Loaded,
     services: &dyn ServiceManager,
 ) -> Result<StatusReport, Error> {
-    collect_parts(
+    let mut report = collect_parts(
         store,
         loaded.resolved.file.clone(),
         loaded.config().server.bind,
         loaded.config().admin.enabled,
         loaded.config().admin.enabled && loaded.config().admin.web_ui,
         services,
-    )
+    )?;
+    report.config_warnings = crate::config::warning_lines(loaded.config());
+    Ok(report)
 }
 
 /// Gathers the report from its parts (for the admin API, which has no
@@ -152,6 +159,7 @@ pub fn collect_parts(
         database_bytes,
         history: dir_size(&paths.git_dir()),
         store: store.summary()?,
+        config_warnings: Vec::new(),
     })
 }
 
@@ -313,6 +321,12 @@ pub fn render(report: &StatusReport, out: &mut dyn Write) -> Result<(), Error> {
         |f| f.display().to_string(),
     );
     let _ = writeln!(text, "config file: {config}");
+    if !report.config_warnings.is_empty() {
+        let _ = writeln!(text, "configuration warnings:");
+        for warning in &report.config_warnings {
+            let _ = writeln!(text, "  {warning}");
+        }
+    }
     let _ = writeln!(text, "\nService");
     let _ = writeln!(text, "  bind: {}", report.bind);
     let health = match &report.health {
@@ -584,6 +598,7 @@ mod tests {
                 bytes: 0,
                 files: 0,
             },
+            config_warnings: Vec::new(),
             store: Summary {
                 projects: Vec::new(),
                 keys_active: 0,
@@ -661,6 +676,7 @@ mod tests {
                 bytes: 0,
                 files: 0,
             },
+            config_warnings: Vec::new(),
             store: Summary {
                 projects: Vec::new(),
                 keys_active: 0,

@@ -63,6 +63,9 @@ pub struct ServerOptions {
     /// The admin web interface, when `admin.enabled` and `admin.web_ui`
     /// are both on.
     pub web: Option<crate::web::WebOptions>,
+    /// Configuration problems that did not stop the server, as
+    /// `key: message`: logged at start-up, reported by `check` and `status`.
+    pub config_warnings: Vec<String>,
 }
 
 impl ServerOptions {
@@ -94,6 +97,7 @@ impl ServerOptions {
                 session_hours: config.admin.session_hours,
                 plantuml_url: config.admin.web_plantuml_url.clone(),
             }),
+            config_warnings: crate::config::warning_lines(config),
         }
     }
 }
@@ -227,6 +231,9 @@ pub async fn serve(
     options: &ServerOptions,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
+    for warning in &options.config_warnings {
+        tracing::warn!("configuration: {warning} (the server still starts)");
+    }
     let ct = CancellationToken::new();
     let app = router(&shared, options, &ct);
     axum::serve(listener, app)

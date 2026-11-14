@@ -61,6 +61,8 @@ struct ApiState {
     allowed_hosts: Vec<String>,
     allowed_origins: Vec<String>,
     web_ui: bool,
+    /// `ServerOptions::config_warnings`, for `check` and `status`.
+    config_warnings: Vec<String>,
 }
 
 /// The routes, to be nested under `/admin/v1`.
@@ -83,6 +85,7 @@ pub(super) fn routes(
         allowed_hosts: options.allowed_hosts.clone(),
         allowed_origins: options.allowed_origins.clone(),
         web_ui: options.web.is_some(),
+        config_warnings: options.config_warnings.clone(),
     });
     Router::new()
         .route("/", axum::routing::any(dispatch))
@@ -780,7 +783,7 @@ async fn logout(state: Arc<ApiState>, call: Call) -> Response {
 /// `GET /admin/v1/status`: the `joedocs status` report.
 async fn status(state: Arc<ApiState>, call: Call) -> Response {
     authorized(state, call, |store, state, _| {
-        let report = crate::status::collect_parts(
+        let mut report = crate::status::collect_parts(
             store,
             state.config_file.clone(),
             state.bind,
@@ -796,6 +799,7 @@ async fn status(state: Arc<ApiState>, call: Call) -> Response {
                 other.to_string(),
             ),
         })?;
+        report.config_warnings.clone_from(&state.config_warnings);
         Ok(axum::Json(report).into_response())
     })
     .await
@@ -1204,8 +1208,8 @@ async fn document_command(
 }
 
 async fn check(state: Arc<ApiState>, call: Call) -> Response {
-    authorized(state, call, |store, _, _| {
-        text(|out| crate::admin::check(store, out))
+    authorized(state, call, |store, state, _| {
+        text(|out| crate::admin::check(store, &state.config_warnings, out))
     })
     .await
 }
@@ -1440,6 +1444,7 @@ mod tests {
             allowed_hosts: vec!["127.0.0.1".into()],
             allowed_origins: Vec::new(),
             web_ui: false,
+            config_warnings: Vec::new(),
         };
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1"));
@@ -1596,6 +1601,7 @@ mod tests {
             allowed_hosts: vec!["127.0.0.1".into()],
             allowed_origins: Vec::new(),
             web_ui: false,
+            config_warnings: Vec::new(),
         });
         (dir, state, password.expose_secret().to_owned(), clock)
     }

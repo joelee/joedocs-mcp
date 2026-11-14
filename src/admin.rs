@@ -833,16 +833,27 @@ fn write_via(path: &Path, bytes: &[u8], temp: &Path) -> std::io::Result<()> {
     written
 }
 
-/// Runs `joedocs check` and writes its report.
+/// Runs `joedocs check` and writes its report: the configuration
+/// warnings (`config_warnings`, as `key: message`), then the store's
+/// problems. Each warning counts as a problem.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Problems`] when it finds any, store errors, and
 /// [`Error::Output`].
-pub fn check(store: &Store, out: &mut dyn Write) -> Result<(), Error> {
+pub fn check(store: &Store, config_warnings: &[String], out: &mut dyn Write) -> Result<(), Error> {
     let report = store.check()?;
-    report_check(&report, store.paths(), out)?;
-    match report.problems() {
+    if !config_warnings.is_empty() {
+        writeln!(out, "Configuration warnings (the server still starts):")?;
+        for warning in config_warnings {
+            writeln!(out, "  {warning}")?;
+        }
+    }
+    let problems = report.problems() + config_warnings.len();
+    if report.problems() > 0 || problems == 0 {
+        report_check(&report, store.paths(), out)?;
+    }
+    match problems {
         0 => Ok(()),
         count => Err(Error::Problems(count)),
     }
