@@ -120,6 +120,22 @@ just scratch-server --port 8761 --https-port 8444 --no-tailscale
 - **Stopping it** with Ctrl-C is the normal end: the script and `just` exit with status 0 (the recipe's `[continue]` attribute, `just` 1.54 or later). Ctrl-C during the build or the seeding exits with 130.
 - The script is bash, for Linux and macOS (`tailscale` from `PATH`, or the macOS app), and needs `curl`.
 
+### Driving the Board
+
+`just board-drive` plays the part of busy agents against a running scratch server, so the Board (0.5.5) can be watched, demonstrated and checked on other devices:
+
+```bash
+just scratch-server                  # in one terminal
+just board-drive                     # in another, with /admin/board open
+DRIVE_PAUSE_MS=5000 just board-drive # slower, for a demo
+just board-drive --port 8761         # a scratch server on another port
+```
+
+- **What it does,** over MCP as an agent would (`examples/board_drive.rs`), in about 40 seconds: a plan is drafted, lit for approval (`attention`), reviewed and approved; a builder picks it up (`implementation_status: in-progress`, the 🏗️ mark) and edits it twice; ten sample documents move from draft to review in about two seconds, and back; an issue arrives in `sandbox`, lit; the build completes and the plan is closed; the issue is archived, then restored by a local `joedocs archive restore`, a write from another process. Each step prints one line.
+- **Its key** is `board-drive`, with write on `demo` and `sandbox`: created on the first run and rotated on each later one. The token stays in the script's shell; it is never printed or written down.
+- **Another store:** `SCRATCH_DIR=/path/to/store just board-drive` drives a server using that scratch store (its `config.toml` and a seeded store), for example a copy of `.local/scratch`.
+- **`?debug=1`** on the Board shows the page script's counters (events, refreshes, transitions and skipped ones, latency, frames over 50 ms): developer use only.
+
 ### Vendored browser files
 
 Third-party browser files sit in `src/web/assets/vendor/`, unmodified, each with its licence text beside it. To update one, download the new version from the npm registry, check the tarball against the registry's `integrity` value, copy the file and its licence, and update this table.

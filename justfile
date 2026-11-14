@@ -139,3 +139,8 @@ docker-test port="18750":
 [continue]
 scratch-server *args:
     scripts/scratch-server.sh {{args}}
+
+# Drive an open Board on a running scratch-server with a scripted run of agent writes, the Board's demo (args: --port N; DRIVE_PAUSE_MS=3000)
+[continue]
+board-drive *args:
+    scripts/board-drive.sh {{args}}
