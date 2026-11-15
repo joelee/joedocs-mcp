@@ -8,8 +8,8 @@
 #            project-c, the API keys laptop-claude, laptop-opencode,
 #            mac-claude and mac-codex, and background documents in
 #            project-b and project-c, written over MCP
-#   serve    serve it with scripts/scratch-server.sh (its --https-port and
-#            --no-tailscale options pass through)
+#   serve    serve it with scripts/scratch-server.sh on HTTPS port 8444
+#            (--https-port N changes it; --no-tailscale passes through)
 #   (none)   play the feature flow on the served store: an idea becomes a
 #            plan, which is built from STEP-01 to STEP-05 and signed off,
 #            while another agent's plan is drafted and rejected, each beat
@@ -38,11 +38,14 @@ case "${1:-}" in
     reset | serve) command="$1"; shift ;;
 esac
 port=8770
+# 8444, so the showcase can be served over Tailscale beside just
+# scratch-server, which takes 8443.
+https_port=8444
 serve_args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --port) [ $# -ge 2 ] || usage; port="$2"; shift ;;
-        --https-port) [ "$command" = serve ] && [ $# -ge 2 ] || usage; serve_args+=("$1" "$2"); shift ;;
+        --https-port) [ "$command" = serve ] && [ $# -ge 2 ] || usage; https_port="$2"; shift ;;
         --no-tailscale) [ "$command" = serve ] || usage; serve_args+=("$1") ;;
         *) usage ;;
     esac
@@ -70,7 +73,7 @@ fi
 
 if [ "$command" = serve ]; then
     exec env SCRATCH_DIR="$scratch" "$root/scripts/scratch-server.sh" --port "$port" \
-        ${serve_args[@]+"${serve_args[@]}"}
+        --https-port "$https_port" ${serve_args[@]+"${serve_args[@]}"}
 fi
 
 if [ "$command" = play ]; then
@@ -119,6 +122,11 @@ fi
 # under a running server would spoil the next take.
 ! listening "$port" ||
     fail "something is listening on 127.0.0.1:$port (a showcase server?); stop it before a reset"
+# The store may be served on another port: the one serve last wrote into
+# its config.toml (serve refuses to start while that one answers).
+saved="$(saved_port)"
+[ -z "$saved" ] || [ "$saved" = "$port" ] || ! listening "$saved" ||
+    fail "the showcase store is being served on 127.0.0.1:$saved; stop that server before a reset"
 
 # Whatever ends the script stops the server started for writing the
 # background; Ctrl-C is an interruption (130), and leaves no seeded marker.

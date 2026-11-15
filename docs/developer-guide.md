@@ -145,14 +145,14 @@ just board-drive --port 8761         # a scratch server on another port
 
 ```bash
 just board-drive-showcase reset   # wipe .local/showcase and create it again
-just board-drive-showcase serve   # serve it on port 8770 (--no-tailscale, --https-port N as for scratch-server)
+just board-drive-showcase serve   # serve it on port 8770, and over Tailscale on HTTPS port 8444 (--no-tailscale, --https-port N)
 just board-drive-showcase         # in another terminal: play the feature flow, once per reset
 DRIVE_PAUSE_MS=0 just board-drive-showcase   # wait for a keystroke before each beat
 ```
 
-- **`reset`** creates user `dev` and prints its one-time password, the projects `project-a`, `project-b` and `project-c` (card IDs `PA`, `PB`, `PC`), and four API keys, each with write on the three projects: `laptop-claude`, `laptop-opencode`, `mac-claude` and `mac-codex`. It then writes three background documents in `project-b` (by `laptop-opencode`, as the MCP client `opencode`) and three in `project-c` (by `mac-codex`, as `codex`), always with the same content, so a fresh store always gets the same IDs. It refuses to run while something listens on the port, and an interrupted reset leaves a store that `serve` refuses until the next reset.
+- **`reset`** creates user `dev` and prints its one-time password, the projects `project-a`, `project-b` and `project-c` (card IDs `PA`, `PB`, `PC`), and four API keys, each with write on the three projects: `laptop-claude`, `laptop-opencode`, `mac-claude` and `mac-codex`. It then writes three background documents in `project-b` (by `laptop-opencode`, as the MCP client `opencode`) and three in `project-c` (by `mac-codex`, as `codex`), always with the same content, so a fresh store always gets the same IDs. It refuses to run while the store is being served, on the port given or on the one `serve` last used, and an interrupted reset leaves a store that `serve` refuses until the next reset.
 - **Each reset makes a new `dev`**, so the first sign-in after it sets a new password and authenticator.
-- **`serve`** runs `just scratch-server` on this store (`SCRATCH_DIR=.local/showcase`), on port 8770 so it can run beside the scratch server; `--port N` changes it for both commands.
+- **`serve`** runs `just scratch-server` on this store (`SCRATCH_DIR=.local/showcase`), on port 8770 and Tailscale HTTPS port 8444, so it can run beside the scratch server (8760 and 8443); `--port N` changes the first for every command, `--https-port N` the second. One server per store: `serve` refuses a store already served on the port it last used.
 - **Playing** (no argument) runs one feature from idea to done, one beat at a time, each written over MCP by the key named for it, so every card shows its agent as the last writer:
   1. `mac-claude` drafts the idea PA-1 "Offline sync for field notes", puts it to you (`review`, lit "Waiting for your decision") and records your acceptance (`approved`).
   2. `laptop-claude` drafts the plan PA-2 from it and puts it to you (lit "Waiting for your approval"), while `mac-codex` drafts another plan, PB-4, in `project-b`.

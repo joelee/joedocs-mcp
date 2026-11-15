@@ -73,6 +73,11 @@ if [ "$scratch" != "$default_store" ]; then
     ! $fresh || fail "fresh starts over only in $default_store; $scratch is wiped by the script that creates it"
     [ -d "$scratch/state" ] && [ -e "$scratch/seeded" ] ||
         fail "no seeded store at $scratch; scratch-server serves it once another script has created it (for .local/showcase: just board-drive-showcase reset)"
+    # One server per store: the port the last run wrote must not answer,
+    # so that port always names the server a reset has to wait for.
+    saved="$(saved_port)"
+    [ -z "$saved" ] || ! listening "$saved" ||
+        fail "$scratch is already being served on 127.0.0.1:$saved; stop that server first"
 fi
 
 [ "$port" != 8750 ] || fail "port 8750 is the default server.bind (a real server or the Docker stack); pick another --port"

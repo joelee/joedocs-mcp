@@ -65,6 +65,13 @@ web_ui = true
 TOML
 }
 
+# The port of server.bind in $config, in the form write_config writes;
+# empty when there is no config or no such line.
+saved_port() {
+    [ -f "$config" ] || return 0
+    sed -n 's/^bind = "127\.0\.0\.1:\([0-9][0-9]*\)"$/\1/p' "$config" | head -n 1
+}
+
 # A server started only to write sample data over MCP, and stopped after.
 server_pid=""
 
