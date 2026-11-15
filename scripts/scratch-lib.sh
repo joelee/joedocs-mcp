@@ -1,15 +1,24 @@
 # Shared by the scratch tooling in scripts/: sourced, never run. Bash on
 # Linux and macOS: no GNU-only options, no jq or python.
 #
-# The caller sets `config` (the store's config.toml) and `bin` (the joedocs
-# binary), and defines `fail MESSAGE`, which prints the message with the
-# script's name and exits 1.
+# The caller sets `scratch` (the store directory), `config` (its
+# config.toml) and `bin` (the joedocs binary) before sourcing it, and
+# defines `fail MESSAGE`, which prints the message with the script's name
+# and exits 1.
 
-# joedocs with the store's config and a clean environment: an exported
-# JOEDOCS__STORAGE__HOME, for example, would otherwise win over the file.
+# joedocs reads a .env file in its working directory, whose JOEDOCS__*
+# values win over the config file, so every joedocs here runs in the store
+# directory, where no .env may be.
+[ ! -e "$scratch/.env" ] ||
+    fail "$scratch/.env exists; joedocs would read it and leave the store's config.toml; remove it"
+
+# joedocs with the store's config, a clean environment and the store
+# directory as its working directory: an exported JOEDOCS__STORAGE__HOME,
+# or one in a .env where the script was started, would otherwise win over
+# the file.
 jd() {
-    env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
-        JOEDOCS_CONFIG_FILE="$config" "$bin" "$@"
+    (cd "$scratch" && exec env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
+        JOEDOCS_CONFIG_FILE="$config" "$bin" "$@")
 }
 
 # Whether something listens on 127.0.0.1:PORT.
@@ -64,10 +73,10 @@ server_pid=""
 # caller's EXIT trap calls stop_server.
 start_server() {
     local log="$1" tries=0
-    # Not through jd: in a function, $! would be a subshell, and killing it
-    # would leave the server running. env replaces itself with joedocs.
-    env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
-        JOEDOCS_CONFIG_FILE="$config" "$bin" serve >"$log" 2>&1 &
+    # In the store directory, as jd. The subshell replaces itself with env,
+    # and env with joedocs, so $! is the server and killing it stops it.
+    (cd "$scratch" && exec env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
+        JOEDOCS_CONFIG_FILE="$config" "$bin" serve) >"$log" 2>&1 &
     server_pid=$!
     until curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; do
         tries=$((tries + 1))
