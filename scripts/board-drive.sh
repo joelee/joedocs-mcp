@@ -32,6 +32,8 @@ done
 case "$port" in '' | *[!0-9]*) fail "--port must be a number, not \"$port\"" ;; esac
 pause_ms="${DRIVE_PAUSE_MS:-3000}"
 case "$pause_ms" in '' | *[!0-9]*) fail "DRIVE_PAUSE_MS must be a number of milliseconds" ;; esac
+# One spelling for every value (00 is 0), in base 10 so 010 is not octal.
+pause_ms=$((10#$pause_ms))
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 scratch="${SCRATCH_DIR:-$root/.local/scratch}"

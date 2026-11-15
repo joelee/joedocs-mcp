@@ -11,7 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- **`just board-drive`** (developers): `DRIVE_PAUSE_MS=0` now waits for a keystroke before each step, instead of not pausing, so a demo can be narrated; it needs a terminal. Other values keep the timed pauses.
+- **`just board-drive`** (developers): `DRIVE_PAUSE_MS=0` (`00` too) now waits for a keystroke before each step, instead of not pausing, so a demo can be narrated; it needs a terminal. Other values keep the timed pauses.
 
 ## [0.5.5] - 2026-11-14
 

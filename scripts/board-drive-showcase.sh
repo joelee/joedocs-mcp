@@ -55,6 +55,8 @@ case "$port" in '' | *[!0-9]*) fail "--port must be a number, not \"$port\"" ;; 
 [ "$port" != 8750 ] || fail "port 8750 is the default server.bind (a real server or the Docker stack); pick another --port"
 pause_ms="${DRIVE_PAUSE_MS:-3000}"
 case "$pause_ms" in '' | *[!0-9]*) fail "DRIVE_PAUSE_MS must be a number of milliseconds" ;; esac
+# One spelling for every value (00 is 0), in base 10 so 010 is not octal.
+pause_ms=$((10#$pause_ms))
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 scratch="$root/.local/showcase"
@@ -82,7 +84,9 @@ if [ "$command" = play ]; then
     [ -x "$bin" ] || fail "no $bin; just board-drive-showcase reset builds it"
     listening "$port" ||
         fail "nothing listens on 127.0.0.1:$port; start: just board-drive-showcase serve (or pass --port)"
-    [ "$(jd list -p project-a)" = "No documents." ] ||
+    # By the count in the JSON reply, not the wording of the table.
+    listed="$(jd list -p project-a --json)"
+    printf '%s\n' "$listed" | grep -Eq '^[[:space:]]*"total":[[:space:]]*0[[:space:]]*,?[[:space:]]*$' ||
         fail "project-a already holds the flow; run it again after: just board-drive-showcase reset"
 
     # With keys driving the run, the terminal goes back as it was however
@@ -106,10 +110,13 @@ if [ "$command" = play ]; then
     echo "  http://127.0.0.1:$port/admin/board?$statuses&group=project"
     echo "Each agent's log, for a terminal of its own:"
     for key in laptop-claude laptop-opencode mac-claude mac-codex; do
-        echo "  tail -f $logs/$key.log"
+        echo "  tail -F $logs/$key.log"
     done
     echo
+    # The logs stamp the local time of day: the example has no time zone
+    # database, so it gets this machine's offset from UTC (+1100, -0700).
     (cd "$root" && SCRATCH_MCP_URL="http://127.0.0.1:$port/mcp" SHOWCASE_LOG_DIR="$logs" \
+        SHOWCASE_UTC_OFFSET="$(date +%z)" \
         SHOWCASE_TOKEN_LAPTOP_CLAUDE="$laptop_claude" SHOWCASE_TOKEN_LAPTOP_OPENCODE="$laptop_opencode" \
         SHOWCASE_TOKEN_MAC_CLAUDE="$mac_claude" SHOWCASE_TOKEN_MAC_CODEX="$mac_codex" \
         DRIVE_PAUSE_MS="$pause_ms" cargo run --locked --quiet --example board_drive_showcase -- play)

@@ -191,6 +191,38 @@ struct Play {
     logs: PathBuf,
     pause: Pause,
     started: Instant,
+    /// Seconds east of UTC for the logs' time of day.
+    offset: i64,
+}
+
+/// Seconds east of UTC from `SHOWCASE_UTC_OFFSET`, as `date +%z` prints it
+/// (`+1100`, `-0700`); `None` unless it is a sign and four digits.
+fn parse_offset(raw: &str) -> Option<i64> {
+    let (sign, digits) = match raw.as_bytes().first()? {
+        b'+' => (1, &raw[1..]),
+        b'-' => (-1, &raw[1..]),
+        _ => return None,
+    };
+    if digits.len() != 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let hours: i64 = digits[..2].parse().ok()?;
+    let minutes: i64 = digits[2..].parse().ok()?;
+    (hours <= 23 && minutes <= 59).then_some(sign * (hours * 3600 + minutes * 60))
+}
+
+/// The offset for the logs, or 0 (UTC) with a warning when it is missing
+/// or malformed.
+fn utc_offset() -> Result<i64> {
+    let raw = std::env::var("SHOWCASE_UTC_OFFSET").unwrap_or_default();
+    if let Some(offset) = parse_offset(&raw) {
+        return Ok(offset);
+    }
+    writeln!(
+        std::io::stderr(),
+        "board-drive-showcase: SHOWCASE_UTC_OFFSET {raw:?} is not +HHMM or -HHMM; the agents' logs use UTC"
+    )?;
+    Ok(0)
 }
 
 impl Play {
@@ -209,6 +241,7 @@ impl Play {
             logs,
             pause: Pause::from_env(),
             started: Instant::now(),
+            offset: utc_offset()?,
         })
     }
 
@@ -221,7 +254,7 @@ impl Play {
     }
 
     /// One beat by `agent`: a line on standard error, with the time since
-    /// the start, and in the agent's log, with the time of day (UTC).
+    /// the start, and in the agent's log, with the local time of day.
     fn beat(&self, agent: Agent, what: &str) -> Result<()> {
         writeln!(
             std::io::stderr(),
@@ -229,9 +262,10 @@ impl Play {
             self.started.elapsed().as_secs_f64(),
             agent.key
         )?;
-        let day = SystemTime::now()
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() % 86_400);
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+        let day = (now + self.offset).rem_euclid(86_400);
         let mut log = OpenOptions::new()
             .append(true)
             .open(self.logs.join(format!("{}.log", agent.key)))?;
