@@ -24,7 +24,10 @@
   let timer = null;
   let lastRefresh = -Infinity;
   let busy = false;
+  // Set while a fetch is in flight: an automatic refresh (`again`) or a
+  // filter change (`againInstant`) is waiting to run after it.
   let again = false;
+  let againInstant = false;
   let paused = false;
   let waiting = false;
   let eventAt = 0;
@@ -226,9 +229,14 @@
     clearTimeout(retryTimer);
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      if (paused) {
+      if (document.hidden) {
+        return;
+      }
+      if (againInstant) {
+        refresh(true);
+      } else if (paused) {
         waiting = true;
-      } else if (!document.hidden) {
+      } else {
         refresh(false);
       }
     }, retryDelay);
@@ -237,10 +245,25 @@
   // `instant`: a filter change, the user's own action, applied at once and
   // without animation even while paused. An automatic refresh that arrives
   // while paused is held: Resume fetches the latest grid.
+  //
+  // One fetch at a time. A refresh asked for while one is in flight waits
+  // for it: a filter change as `againInstant`, run next as a filter change
+  // (paused or not, reading the address as it is then, so several changes
+  // need one fetch); an automatic one as `again`, through `refreshSoon`. A
+  // failed filter fetch keeps `againInstant` for its retry.
   function refresh(instant) {
     if (busy) {
-      again = true;
+      if (instant) {
+        againInstant = true;
+      } else {
+        again = true;
+      }
       return;
+    }
+    if (instant) {
+      // This fetch covers every change asked for until now.
+      againInstant = false;
+      again = false;
     }
     busy = true;
     lastRefresh = performance.now();
@@ -281,13 +304,20 @@
         if (fetched) {
           retryDelay = 0;
           clearTimeout(retryTimer);
-          if (!paused && source?.readyState === EventSource.OPEN) {
+          if (paused) {
+            live("paused", waiting ? "Paused, changes waiting" : "Paused");
+          } else if (source?.readyState === EventSource.OPEN) {
             live("live", "Live");
           }
         } else {
+          if (instant) {
+            againInstant = true;
+          }
           retryLater();
         }
-        if (again) {
+        if (againInstant && fetched) {
+          refresh(true);
+        } else if (again) {
           again = false;
           refreshSoon();
         }
@@ -653,12 +683,15 @@
       paused = !paused;
       pause.setAttribute("aria-pressed", String(paused));
       pause.textContent = paused ? "Resume" : "Pause";
-      if (paused && (timer || retryTimer)) {
-        // A refresh already queued waits for Resume; one in flight is held
-        // when it arrives (refresh).
+      // A refresh already queued waits for Resume; one in flight is held
+      // when it arrives (refresh). A filter change's retry still runs.
+      if (paused && timer) {
         clearTimeout(timer);
-        clearTimeout(retryTimer);
         timer = null;
+        waiting = true;
+      }
+      if (paused && retryTimer && !againInstant) {
+        clearTimeout(retryTimer);
         retryTimer = null;
         waiting = true;
       }
@@ -727,12 +760,22 @@
 
   // --- Lifecycle -----------------------------------------------------
 
+  // The page is shown again: a filter change still waiting (its fetch
+  // failed) runs as one; otherwise the latest grid, as any change would.
+  const catchUp = () => {
+    if (againInstant) {
+      refresh(true);
+    } else {
+      refreshSoon();
+    }
+  };
+
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       close();
     } else {
       open();
-      refreshSoon();
+      catchUp();
     }
   });
   addEventListener("pagehide", close);
@@ -740,7 +783,7 @@
     if (event.persisted) {
       opens = 0;
       open();
-      refreshSoon();
+      catchUp();
     }
   });
   // Back or Forward to a page htmx kept swaps in a new body: the Board's
