@@ -1,0 +1,27 @@
+<div class="board-grid{% if !titled %} board-untitled{% endif %}" data-board-grid data-marker="{{ marker }}">
+  <div class="board-columns" aria-hidden="true">
+    <div class="board-corner"></div>
+    {% for column in columns %}<div class="board-column-head" data-column="{{ column.status }}"><span class="badge badge-status-{{ column.status }}">{{ column.status }}</span> <span class="board-count">{{ column.count }}</span></div>{% endfor %}
+  </div>
+  {% if rows.is_empty() %}<p class="empty">No documents to show. Change the filters.</p>{% endif %}
+  {% for row in rows %}
+  <section class="board-row" data-row-key="{{ row.key }}" aria-label="{% if titled %}{{ row.label }}{% else %}All documents{% endif %}">
+    <h2 class="board-row-title">{{ row.label }}</h2>
+    {% for cell in row.cells %}
+    <div class="board-cell board-cell-{{ cell.status }}" aria-label="{% if titled %}{{ row.label }}, {% endif %}{{ cell.status }}">
+      {% for card in cell.cards %}
+      <article class="bcard{% if card.attention.is_some() %} bcard-attention{% endif %}" id="card-{{ card.id }}" data-id="{{ card.id }}" data-rev="{{ card.revision }}" data-status="{{ card.status }}" data-row="{{ card.row }}"{% if let Some(reason) = card.attention %} data-attention="{{ reason }}"{% endif %}{% if let Some(build) = card.building %} data-building="{{ build.state }}"{% endif %}>
+        <div class="bcard-top">
+          <a class="bcard-link" href="/admin/documents/{{ card.id }}">{{ card.title }}</a>
+          <button type="button" class="bcard-menu" data-card-menu aria-haspopup="menu" aria-expanded="false" aria-label="Actions for {{ card.id }}" title="Actions"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><circle cx="3" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="13" cy="8" r="1.5" fill="currentColor"/></svg></button>
+        </div>
+        <p class="bcard-meta"><span class="bcard-id">{{ card.id }}</span> <span class="bcard-type">{{ card.doc_type }}</span> <span class="bcard-rev">r{{ card.revision }}</span></p>
+        <p class="bcard-meta"><span class="bcard-who" title="Last changed by">{{ card.updated_by }}</span> <time datetime="{{ card.updated }}" data-ago title="{{ card.updated }}">{{ card.updated }}</time>{% if let Some(build) = card.building %}<span class="bcard-build" role="img" aria-label="Being built{% if build.state == "blocked" %}, blocked{% endif %}{% if let Some(step) = build.step %}, {{ step }}{% endif %}" title="Being built{% if build.state == "blocked" %} (blocked){% endif %}{% if let Some(step) = build.step %}: {{ step }}{% endif %}"><span aria-hidden="true">&#127959;&#65039;</span>{% if let Some(step) = build.step %} <span class="bcard-step">{{ step }}</span>{% endif %}</span>{% endif %}</p>
+        {% if let Some(reason) = card.attention %}<p class="bcard-reason"><span aria-hidden="true">&#9873;</span> {{ reason }}</p>{% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+</div>

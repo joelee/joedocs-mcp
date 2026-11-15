@@ -97,6 +97,7 @@ The first source that exists wins; files are never merged.
 - Values are parsed as the target field's type: booleans, integers and floats use TOML scalar syntax, strings are taken literally, arrays use TOML inline-array syntax (`["a", "b"]`).
 - An unknown override path, an unparseable value, or an empty value for a non-string field is a startup error that names the variable.
 - Every config key's override variable name is listed in `docs/configuration.md` alongside its type, default, and example.
+- A value that breaks a rule is a startup error, with one recorded exception: `documents.closed_statuses` (an empty list falls back to the default, an unknown status name is ignored). Those are warnings from `Config::warnings` in `src/config/validate.rs`: `serve` logs them and still starts, and `joedocs check` (exit 1) and `joedocs status` report them. Do not add a key to this exception without asking.
 
 ### Implementation
 

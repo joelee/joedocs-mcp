@@ -3,6 +3,7 @@
 
 mod archive;
 mod audit;
+mod board;
 mod document;
 mod documents;
 mod history;
@@ -39,6 +40,7 @@ pub(crate) struct ErrorPage<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Section {
     Overview,
+    Board,
     Documents,
     Projects,
     Keys,
@@ -53,8 +55,9 @@ pub(crate) enum Section {
 }
 
 impl Section {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Overview,
+        Self::Board,
         Self::Documents,
         Self::Projects,
         Self::Keys,
@@ -67,6 +70,7 @@ impl Section {
     fn href(self) -> &'static str {
         match self {
             Self::Overview => "/admin/",
+            Self::Board => "/admin/board",
             Self::Documents => "/admin/documents",
             Self::Projects => "/admin/projects",
             Self::Keys => "/admin/keys",
@@ -82,6 +86,7 @@ impl Section {
     fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
+            Self::Board => "Board",
             Self::Documents => "Documents",
             Self::Projects => "Projects",
             Self::Keys => "API keys",
@@ -195,6 +200,8 @@ pub(crate) fn page(
     match route {
         Route::Logout => Ok(login::logout(store, session)),
         Route::Home => overview::page(store, state, session),
+        Route::Board => board::page(store, state, request, session),
+        Route::BoardPreview(id) => board::preview(store, id),
         Route::DocumentsList => documents::list(store, request, session),
         Route::Document(id) => document::view(store, state, request, session, id),
         Route::History(id) => history::history(store, request, session, id),

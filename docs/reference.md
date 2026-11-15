@@ -222,11 +222,12 @@ With `[admin] enabled = true` and `web_ui = true`, `joedocs serve` also serves p
 | Page | What it does |
 | --- | --- |
 | Overview (`/admin/`) | the `status` report, projects with their live and archived counts, and the latest audit entries |
+| Board (`/admin/board`, 0.5.5) | live documents of several projects as cards, in a column per status and a row per type, project or none, kept up to date as agents work; see [The Board](#the-board) |
 | Documents | a project's live documents, filtered by type and status as `list`, and sorted by clicking a column header (ID, Title, Type, Status, Revision, Updated: ascending, then descending, then most recently updated first again) across every page; each document rendered or as stored, at any revision, with its properties, files, an "On this page" list, its History and diffs between revisions, and downloads of the file (`.md`, as `get -f` writes it) and of every file (`.tgz`, as `get --archive`) |
 | Search | `search` over every project or one, with type, status, `key=value` and JSON filters; the results reload as you type. A search for exactly a document's ID (`JD-33`, any case) from the top bar opens that document; on the Search page that document is listed first, and an archived one's ID points to the Archive |
 | Projects | `project list` and `project add` |
 | API keys | `key list`, `create`, `grant`, `ungrant`, `rotate` and `revoke`; a new or rotated token is shown once, on the reply to that request |
-| Audit | `audit` with its filters, and quick filters for admin calls, refusals and the last 24 hours |
+| Audit | `audit` with its filters, and quick filters for admin calls, refusals, the last 24 hours, and "Leave out Board" (every tool but `admin:documents.board*`, the Board's frequent rows; 0.5.5) |
 | Archive | `archive list` and `archive restore` |
 | Maintenance | `check`, `reindex` and a backup download, and the commands that run only on the server |
 | Users | `user list`, `create` (the one-time password is shown once, on the reply), `disable`, `enable`, `unlock`, `reset-password` and `reset-totp`; for signed-in users only |
@@ -237,6 +238,20 @@ Tables that show every row (Projects, API keys, Users, your devices, Archive and
 Filters apply as they change: picking a project, type or status on Documents or Archive, or typing in an Audit filter (after a pause of 300 ms), reloads the list in place and updates the address, so the view can be shared and reloaded.
 
 The web interface needs JavaScript. A browser with it turned off may still show some pages, but they are not supported and may not work.
+
+### The Board
+
+The Board shows every live document of the chosen projects as a card, in a column per status (in `documents.statuses` order, each with its count and colour) and a row per type, per project, or one row. It only reads. A filter band picks projects, types and statuses (with no status chosen, every status that is not in `documents.closed_statuses`), "Only needing attention", the grouping and the order (last updated, created, or document ID by number; descending or ascending). The filters are in the address, so a Board link carries them.
+
+A card shows the title (the link to the document), the ID, type and revision, who changed it last and how long ago. A card whose main file has an `attention` front matter key holding text lights up and shows that text (a closed status never lights up); an approved plan whose `implementation_status` is `in-progress` or `blocked` shows 🏗️, being built, with its `current_step` beside it.
+
+| Route | What it is | Audit tool |
+| --- | --- | --- |
+| `GET /admin/board` | the page; `?fragment=1` the grid alone, for the page script | `admin:documents.board` (one row per load or refresh) |
+| `GET /admin/board/preview/{id}` | a card's preview: its facts and up to 700 characters of opening text, code and diagrams left out | `admin:documents.get` |
+| `GET /admin/board/stream` | Server-Sent Events saying only that something changed: `retry: 2000`, then `id: <n>` and `data: <n> <unix ms>` per change, and a comment line every 15 seconds; `event: expired` when the session has lapsed | `admin:documents.board_stream` (one row per connection) |
+
+The stream needs the web session and the page's own origin (`403` otherwise), and at most 32 are open at once (`503 busy`). A reverse proxy must pass it through without buffering: it is sent with `X-Accel-Buffering: no` and stays open, with a comment line every 15 seconds so an idle connection is not dropped. Changes by any writer reach an open Board, including a local `joedocs` command; a burst of changes is one refresh per `admin.board_refresh_ms`.
 
 The document view's Actions offer `document convert` and `move-file`, and Archive document on the latest revision of a document's main page (with a reason, as the `archive_document` tool; audited as `admin:document.archive`), and a file's History offers `restore-file`. Every change asks for confirmation first and is written with the admin token's name as author and client `joedocs-web`. Document content cannot be edited in the browser.
 

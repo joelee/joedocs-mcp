@@ -15,6 +15,12 @@ pub struct Violation {
     pub message: String,
 }
 
+impl std::fmt::Display for Violation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.key, self.message)
+    }
+}
+
 impl Violation {
     fn new(key: &'static str, message: impl Into<String>) -> Self {
         Self {
@@ -25,6 +31,40 @@ impl Violation {
 }
 
 impl Config {
+    /// Problems that do not stop the server: the setting falls back to
+    /// something usable, and `joedocs check` and `joedocs status` report
+    /// them. Only `documents.closed_statuses` has any (the one exception to
+    /// "a bad value is a start-up error", recorded in `AGENTS.md`).
+    #[must_use]
+    pub fn warnings(&self) -> Vec<Violation> {
+        let docs = &self.documents;
+        let key = "documents.closed_statuses";
+        if docs.closed_statuses.is_empty() {
+            return vec![Violation::new(
+                key,
+                format!(
+                    "is empty; the default is used: {}",
+                    super::DEFAULT_CLOSED_STATUSES.join(", ")
+                ),
+            )];
+        }
+        // Names from the default that a server does not list are dropped
+        // quietly: the operator did not choose them.
+        if docs.closed_statuses == super::DEFAULT_CLOSED_STATUSES {
+            return Vec::new();
+        }
+        docs.closed_statuses
+            .iter()
+            .filter(|name| !docs.statuses.contains(name))
+            .map(|name| {
+                Violation::new(
+                    key,
+                    format!("\"{name}\" is not one of documents.statuses, so it is ignored"),
+                )
+            })
+            .collect()
+    }
+
     /// Checks the rules that types alone cannot express. The first broken
     /// rule is returned.
     ///
@@ -117,6 +157,18 @@ impl Config {
             return Err(Violation::new(
                 "admin.device_days",
                 "must be from 1 to 365 (a year)",
+            ));
+        }
+        if !(500..=10_000).contains(&self.admin.board_refresh_ms) {
+            return Err(Violation::new(
+                "admin.board_refresh_ms",
+                "must be from 500 to 10000 (milliseconds)",
+            ));
+        }
+        if self.admin.board_preview_ms > 10_000 {
+            return Err(Violation::new(
+                "admin.board_preview_ms",
+                "must be from 0 to 10000 (milliseconds; 0 turns hover previews off)",
             ));
         }
         if !self.client.user.is_empty() && !crate::document::is_slug(&self.client.user) {
@@ -396,6 +448,83 @@ mod tests {
         assert!(config.validate().is_ok());
         config.admin.device_days = 1;
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn board_refreshes_wait_half_a_second_to_ten_seconds() {
+        for ms in [0, 499, 10_001] {
+            let v = violation(|c| c.admin.board_refresh_ms = ms);
+            assert_eq!(v.key, "admin.board_refresh_ms", "{ms}");
+        }
+        let mut config = Config::default();
+        assert_eq!(config.admin.board_refresh_ms, 1000);
+        config.admin.board_refresh_ms = 500;
+        assert!(config.validate().is_ok());
+        config.admin.board_refresh_ms = 10_000;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn board_previews_wait_up_to_ten_seconds_and_zero_turns_them_off() {
+        let v = violation(|c| c.admin.board_preview_ms = 10_001);
+        assert_eq!(v.key, "admin.board_preview_ms");
+        let mut config = Config::default();
+        assert_eq!(config.admin.board_preview_ms, 2000);
+        config.admin.board_preview_ms = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn closed_statuses_default_to_done_rejected_and_superseded_without_warnings() {
+        let config = Config::default();
+        // In the order of documents.statuses.
+        assert_eq!(
+            config.documents.closed_statuses(),
+            ["rejected", "superseded", "done"]
+        );
+        assert_eq!(config.warnings(), []);
+    }
+
+    #[test]
+    fn empty_closed_statuses_warn_and_use_the_default() {
+        let mut config = Config::default();
+        config.documents.closed_statuses = Vec::new();
+        assert!(config.validate().is_ok(), "a warning, not an error");
+        assert_eq!(
+            config.documents.closed_statuses(),
+            ["rejected", "superseded", "done"]
+        );
+        let warnings = config.warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].key, "documents.closed_statuses");
+        assert!(warnings[0].message.contains("empty"), "{warnings:?}");
+    }
+
+    #[test]
+    fn unknown_closed_statuses_warn_and_are_ignored() {
+        let mut config = Config::default();
+        config.documents.closed_statuses = vec!["done".into(), "nope".into()];
+        assert!(config.validate().is_ok(), "a warning, not an error");
+        assert_eq!(config.documents.closed_statuses(), ["done"]);
+        let warnings = config.warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("\"nope\""), "{warnings:?}");
+        assert_eq!(
+            warnings[0].to_string(),
+            format!("documents.closed_statuses: {}", warnings[0].message)
+        );
+    }
+
+    #[test]
+    fn default_closed_statuses_missing_from_custom_statuses_are_dropped_quietly() {
+        let mut config = Config::default();
+        config.documents.statuses = vec!["draft".into(), "done".into()];
+        assert_eq!(config.documents.closed_statuses(), ["done"]);
+        assert_eq!(
+            config.warnings(),
+            [],
+            "the default was not chosen by the operator"
+        );
     }
 
     #[test]

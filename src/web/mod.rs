@@ -37,6 +37,9 @@
 //! | `POST /admin/users/{name}/reset-password` | `admin:users.reset_password` |
 //! | `POST /admin/users/{name}/reset-totp` | `admin:users.reset_totp` |
 //! | `GET /admin/` | `admin:status` |
+//! | `GET /admin/board` | `admin:documents.board` |
+//! | `GET /admin/board/preview/{id}` | `admin:documents.get` |
+//! | `GET /admin/board/stream` | `admin:documents.board_stream` |
 //! | `GET /admin/documents` | `admin:documents.list` |
 //! | `GET /admin/documents/{id}` | `admin:documents.get` |
 //! | `GET /admin/documents/{id}/history` | `admin:documents.history` |
@@ -68,6 +71,7 @@
 //! the cookie may change in any release. Scripts use `/admin/v1/`.
 
 mod assets;
+mod board_signal;
 pub(crate) mod markdown;
 mod pages;
 mod plantuml;
@@ -97,6 +101,22 @@ pub struct WebOptions {
     pub session_hours: u32,
     /// `admin.web_plantuml_url`, or empty.
     pub plantuml_url: String,
+    /// The Board's settings.
+    pub board: BoardOptions,
+}
+
+/// The Board's settings, from `[documents]` and `[admin]` (JD-47).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardOptions {
+    /// The closed statuses in effect (`DocumentsConfig::closed_statuses`).
+    pub closed_statuses: Vec<String>,
+    /// `admin.board_refresh_ms`.
+    pub refresh_ms: u32,
+    /// `admin.board_preview_ms`.
+    pub preview_ms: u32,
+    /// How often an open Board stream sends a comment line and checks its
+    /// session: 15 seconds (shorter in tests).
+    pub keep_alive: std::time::Duration,
 }
 
 /// The extra directive a page that loads Pele needs: Pele sets `style`
@@ -118,11 +138,18 @@ pub(crate) struct WebState {
     token_login: bool,
     /// `admin.device_days`, shown on the Account page.
     device_days: u32,
+    /// The Board's change signal and open streams.
+    board_signal: Arc<board_signal::BoardSignal>,
 }
 
 /// The routes: `/` and `/admin` redirect to `/admin/`, and everything under
 /// `/admin/` that is not `/admin/v1/` is a page or a static file.
-pub(crate) fn routes(shared: &Arc<Shared>, web: &WebOptions, server: &ServerOptions) -> Router {
+pub(crate) fn routes(
+    shared: &Arc<Shared>,
+    web: &WebOptions,
+    server: &ServerOptions,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> Router {
     let csp = HeaderValue::from_str(&content_security_policy(&web.plantuml_url))
         .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'"));
     let state = Arc::new(WebState {
@@ -135,6 +162,14 @@ pub(crate) fn routes(shared: &Arc<Shared>, web: &WebOptions, server: &ServerOpti
         config_file: server.admin.as_ref().and_then(|a| a.config_file.clone()),
         token_login: server.token_login,
         device_days: server.device_days,
+        board_signal: board_signal::BoardSignal::new(
+            {
+                let shared = Arc::clone(shared);
+                Arc::new(move || shared.store().lock().ok()?.change_marker().ok().flatten())
+            },
+            std::time::Duration::from_millis(u64::from(web.board.refresh_ms)),
+            shutdown.child_token(),
+        ),
     });
     Router::new()
         .route("/", any(dispatch))
@@ -178,6 +213,9 @@ pub(crate) enum Route {
     UsersCreate,
     UserAction(String, pages::users::UserAction),
     Home,
+    Board,
+    BoardStream,
+    BoardPreview(String),
     DocumentsList,
     Document(String),
     History(String),
@@ -244,6 +282,11 @@ impl Route {
                 }
             }
             ("/admin/", _) if get => Self::Home,
+            ("/admin/board", _) if get => Self::Board,
+            ("/admin/board/stream", _) if get => Self::BoardStream,
+            (_, ["board", "preview", id]) if get && !id.is_empty() => {
+                Self::BoardPreview(percent_decode(id))
+            }
             (_, ["documents"]) if get => Self::DocumentsList,
             (_, ["documents", id]) if get && !id.is_empty() => Self::Document(percent_decode(id)),
             (_, ["documents", id, "history"]) if get && !id.is_empty() => {
@@ -310,8 +353,10 @@ impl Route {
             Self::UsersCreate => "admin:users.create",
             Self::UserAction(_, action) => action.operation(),
             Self::Home => "admin:status",
+            Self::Board => "admin:documents.board",
+            Self::BoardStream => "admin:documents.board_stream",
             Self::DocumentsList => "admin:documents.list",
-            Self::Document(_) | Self::Download(_) => "admin:documents.get",
+            Self::Document(_) | Self::Download(_) | Self::BoardPreview(_) => "admin:documents.get",
             Self::History(_) => "admin:documents.history",
             Self::Diff(_) => "admin:documents.diff",
             Self::Search => "admin:documents.search",
@@ -605,6 +650,10 @@ async fn run(
     checked: Result<(), WebError>,
 ) -> Response {
     let csp = state.csp.clone();
+    // A stream stays open: it runs outside the blocking handlers.
+    if matches!(route, Route::BoardStream) && checked.is_ok() {
+        return secured(board_signal::stream(state, request).await, &csp);
+    }
     if matches!(route, Route::Backup) && checked.is_ok() {
         return secured(backup(state, request).await, &csp);
     }

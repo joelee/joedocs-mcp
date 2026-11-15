@@ -962,6 +962,41 @@ fn check_reports_a_stale_index_file_and_reindex_rewrites_it() {
 }
 
 #[test]
+fn check_and_status_report_configuration_warnings() {
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    let warning =
+        "documents.closed_statuses: \"nope\" is not one of documents.statuses, so it is ignored";
+    cmd(root.path())
+        .env("JOEDOCS__DOCUMENTS__CLOSED_STATUSES", r#"["done", "nope"]"#)
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(format!(
+            "Configuration warnings (the server still starts):\n  {warning}\n"
+        )))
+        .stderr(predicate::str::starts_with("error: check found 1 "));
+    // Nothing listens on the bind address.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    cmd(root.path())
+        .env("JOEDOCS__SERVER__BIND", format!("127.0.0.1:{port}"))
+        .env("JOEDOCS__DOCUMENTS__CLOSED_STATUSES", "[]")
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "configuration warnings:\n  documents.closed_statuses: is empty; the default is used: done, rejected, superseded\n",
+        ));
+    cmd(root.path())
+        .arg("check")
+        .assert()
+        .success()
+        .stdout("No problems found.\n");
+}
+
+#[test]
 fn get_prints_a_document_or_one_part_of_it() {
     use joedocs::store::{Actor, NewDocument};
     let root = TempDir::new().unwrap();

@@ -28,6 +28,11 @@ const FILES: &[Asset] = &[
         bytes: include_bytes!("assets/app.js"),
     },
     Asset {
+        name: "board.js",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: include_bytes!("assets/board.js"),
+    },
+    Asset {
         name: "htmx.min.js",
         content_type: "text/javascript; charset=utf-8",
         bytes: include_bytes!("assets/vendor/htmx.min.js"),
@@ -87,6 +92,8 @@ pub struct Urls {
     pub htmx: &'static str,
     /// `pele.global.js`, loaded only by pages with a Mermaid diagram.
     pub pele: &'static str,
+    /// `board.js`, loaded only by the Board.
+    pub board: &'static str,
     /// `favicon.ico`: 16, 32 and 48 pixels, drawn from `favicon.svg`.
     pub icon: &'static str,
     /// `favicon.svg`, for browsers that draw it at any size.
@@ -103,6 +110,7 @@ pub fn urls() -> Urls {
         js: url("app.js"),
         htmx: url("htmx.min.js"),
         pele: url("pele.global.js"),
+        board: url("board.js"),
         icon: url("favicon.ico"),
         icon_svg: url("favicon.svg"),
         touch_icon: url("apple-touch-icon.png"),

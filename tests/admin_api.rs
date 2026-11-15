@@ -63,6 +63,10 @@ struct Server {
 }
 
 async fn start(admin: bool) -> TestResult<Server> {
+    start_with(admin, Config::default()).await
+}
+
+async fn start_with(admin: bool, config: Config) -> TestResult<Server> {
     let dir = TempDir::new()?;
     let paths = Paths {
         home: dir.path().join("vault"),
@@ -82,7 +86,7 @@ async fn start(admin: bool) -> TestResult<Server> {
         joedocs::totp::base32_decode(created.totp_secret.expose_secret()).ok_or("bad base32")?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let mut options = ServerOptions::from_config(&Config::default());
+    let mut options = ServerOptions::from_config(&config);
     if admin {
         options.admin = Some(AdminOptions {
             session_hours: 8,
@@ -111,6 +115,8 @@ struct Response {
     status: u16,
     head: String,
     json: Value,
+    /// The body as text, for replies that are not JSON.
+    text: String,
 }
 
 impl Server {
@@ -141,6 +147,7 @@ impl Server {
             status,
             head: head.to_owned(),
             json,
+            text: body.to_owned(),
         })
     }
 
@@ -216,6 +223,44 @@ async fn the_admin_api_is_off_by_default() -> TestResult<()> {
         .await?;
     assert_eq!(response.status, 404);
     assert_eq!(server.audit()?, Vec::new());
+    server.stop().await
+}
+
+#[tokio::test]
+async fn configuration_warnings_are_logged_and_reported_by_check_and_status() -> TestResult<()> {
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let _guard = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let mut config = Config::default();
+    config.documents.closed_statuses = Vec::new();
+    let server = start_with(true, config).await?;
+    let warning =
+        "documents.closed_statuses: is empty; the default is used: done, rejected, superseded";
+    let session = server.login().await?;
+    let status = server
+        .send("GET", "/admin/v1/status", &server.auth(Some(&session)), "")
+        .await?;
+    assert_eq!(status.status, 200, "{:?}", status.json);
+    assert_eq!(status.json["config_warnings"], serde_json::json!([warning]));
+    let check = server
+        .send("GET", "/admin/v1/check", &server.auth(Some(&session)), "")
+        .await?;
+    assert!(check.text.contains(warning), "{}", check.text);
+    let logged = String::from_utf8(logs.0.lock().map(|l| l.clone()).unwrap_or_default())?;
+    assert!(logged.contains(warning), "{logged}");
+    server.stop().await?;
+
+    let server = start(true).await?;
+    let session = server.login().await?;
+    let status = server
+        .send("GET", "/admin/v1/status", &server.auth(Some(&session)), "")
+        .await?;
+    assert_eq!(status.json["config_warnings"], serde_json::json!([]));
     server.stop().await
 }
 

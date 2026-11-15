@@ -69,7 +69,8 @@ repository changes wait in the index until the user says continue.
 - **In the plan**, change only the builder front matter keys
   (`implementation_status`, `builder_model`, `execution_branch`,
   `current_step`, `execution_started_at`, `execution_updated_at`,
-  `execution_completed_at`) and text between `<!-- BUILDER_WORK_LOG_START -->`
+  `execution_completed_at`), the `attention` key (see The attention key), and
+  text between `<!-- BUILDER_WORK_LOG_START -->`
   and `<!-- BUILDER_WORK_LOG_END -->`. Never change the objective, scope,
   requirements, steps, acceptance criteria, risks, change log or any other
   planner-owned text, and never change `status`.
@@ -166,7 +167,9 @@ summary is `Approve delivery plan` (the planner's approval). Confirm with
 latest revision and confirm every changed line is:
 
 - inside the work log markers;
-- a builder front matter key; or
+- a builder front matter key;
+- the `attention` key (the planner removes it after approval, and the builder
+  sets and removes it at its stops); or
 - a server key that changes on every write (`revision`, `updated`,
   `updated_by`, `client`).
 
@@ -366,6 +369,30 @@ commit.
    `execution_completed_at`, and remove `current_step`
    (`change_document_front_matter` with `remove: ["current_step"]`), fill the
    completion summary, and give the completion hand-off.
+
+## The attention key
+
+`attention` is a front matter key holding a short reason, one line, that a
+document needs the user now. The web interface's Board (JoeDocs 0.5.5) lights
+a card while its main file has the key with non-empty text, and shows the
+text. A light that stays on after the need has passed teaches the user to
+ignore it, so set the key only when the user is needed, and remove it as soon
+as they are not: `change_document_front_matter` with `remove: ["attention"]`
+and `expected_revision`, in the same call as the status change when there is
+one. Never clear it by writing `false` or an empty string: remove the key.
+
+- **Set it** when you stop for the user: a step staged and awaiting review
+  (`attention: "STEP-03 ready for review"`), a stop the plan requires (for
+  example a demo checkpoint, with the plan's own wording), a blocked run
+  (`attention: "Blocked: <the decision needed, one line>"`), and the
+  completion hand-off (`attention: "Build complete: review, then your
+  sign-off"`). In continuous execution there is no review pause, so set it
+  only for a required stop, a block, or completion.
+- **Remove it** when the user answers: on continue, on the decision that
+  unblocks the run, or after a required stop. The completion light stays
+  until the planner closes the plan on the user's sign-off, which removes it.
+- The key is not planner-owned content: setting and removing it never makes
+  the approval unprovable.
 
 ## Work log edits
 

@@ -100,6 +100,13 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.5.4 to 0.5.5
+
+- **No migration:** the database stays at version 8.
+- **New keys with defaults:** `documents.closed_statuses`, `admin.board_refresh_ms` and `admin.board_preview_ms` (see [configuration](configuration.md)). Nothing needs setting. Going back to 0.5.4 needs only the older binary, but remove these keys from `config.toml` first: 0.5.4 does not know them and refuses to start.
+- **The Board's stream through a reverse proxy:** `/admin/board/stream` stays open and sends a comment line every 15 seconds. A proxy must pass it through without buffering (it is sent with `X-Accel-Buffering: no`) and must not cut idle connections sooner than that.
+- **`joedocs check` can now fail on configuration:** only for an empty `documents.closed_statuses` or a name in it that is not a status, both new in this release.
+
 ### 0.5.3 to 0.5.4
 
 - **Nothing changes for a server:** 0.5.4 adds a tool for developers (`just scratch-server`) only. No migration; the database stays at version 8.

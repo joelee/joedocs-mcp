@@ -60,7 +60,7 @@ One server holds the documents. Each agent connects with its own API key, scoped
 - **Scoped API keys.** Each key gets `read` or `write` access to specific projects. Tokens are shown once and stored hashed, and can be rotated or revoked at once.
 - **Multi-file documents.** A document can be a folder of files under one ID, such as a roadmap and its backlog items, each with its own front matter, searched and filtered on its own, and changed by different agents without conflicts between files.
 - **Obsidian-friendly.** Titles are file names, so `[[wiki links]]` work; renamed documents keep their old titles as `aliases`; Mermaid and PlantUML blocks are stored as written.
-- **Admin web interface.** Optional pages under `/admin/` for the server's administrators: browse, search and read documents with Obsidian-style rendering (callouts, wiki links, Mermaid diagrams), follow their history and diffs, manage projects, API keys and users, read the audit log, restore archived documents, and check, reindex or back up the store.
+- **Admin web interface.** Optional pages under `/admin/` for the server's administrators: a live Board of the documents of several projects as cards in status columns, lit where an agent needs you and moving as agents work; browse, search and read documents with Obsidian-style rendering (callouts, wiki links, Mermaid diagrams), follow their history and diffs, manage projects, API keys and users, read the audit log, restore archived documents, and check, reindex or back up the store.
 - **User accounts with two-factor sign-in.** Administrators sign in to the web interface and the admin command line with a password and a TOTP code; the authenticator is set up at the first sign-in, and passwords are hashed with Argon2id.
 - **Easy to run.** One binary with SQLite built in. It runs as a systemd service on Linux, under `brew services` on macOS, or in Docker. Reach it from anywhere over Tailscale or behind your own TLS proxy.
 
@@ -193,7 +193,6 @@ Planned:
 - Members and key ownership for user accounts: users who manage only their own MCP keys, within the projects an admin grants them, and keys stopped with their owner.
 - More agent skills: research notes, decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
-- A live Board in the web interface: documents as cards in status columns, grouped by type across several projects, updated as agents work, with animation.
 - More ways to install: `cargo binstall joedocs` (the release binaries, no compiling), an Arch Linux AUR package `joedocs-bin`, and a container image on GitHub Container Registry, published with each release.
 
 Further out:

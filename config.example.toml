@@ -43,6 +43,11 @@ default_status = "draft"
 index_file = true
 # Most live sub-files a multi-file document may hold, besides its main file.
 max_files = 500
+# Closed work: the statuses the web interface's Board hides unless asked.
+# An empty list (the default is used) or a name not in statuses (ignored) is
+# a warning that `joedocs check` and `joedocs status` report; the server
+# still starts.
+closed_statuses = ["done", "rejected", "superseded"]
 
 [admin]
 # Serve the remote admin API under /admin/v1/ so `joedocs` on another
@@ -67,6 +72,13 @@ device_days = 30
 # false once every administrator signs in as a user: every request carrying an
 # admin token is then refused, on the admin API and the web interface.
 token_login = true
+# The Board's refresh window, in milliseconds (500 to 10000): a change shows
+# at once, then at most one refresh per window.
+board_refresh_ms = 1000
+# How long the pointer rests on a Board card, or keyboard focus stays on it,
+# before its preview opens, in milliseconds (0 to 10000; 0 turns hover and
+# focus previews off, the card menu still has Preview).
+board_preview_ms = 2000
 
 [client]
 # The server whose admin API this machine uses, e.g.

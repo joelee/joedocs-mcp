@@ -43,6 +43,16 @@ async fn start_full(
     edit: impl FnOnce(&mut Config),
     setup: impl FnOnce(&mut Store) -> TestResult<()>,
 ) -> TestResult<Server> {
+    start_options(edit, |_| {}, setup).await
+}
+
+/// As [`start_full`], with `options` changing the server options built
+/// from the configuration (for settings with no key, such as timings).
+async fn start_options(
+    edit: impl FnOnce(&mut Config),
+    options: impl FnOnce(&mut ServerOptions),
+    setup: impl FnOnce(&mut Store) -> TestResult<()>,
+) -> TestResult<Server> {
     let mut config = Config::default();
     config.admin.enabled = true;
     config.admin.web_ui = true;
@@ -67,7 +77,9 @@ async fn start_full(
         joedocs::totp::base32_decode(created.totp_secret.expose_secret()).ok_or("bad base32")?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let options = ServerOptions::from_config(&config);
+    let mut server_options = ServerOptions::from_config(&config);
+    options(&mut server_options);
+    let options = server_options;
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(async move {
         serve(listener, Shared::new(store), &options, async {
@@ -599,8 +611,9 @@ async fn web_requests_are_audited_with_the_web_client() -> TestResult<()> {
 // --- STEP-04: shell, design system and Overview -------------------------------
 
 /// The pages every signed-in page links to, with their navigation labels.
-const NAVIGATION: [(&str, &str); 7] = [
+const NAVIGATION: [(&str, &str); 8] = [
     ("/admin/", "Overview"),
+    ("/admin/board", "Board"),
     ("/admin/documents", "Documents"),
     ("/admin/projects", "Projects"),
     ("/admin/keys", "API keys"),
@@ -2226,6 +2239,68 @@ fn page_entries(body: &str) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn the_audit_page_can_leave_out_board_rows() -> TestResult<()> {
+    let server = start_full(
+        |_| {},
+        |store| {
+            use joedocs::store::Actor;
+            fixture(store)?;
+            let web = Actor::new("admin", "joedocs-web");
+            for tool in [
+                "admin:documents.board",
+                "admin:documents.board_stream",
+                "admin:documents.get",
+            ] {
+                store.audit("admin-id", &web, tool, None, "ok")?;
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let all = server.get("/admin/audit?key=admin", Some(&cookie)).await?;
+    assert!(
+        all.body
+            .contains("href=\"/admin/audit?tool_not=admin%3Adocuments.board*\""),
+        "{}",
+        all.body
+    );
+    assert!(all.body.contains(">Leave out Board</a>"), "{}", all.body);
+    let tools = |body: &str| -> Vec<String> {
+        page_entries(body)
+            .iter()
+            .filter_map(|e| e.split(' ').next().map(str::to_owned))
+            .collect()
+    };
+    assert!(tools(&all.body).contains(&"admin:documents.board".to_owned()));
+    let left = server
+        .get(
+            "/admin/audit?key=admin&tool_not=admin%3Adocuments.board*",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(left.status, 200, "{}", left.body);
+    let left_tools = tools(&left.body);
+    assert!(
+        left_tools
+            .iter()
+            .all(|t| !t.starts_with("admin:documents.board")),
+        "{left_tools:?}"
+    );
+    assert!(
+        left_tools.contains(&"admin:documents.get".to_owned()),
+        "{left_tools:?}"
+    );
+    assert!(
+        left.body
+            .contains("name=\"tool_not\" value=\"admin:documents.board*\""),
+        "the filter form keeps it: {}",
+        left.body
+    );
+    server.stop().await
+}
+
+#[tokio::test]
 async fn the_audit_page_filters_and_pages_as_joedocs_audit_does() -> TestResult<()> {
     let expected = Arc::new(std::sync::Mutex::new(Vec::new()));
     let record = Arc::clone(&expected);
@@ -2359,6 +2434,19 @@ async fn every_route_writes_one_audit_row_with_its_documented_tool() -> TestResu
                 reply
             }
             ("POST", _) => server.post_form(&path, &cookie, Some(&csrf), &[]).await?,
+            // A stream stays open: read its head, then close it.
+            (_, "/admin/board/stream") => {
+                let stream = server.open_stream("", &cookie, "").await?;
+                let status = stream.status;
+                drop(stream);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                Reply {
+                    status,
+                    head: String::new(),
+                    body: String::new(),
+                    bytes: Vec::new(),
+                }
+            }
             _ => server.get(&path, Some(&cookie)).await?,
         };
         assert!(reply.status < 500, "{method} {path}: {}", reply.body);
@@ -4737,6 +4825,792 @@ async fn the_navigation_folds_behind_a_menu_control_that_works_without_scripts()
             ],
         )?;
         assert!(at.windows(2).all(|w| w[0] < w[1]), "{path}: {nav}");
+    }
+    server.stop().await
+}
+
+// --- JD-47: the Board -------------------------------------------------------
+
+/// Front matter fields from a JSON object.
+fn front(value: serde_json::Value) -> joedocs::document::front_matter::Fields {
+    match value {
+        serde_json::Value::Object(map) => map.into_iter().collect(),
+        _ => joedocs::document::front_matter::Fields::new(),
+    }
+}
+
+/// Creates one document as `laptop-key` and returns its ID.
+fn board_doc(
+    store: &mut Store,
+    (project, doc_type, status): (&str, &str, &str),
+    title: &str,
+    fields: serde_json::Value,
+) -> TestResult<String> {
+    use joedocs::store::{Actor, NewDocument};
+    let created = store.create(
+        &Actor::new("laptop-key", "claude-code"),
+        NewDocument {
+            project: project.into(),
+            doc_type: Some(doc_type.into()),
+            status: Some(status.into()),
+            title: title.into(),
+            content: format!("# {title}\n"),
+            front_matter: front(fields),
+            multifile: title.contains("backlog"),
+            ..NewDocument::default()
+        },
+    )?;
+    Ok(created.id)
+}
+
+/// Two projects for the Board: `alpha` (AL) with plans, notes and ideas in
+/// several statuses, `attention` values and builder states, and `beta` (BE).
+fn board_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewFile};
+    use serde_json::json;
+    store.add_project("alpha", "AL", Some("Alpha"))?;
+    store.add_project("beta", "BE", Some("Beta"))?;
+    let docs = [
+        (
+            "plans",
+            "draft",
+            "Draft plan",
+            json!({"attention": "Needs a decision"}),
+        ),
+        (
+            "plans",
+            "approved",
+            "Building plan",
+            json!({"implementation_status": "in-progress", "current_step": "STEP-02"}),
+        ),
+        (
+            "plans",
+            "approved",
+            "Built plan",
+            json!({"implementation_status": "completed"}),
+        ),
+        (
+            "notes",
+            "done",
+            "Closed note",
+            json!({"attention": "closed attention"}),
+        ),
+        ("notes", "review", "False note", json!({"attention": false})),
+        ("ideas", "review", "Empty idea", json!({"attention": ""})),
+    ];
+    for (doc_type, status, title, fields) in docs {
+        board_doc(store, ("alpha", doc_type, status), title, fields)?;
+    }
+    for n in 7..=10 {
+        board_doc(
+            store,
+            ("alpha", "notes", "draft"),
+            &format!("Filler {n}"),
+            json!({}),
+        )?;
+    }
+    board_doc(store, ("beta", "issues", "draft"), "Beta issue", json!({}))?;
+    let backlog = board_doc(store, ("beta", "notes", "draft"), "Beta backlog", json!({}))?;
+    store.create_file(
+        &Actor::new("laptop-key", "claude-code"),
+        &NewFile {
+            document_id: backlog,
+            file: "items/one".into(),
+            content: "Item.\n".into(),
+            front_matter: front(json!({"attention": "only on a file"})),
+            expected_revision: None,
+            summary: None,
+        },
+    )?;
+    Ok(())
+}
+
+/// The `data-id` of every card on a Board page or fragment, in order.
+fn board_cards(body: &str) -> Vec<String> {
+    body.split("<article class=\"bcard")
+        .skip(1)
+        .filter_map(|part| {
+            let start = part.find("data-id=\"")? + 9;
+            Some(part[start..].split('"').next()?.to_owned())
+        })
+        .collect()
+}
+
+/// The card of `id`, from its opening tag to its end.
+fn board_card<'a>(body: &'a str, id: &str) -> &'a str {
+    let marker = format!("data-id=\"{id}\"");
+    body.find(&marker)
+        .and_then(|at| {
+            let start = body[..at].rfind("<article")?;
+            let end = body[at..].find("</article>")? + at;
+            Some(&body[start..end])
+        })
+        .unwrap_or("")
+}
+
+/// The `data-` attribute `name` of every element that has one, in order.
+fn data_values(body: &str, name: &str) -> Vec<String> {
+    let marker = format!("data-{name}=\"");
+    body.split(&marker)
+        .skip(1)
+        .filter_map(|part| part.split('"').next().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_board_shows_open_documents_by_status_and_type() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let anonymous = server.get("/admin/board", None).await?;
+    assert_eq!(anonymous.status, 303, "{}", anonymous.body);
+    let cookie = server.login().await?;
+    let before = server.audit()?.len();
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    let rows = server.audit()?;
+    let board_rows = rows[before..]
+        .iter()
+        .filter(|(t, _, _)| t == "admin:documents.board")
+        .count();
+    assert_eq!(board_rows, 1, "{:?}", &rows[before..]);
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    assert_eq!(
+        page.header("content-security-policy"),
+        home.header("content-security-policy"),
+        "the Board keeps the default policy"
+    );
+    // Columns: every status but the closed ones, in documents.statuses
+    // order; rows: types with cards, in documents.types order.
+    assert_eq!(
+        data_values(&page.body, "column"),
+        ["draft", "review", "approved", "parked"]
+    );
+    assert_eq!(
+        data_values(&page.body, "row-key"),
+        ["plans", "ideas", "issues", "notes"]
+    );
+    let cards = board_cards(&page.body);
+    for id in [
+        "AL-1", "AL-2", "AL-3", "AL-5", "AL-6", "AL-7", "BE-1", "BE-2",
+    ] {
+        assert!(cards.contains(&id.to_owned()), "{id}: {cards:?}");
+    }
+    assert!(
+        !cards.contains(&"AL-4".to_owned()),
+        "done is closed: {cards:?}"
+    );
+    let lit = board_card(&page.body, "AL-1");
+    for part in [
+        "href=\"/admin/documents/AL-1\"",
+        ">Draft plan</a>",
+        ">AL-1<",
+        ">plans<",
+        ">r1<",
+        ">laptop-key<",
+        "<time datetime=\"",
+        "bcard-attention",
+        "Needs a decision",
+    ] {
+        assert!(lit.contains(part), "{part}: {lit}");
+    }
+    assert!(page.body.contains("class=\"board-cell board-cell-draft\""));
+    for unlit in ["AL-5", "AL-6", "BE-2"] {
+        let card = board_card(&page.body, unlit);
+        assert!(
+            !card.is_empty() && !card.contains("bcard-attention"),
+            "{unlit}: {card}"
+        );
+    }
+    let building = board_card(&page.body, "AL-2");
+    assert!(
+        building.contains("data-building=\"in-progress\""),
+        "{building}"
+    );
+    assert!(
+        building.contains("aria-label=\"Being built, STEP-02\""),
+        "{building}"
+    );
+    assert!(
+        building.contains("<span class=\"bcard-step\">STEP-02</span>"),
+        "the current step beside the mark: {building}"
+    );
+    assert!(!board_card(&page.body, "AL-3").contains("data-building"));
+    // Board sits right under Overview.
+    let overview = page.body.find("href=\"/admin/\"").ok_or("overview link")?;
+    let board = page.body.find(">Board</a>").ok_or("board link")?;
+    let documents = page
+        .body
+        .find("href=\"/admin/documents\"")
+        .ok_or("documents")?;
+    assert!(overview < board && board < documents);
+    // The grid alone, for the page script.
+    let fragment = server.get("/admin/board?fragment=1", Some(&cookie)).await?;
+    assert_eq!(fragment.status, 200);
+    assert!(
+        fragment
+            .body
+            .trim_start()
+            .starts_with("<div class=\"board-grid")
+    );
+    assert!(!fragment.body.contains("<html"));
+    assert_eq!(board_cards(&fragment.body), cards);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_filters_groups_and_sorts_from_the_address() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    let page = get("").await?;
+    let done = get("status=done").await?;
+    assert_eq!(data_values(&done.body, "column"), ["done"]);
+    assert_eq!(board_cards(&done.body), ["AL-4"]);
+    assert!(
+        !board_card(&done.body, "AL-4").contains("bcard-attention"),
+        "a closed status is never lit"
+    );
+    let beta = get("project=beta").await?;
+    assert!(
+        board_cards(&beta.body)
+            .iter()
+            .all(|id| id.starts_with("BE-"))
+    );
+    assert_eq!(
+        data_values(&get("type=plans").await?.body, "row-key"),
+        ["plans"]
+    );
+    assert_eq!(board_cards(&get("attention=1").await?.body), ["AL-1"]);
+    assert_eq!(
+        data_values(&get("group=project").await?.body, "row-key"),
+        ["alpha", "beta"]
+    );
+    let ungrouped = get("group=none").await?;
+    assert_eq!(data_values(&ungrouped.body, "row-key"), ["all"]);
+    assert!(ungrouped.body.contains("board-untitled"));
+    assert_eq!(
+        board_cards(&get("project=alpha&type=notes&sort=id&dir=asc").await?.body),
+        ["AL-7", "AL-8", "AL-9", "AL-10", "AL-5"],
+        "by number within each cell: draft, then review"
+    );
+    assert_eq!(
+        board_cards(&get("project=alpha&type=notes&sort=id&dir=desc").await?.body),
+        ["AL-10", "AL-9", "AL-8", "AL-7", "AL-5"]
+    );
+    // The filter band reflects the address.
+    assert!(
+        beta.body
+            .contains("name=\"project\" value=\"beta\" checked")
+    );
+    assert!(
+        !beta
+            .body
+            .contains("name=\"project\" value=\"alpha\" checked")
+    );
+    assert!(done.body.contains("name=\"status\" value=\"done\" checked"));
+    assert!(
+        page.body
+            .contains("name=\"status\" value=\"draft\" checked")
+    );
+    assert!(!page.body.contains("name=\"status\" value=\"done\" checked"));
+    server.stop().await
+}
+
+/// A document body with every kind of block the preview must flatten.
+const PREVIEW_BODY: &str = "# Rich plan\n\nOpening <script>alert(1)</script> paragraph\nwrapped on two lines.\n\n- first item\n- second item\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n```plantuml\n@startuml\nA -> B\n@enduml\n```\n\n```rust\nfn main() {}\n```\n\n> [!note] A callout\n> Callout text.\n";
+
+/// The Board fixture plus BE-3, a plan with every kind of block and
+/// `attention`, BE-4, a long note, and AL-4 archived.
+fn preview_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewDocument};
+    board_fixture(store)?;
+    let actor = Actor::new("laptop-key", "claude-code");
+    store.create(
+        &actor,
+        NewDocument {
+            project: "beta".into(),
+            doc_type: Some("plans".into()),
+            title: "Rich plan".into(),
+            content: PREVIEW_BODY.into(),
+            front_matter: front(serde_json::json!({"attention": "Approve me"})),
+            ..NewDocument::default()
+        },
+    )?;
+    store.create(
+        &actor,
+        NewDocument {
+            project: "beta".into(),
+            title: "Long note".into(),
+            content: "word ".repeat(400),
+            ..NewDocument::default()
+        },
+    )?;
+    store.archive(&actor, "AL-4", "gone")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_board_preview_shows_facts_and_opening_text_without_drawing() -> TestResult<()> {
+    let server = start_full(
+        |config| config.admin.web_plantuml_url = "https://plantuml.example.net/plantuml".into(),
+        preview_fixture,
+    )
+    .await?;
+    let anonymous = server.get("/admin/board/preview/BE-3", None).await?;
+    assert_eq!(anonymous.status, 303);
+    let cookie = server.login().await?;
+    let before = server.audit()?.len();
+    let preview = server
+        .get("/admin/board/preview/BE-3", Some(&cookie))
+        .await?;
+    assert_eq!(preview.status, 200, "{}", preview.body);
+    let rows = server.audit()?;
+    assert_eq!(
+        rows[before..]
+            .iter()
+            .map(|(t, _, o)| (t.as_str(), o.as_str()))
+            .collect::<Vec<_>>(),
+        [("admin:documents.get", "ok")]
+    );
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    assert_eq!(
+        preview.header("content-security-policy"),
+        home.header("content-security-policy")
+    );
+    let body = &preview.body;
+    assert!(!body.contains("<html"), "a fragment: {body}");
+    for part in [
+        "data-preview-id=\"BE-3\"",
+        ">Rich plan<",
+        ">BE-3<",
+        ">beta<",
+        ">plans<",
+        ">draft<",
+        ">r1<",
+        ">laptop-key<",
+        "Approve me",
+        "<p>Opening &#60;script&#62;alert(1)&#60;/script&#62; paragraph wrapped on two lines.</p>",
+        "<p>first item</p>",
+        "<p>second item</p>",
+        "<p>[code]</p>",
+        "A callout Callout text.",
+        "href=\"/admin/documents/BE-3\"",
+    ] {
+        assert!(body.contains(part), "{part}: {body}");
+    }
+    assert_eq!(body.matches("<p>[diagram]</p>").count(), 2, "{body}");
+    assert!(!body.contains("<script"), "{body}");
+    assert!(!body.contains("<img"), "nothing is drawn: {body}");
+    assert!(
+        !body.contains("plantuml.example.net"),
+        "nothing is sent: {body}"
+    );
+    assert!(!body.contains("flowchart"), "no diagram source: {body}");
+    let long = server
+        .get("/admin/board/preview/BE-4", Some(&cookie))
+        .await?;
+    let section = long
+        .body
+        .split("<div class=\"board-preview-text\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</div>").next())
+        .unwrap_or_default();
+    let text: usize = section
+        .split("<p>")
+        .skip(1)
+        .filter_map(|p| p.split("</p>").next())
+        .map(|p| p.chars().count())
+        .sum();
+    assert!(text > 0 && text <= 700, "{text}: {}", long.body);
+    assert!(long.body.contains("…"), "a cut is shown: {}", long.body);
+    // As on the document page: unknown is 404, archived 409 `archived`.
+    for (id, status) in [("NOPE-1", 404), ("AL-4", 409)] {
+        let refused = server
+            .get(&format!("/admin/board/preview/{id}"), Some(&cookie))
+            .await?;
+        assert_eq!(refused.status, status, "{id}: {}", refused.body);
+    }
+    server.stop().await
+}
+
+/// An open Board stream: the reply's status and head, and what has been
+/// read of its body so far.
+struct EventStream {
+    status: u16,
+    head: String,
+    stream: TcpStream,
+    seen: String,
+}
+
+impl EventStream {
+    /// Reads until `needle` appears after what earlier waits consumed, or
+    /// `within` passes, or the stream ends. Whether it appeared.
+    async fn wait_for(&mut self, needle: &str, within: std::time::Duration) -> TestResult<bool> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            if let Some(at) = self.seen.find(needle) {
+                self.seen.drain(..at + needle.len());
+                return Ok(true);
+            }
+            let mut chunk = [0_u8; 4096];
+            match tokio::time::timeout_at(deadline, self.stream.read(&mut chunk)).await {
+                Err(_) | Ok(Ok(0)) => return Ok(false),
+                Ok(Ok(n)) => self.seen.push_str(&String::from_utf8_lossy(&chunk[..n])),
+                Ok(Err(error)) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Whether the server ends the stream within `within`: the last chunk
+    /// of the reply (the connection may stay open for another request), or
+    /// the connection closed.
+    async fn ends_within(&mut self, within: std::time::Duration) -> TestResult<bool> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            if self.seen.contains("\r\n0\r\n\r\n") || self.seen.starts_with("0\r\n\r\n") {
+                return Ok(true);
+            }
+            let mut chunk = [0_u8; 4096];
+            match tokio::time::timeout_at(deadline, self.stream.read(&mut chunk)).await {
+                Err(_) => return Ok(false),
+                Ok(Ok(0) | Err(_)) => return Ok(true),
+                Ok(Ok(n)) => self.seen.push_str(&String::from_utf8_lossy(&chunk[..n])),
+            }
+        }
+    }
+}
+
+impl Server {
+    /// Opens `/admin/board/stream?<query>` with `cookie` and extra header
+    /// lines, and reads the reply head.
+    async fn open_stream(
+        &self,
+        query: &str,
+        cookie: &str,
+        headers: &str,
+    ) -> TestResult<EventStream> {
+        let request = format!(
+            "GET /admin/board/stream?{query} HTTP/1.1\r\nHost: {}\r\nCookie: {cookie}\r\nAccept: text/event-stream\r\n{headers}\r\n",
+            self.host()
+        );
+        let mut stream = TcpStream::connect(self.addr).await?;
+        stream.write_all(request.as_bytes()).await?;
+        let mut raw = Vec::new();
+        let head_end = loop {
+            let mut chunk = [0_u8; 4096];
+            let n =
+                tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut chunk))
+                    .await??;
+            if n == 0 {
+                break raw.len();
+            }
+            raw.extend_from_slice(&chunk[..n]);
+            if let Some(at) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                break at;
+            }
+        };
+        let head = String::from_utf8_lossy(&raw[..head_end]).into_owned();
+        let seen =
+            String::from_utf8_lossy(raw.get(head_end + 4..).unwrap_or_default()).into_owned();
+        let status = head.split(' ').nth(1).ok_or("no status")?.parse()?;
+        Ok(EventStream {
+            status,
+            head,
+            stream,
+            seen,
+        })
+    }
+}
+
+/// The value of header `name` in a reply head.
+fn head_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().skip(1).find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim()
+            .eq_ignore_ascii_case(name)
+            .then_some(value.trim())
+    })
+}
+
+/// The Board fixture, with AL-4 archived (for a restore by another process).
+fn stream_fixture(store: &mut Store) -> TestResult<()> {
+    board_fixture(store)?;
+    store.archive(
+        &joedocs::store::Actor::new("laptop-key", "claude-code"),
+        "AL-4",
+        "gone",
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_board_stream_needs_a_session_and_the_same_site() -> TestResult<()> {
+    let server = start_full(|_| {}, stream_fixture).await?;
+    let before = server.audit()?.len();
+    let anonymous = server.get("/admin/board/stream", None).await?;
+    assert_eq!(anonymous.status, 303, "{}", anonymous.body);
+    let cookie = server.login().await?;
+    let cross = server
+        .send(
+            "GET",
+            "/admin/board/stream",
+            &format!("Cookie: {cookie}\r\nSec-Fetch-Site: cross-site\r\n"),
+            "",
+        )
+        .await?;
+    assert_eq!(cross.status, 403, "{}", cross.body);
+    let foreign = server
+        .send(
+            "GET",
+            "/admin/board/stream",
+            &format!("Cookie: {cookie}\r\nOrigin: https://evil.example\r\n"),
+            "",
+        )
+        .await?;
+    assert_eq!(foreign.status, 403, "{}", foreign.body);
+    let outcomes: Vec<String> = server.audit()?[before..]
+        .iter()
+        .filter(|(t, _, _)| t == "admin:documents.board_stream")
+        .map(|(_, _, o)| o.clone())
+        .collect();
+    assert_eq!(outcomes, ["no_session", "forbidden", "forbidden"]);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_stream_signals_writes_from_this_server_and_other_processes() -> TestResult<()> {
+    let server = start_full(|config| config.admin.board_refresh_ms = 500, stream_fixture).await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    let marker = data_values(&page.body, "marker").pop().ok_or("no marker")?;
+    let same_site = "Sec-Fetch-Site: same-origin\r\n";
+    let mut stream = server
+        .open_stream(&format!("marker={marker}"), &cookie, same_site)
+        .await?;
+    assert_eq!(stream.status, 200, "{}", stream.head);
+    assert_eq!(
+        head_value(&stream.head, "content-type"),
+        Some("text/event-stream")
+    );
+    assert_eq!(head_value(&stream.head, "x-accel-buffering"), Some("no"));
+    assert_eq!(head_value(&stream.head, "cache-control"), Some("no-store"));
+    let wait = std::time::Duration::from_millis(1500);
+    assert!(stream.wait_for("retry: 2000", wait).await?);
+    assert!(
+        !stream
+            .wait_for("data: ", std::time::Duration::from_millis(700))
+            .await?,
+        "nothing changed since the page: {}",
+        stream.seen
+    );
+    // A write through the web interface (this process).
+    let csrf = server.csrf(&cookie).await?;
+    let archived = server
+        .post_form(
+            "/admin/documents/AL-1/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "done")],
+        )
+        .await?;
+    assert!(archived.status < 400, "{}", archived.body);
+    assert!(
+        stream.wait_for("id: 1\ndata: 1 ", wait).await?,
+        "{}",
+        stream.seen
+    );
+    // A write by another process: a local joedocs command.
+    joedocs_cli(server.dir.path(), &["archive", "restore", "AL-4"])?;
+    assert!(
+        stream.wait_for("id: 2\ndata: 2 ", wait).await?,
+        "{}",
+        stream.seen
+    );
+    assert!(!stream.seen.contains("Draft plan"), "no document content");
+    // A stream opened with an old marker hears at once.
+    let mut stale = server
+        .open_stream(&format!("marker={marker}"), &cookie, same_site)
+        .await?;
+    assert!(
+        stale
+            .wait_for("data: ", std::time::Duration::from_millis(500))
+            .await?
+    );
+    let rows = server.audit()?;
+    let streams = rows
+        .iter()
+        .filter(|(t, _, o)| t == "admin:documents.board_stream" && o == "ok")
+        .count();
+    assert_eq!(streams, 2);
+    drop((stream, stale));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_stream_ends_at_session_expiry_and_server_shutdown() -> TestResult<()> {
+    let server = start_options(
+        |_| {},
+        |options| {
+            if let Some(web) = &mut options.web {
+                web.board.keep_alive = std::time::Duration::from_millis(200);
+            }
+        },
+        stream_fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let same_site = "Sec-Fetch-Site: same-origin\r\n";
+    let mut stream = server.open_stream("", &cookie, same_site).await?;
+    assert_eq!(stream.status, 200);
+    assert!(
+        stream
+            .wait_for(": keep-alive", std::time::Duration::from_secs(2))
+            .await?
+    );
+    server.clock.advance(9 * 3600);
+    assert!(
+        stream
+            .wait_for("event: expired", std::time::Duration::from_secs(2))
+            .await?,
+        "{}",
+        stream.seen
+    );
+    assert!(
+        stream
+            .ends_within(std::time::Duration::from_secs(2))
+            .await?
+    );
+    let cookie = server.login().await?;
+    let mut open = server.open_stream("", &cookie, same_site).await?;
+    assert_eq!(open.status, 200);
+    let started = std::time::Instant::now();
+    server.stop().await?;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(open.ends_within(std::time::Duration::from_secs(1)).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
+    let server = start_full(|_| {}, stream_fixture).await?;
+    let cookie = server.login().await?;
+    let mut open = Vec::new();
+    for _ in 0..32 {
+        let stream = server.open_stream("", &cookie, "").await?;
+        assert_eq!(stream.status, 200, "{}", stream.head);
+        open.push(stream);
+    }
+    let refused = server.get("/admin/board/stream", Some(&cookie)).await?;
+    assert_eq!(refused.status, 503, "{}", refused.body);
+    assert!(
+        refused.body.contains("Too many open boards"),
+        "{}",
+        refused.body
+    );
+    let rows = server.audit()?;
+    assert_eq!(
+        rows.last().map(|(t, _, o)| (t.as_str(), o.as_str())),
+        Some(("admin:documents.board_stream", "busy"))
+    );
+    drop(open.pop());
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let again = server.open_stream("", &cookie, "").await?;
+    assert_eq!(again.status, 200, "a closed stream frees its place");
+    drop(again);
+    drop(open);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn only_the_board_loads_its_script_which_is_a_cached_asset() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let board = server.get("/admin/board", Some(&cookie)).await?;
+    let at = board
+        .body
+        .find("/board.js\"")
+        .ok_or("board.js not linked")?;
+    let start = board.body[..at]
+        .rfind("/admin/assets/")
+        .ok_or("no asset path")?;
+    let path = &board.body[start..at + "/board.js".len()];
+    assert!(
+        board.body[..start].ends_with("<script src=\""),
+        "a script: {path}"
+    );
+    let script = server.get(path, None).await?;
+    assert_eq!(script.status, 200, "{path}");
+    assert!(
+        script
+            .header("content-type")
+            .is_some_and(|t| t.starts_with("text/javascript"))
+    );
+    assert_eq!(
+        script.header("cache-control"),
+        Some("public, max-age=31536000, immutable")
+    );
+    for other in ["/admin/", "/admin/documents", "/admin/audit"] {
+        let page = server.get(other, Some(&cookie)).await?;
+        assert!(!page.body.contains("board.js"), "{other} does not load it");
+    }
+    // The page carries what the script needs: settings, the status
+    // indicator, Pause, both menus and the preview container.
+    for part in [
+        "data-refresh-ms=\"1000\"",
+        "data-preview-ms=\"2000\"",
+        "data-board-live",
+        "data-board-pause",
+        "data-board-actions",
+        "data-board-menu",
+        "data-board-actions-menu",
+        "data-board-preview",
+        "data-card-menu",
+        "aria-label=\"Actions for AL-1\"",
+    ] {
+        assert!(board.body.contains(part), "{part}");
+    }
+    assert!(
+        !board.body.contains(">Apply<"),
+        "filters apply as they change"
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_works_when_plans_is_not_a_type() -> TestResult<()> {
+    let server = start_full(
+        |config| {
+            config.documents.types = vec!["notes".into()];
+            config.documents.default_type = "notes".into();
+        },
+        |store| {
+            store.add_project("alpha", "AL", Some("Alpha"))?;
+            board_doc(
+                store,
+                ("alpha", "notes", "draft"),
+                "Only note",
+                serde_json::json!({}),
+            )?;
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    for path in ["/admin/board", "/admin/board?fragment=1"] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}: {}", page.body);
+        assert_eq!(board_cards(&page.body), ["AL-1"], "{path}");
+        assert!(!page.body.contains("data-building"), "{path}");
     }
     server.stop().await
 }

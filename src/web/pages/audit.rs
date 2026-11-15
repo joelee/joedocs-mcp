@@ -1,6 +1,6 @@
 //! The Audit page: the audit log, newest first, filtered and paged as
-//! `joedocs audit` does, with quick filters for admin calls, refusals and
-//! the last 24 hours.
+//! `joedocs audit` does, with quick filters for admin calls, refusals, the
+//! last 24 hours, and everything but the Board's own rows.
 
 use askama::Template;
 use axum::http::StatusCode;
@@ -15,7 +15,7 @@ use crate::db::AuditRow;
 use crate::store::{AuditRequest, Store};
 
 /// The query keys of the filters, in the order links carry them.
-const FILTERS: [&str; 7] = [
+const FILTERS: [&str; 8] = [
     "since",
     "until",
     "key",
@@ -23,7 +23,12 @@ const FILTERS: [&str; 7] = [
     "document",
     "outcome",
     "outcome_not",
+    "tool_not",
 ];
+
+/// The tools of the Board's page loads, refreshes and streams: the most
+/// frequent rows while a Board is open (JD-47 REQ-11).
+const BOARD_TOOLS: &str = "admin:documents.board*";
 
 /// A quick filter link.
 pub(crate) struct Quick {
@@ -144,6 +149,7 @@ pub(crate) fn page(
         document: given("document"),
         outcome: given("outcome"),
         outcome_not: given("outcome_not"),
+        tool_not: given("tool_not"),
         start,
         limit,
     });
@@ -184,6 +190,10 @@ fn quick_filters(store: &Store) -> Vec<Quick> {
         Quick {
             href: link("/admin/audit", &[("outcome_not", Some("ok"))]),
             label: "Refusals",
+        },
+        Quick {
+            href: link("/admin/audit", &[("tool_not", Some(BOARD_TOOLS))]),
+            label: "Leave out Board",
         },
     ];
     if let Some(since) = day_ago {

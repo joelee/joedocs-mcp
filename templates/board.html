@@ -1,0 +1,80 @@
+{% extends "layout.html" %}
+{% block scripts %}<script src="{{ assets.board|safe }}" defer></script>{% endblock %}
+{% block content %}
+<div class="board-page">
+<div class="page-head board-head-bar">
+  <div class="board-title">
+    <h1>Board</h1>
+    <button type="button" class="bcard-menu board-actions" data-board-actions aria-haspopup="menu" aria-expanded="false" aria-label="Board actions" title="Board actions"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><circle cx="3" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="13" cy="8" r="1.5" fill="currentColor"/></svg></button>
+  </div>
+  <div class="board-status">
+    <span class="board-live" data-board-live data-state="connecting" role="status">Connecting</span>
+    <button type="button" class="secondary" data-board-pause aria-pressed="false">Pause</button>
+  </div>
+</div>
+
+<details class="board-filters" open>
+  <summary><span class="board-filters-title">Filters</span> <span class="board-filters-summary" data-board-summary></span></summary>
+  <form method="get" action="/admin/board" data-board-filters>
+    <fieldset>
+      <legend>Projects</legend>
+      {% for choice in projects %}<label class="check"><input type="checkbox" name="project" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
+    </fieldset>
+    <fieldset>
+      <legend>Types</legend>
+      {% for choice in types %}<label class="check"><input type="checkbox" name="type" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
+    </fieldset>
+    <fieldset>
+      <legend>Statuses</legend>
+      {% for choice in statuses %}<label class="check"><input type="checkbox" name="status" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
+    </fieldset>
+    <fieldset>
+      <legend>Show</legend>
+      <label class="check"><input type="checkbox" name="attention" value="1"{% if view.attention_only %} checked{% endif %}> Only needing attention</label>
+    </fieldset>
+    <fieldset class="board-filters-selects">
+      <label>Group by
+        <select name="group">
+          <option value="none"{% if view.group == "none" %} selected{% endif %}>None</option>
+          <option value="type"{% if view.group == "type" %} selected{% endif %}>Type</option>
+          <option value="project"{% if view.group == "project" %} selected{% endif %}>Project</option>
+        </select>
+      </label>
+      <label>Sort by
+        <select name="sort">
+          <option value="updated"{% if view.sort == "updated" %} selected{% endif %}>Last updated</option>
+          <option value="created"{% if view.sort == "created" %} selected{% endif %}>Created</option>
+          <option value="id"{% if view.sort == "id" %} selected{% endif %}>Document ID</option>
+        </select>
+      </label>
+      <label>Order
+        <select name="dir">
+          <option value="desc"{% if view.dir == "desc" %} selected{% endif %}>Descending</option>
+          <option value="asc"{% if view.dir == "asc" %} selected{% endif %}>Ascending</option>
+        </select>
+      </label>
+    </fieldset>
+    {% if debug %}<input type="hidden" name="debug" value="1">{% endif %}
+  </form>
+</details>
+
+{% if debug %}<pre class="board-debug" data-board-debug aria-hidden="true"></pre>{% endif %}
+
+<section id="board" class="board" aria-label="Board" data-board data-refresh-ms="{{ refresh_ms }}" data-preview-ms="{{ preview_ms }}">
+{{ grid|safe }}
+</section>
+
+<div class="board-menu" id="board-card-menu" popover role="menu" aria-label="Card actions" data-board-menu>
+  <a role="menuitem" href="#" data-act="open">Open</a>
+  <button type="button" role="menuitem" data-act="preview">Preview</button>
+  <a role="menuitem" href="#" data-act="history">History</a>
+  <button type="button" role="menuitem" data-act="copy-id">Copy document ID</button>
+  <button type="button" role="menuitem" data-act="copy-doc">Copy document link</button>
+</div>
+<div class="board-menu" id="board-actions-menu" popover role="menu" aria-label="Board actions" data-board-actions-menu>
+  <button type="button" role="menuitem" data-board-act="copy-link">Copy link to this board (with its filters)</button>
+  <a role="menuitem" href="/admin/board">Reset the filters</a>
+</div>
+<div class="board-preview" id="board-preview" popover="manual" data-board-preview></div>
+</div>
+{% endblock %}

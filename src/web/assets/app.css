@@ -111,6 +111,8 @@ main:focus { outline: none; }
 .brand { font-weight: 700; color: var(--text); text-decoration: none; margin-right: var(--space-4); }
 .topbar-search { flex: 1; max-width: 32rem; }
 .topbar-search input { width: 100%; }
+/* The theme toggle and the session menu sit at the right end. */
+.topbar [data-theme-toggle] { margin-left: auto; }
 
 .sidenav { grid-area: nav; border-right: 1px solid var(--border); padding: var(--space-4) var(--space-2); }
 .sidenav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
@@ -144,7 +146,6 @@ main { grid-area: main; padding: var(--space-6); min-width: 0; max-width: 78rem;
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 1fr; grid-template-areas: "top" "nav" "main"; }
   .topbar { flex-wrap: wrap; }
   .topbar-search { order: 3; flex-basis: 100%; max-width: none; }
-  .topbar [data-theme-toggle] { margin-left: auto; }
   .session-menu .menu { min-width: 0; width: min(16rem, calc(100vw - 2rem)); }
   .sidenav { border-right: 0; border-bottom: 1px solid var(--border); padding: var(--space-2); }
   .nav-toggle {
@@ -456,4 +457,96 @@ code.break { overflow-wrap: anywhere; }
 @media (max-width: 720px) {
   input, select, textarea, .search-json input { font-size: 16px; }
   button.link { min-height: 24px; }
+}
+
+/* --- Board (0.5.5) -------------------------------------------------------- */
+
+/* The Board takes the whole width of the window. */
+main:has(.board-page) { max-width: none; }
+
+.board-head-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-3); }
+.board-title { display: flex; gap: var(--space-2); align-items: center; }
+.board-title h1 { margin: 0; }
+
+.board-filters { margin-bottom: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: var(--space-2) var(--space-3); }
+.board-filters summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-filters-title { font-weight: 600; }
+.board-filters-summary { color: var(--muted); font-size: var(--text-sm); }
+.board-filters[open] .board-filters-summary { display: none; }
+.board-filters form { display: grid; gap: var(--space-2); margin-top: var(--space-2); justify-items: start; }
+.board-filters fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: center; }
+.board-filters legend { float: left; width: 5.5rem; margin-right: var(--space-2); color: var(--muted); font-size: var(--text-sm); }
+.board-filters .check { display: inline-flex; gap: var(--space-1); align-items: center; }
+.board-filters-selects label { display: inline-flex; gap: var(--space-2); align-items: center; color: var(--muted); font-size: var(--text-sm); }
+
+/* Rows are grids of the same columns: a title column, then one per status,
+   sharing the width and scrolling sideways when they do not fit. */
+.board { overflow-x: auto; padding-bottom: var(--space-4); }
+.board-grid { display: grid; gap: var(--space-3); width: 100%; min-width: min-content; }
+.board-columns, .board-row { display: grid; grid-auto-flow: column; grid-template-columns: 6.5rem; grid-auto-columns: minmax(15rem, 1fr); gap: var(--space-2); align-items: start; }
+/* Ungrouped: no title column at all, so no cell falls into it. */
+.board-untitled .board-columns, .board-untitled .board-row { grid-template-columns: none; }
+.board-untitled .board-row-title, .board-untitled .board-corner { display: none; }
+.board-column-head { display: flex; gap: var(--space-2); align-items: center; padding: 0 var(--space-2); }
+.board-count { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.board-row-title { margin: 0; padding-top: var(--space-2); font-size: var(--text-sm); text-transform: capitalize; color: var(--muted); position: sticky; left: 0; z-index: 2; background: var(--bg); overflow-wrap: anywhere; }
+.board-cell { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); background: var(--surface-2); border-radius: var(--radius-lg); min-height: 2.75rem; }
+/* Each cell takes its status colour, as the status badges do. */
+.board-cell-review { background: var(--warn-soft); }
+.board-cell-approved, .board-cell-done { background: var(--ok-soft); }
+.board-cell-rejected, .board-cell-superseded { background: var(--bad-soft); }
+.board-cell-parked { background: var(--accent-soft); }
+
+.bcard { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); box-shadow: var(--shadow); transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.bcard:hover { transform: translateY(-1px); box-shadow: 0 6px 16px -6px light-dark(rgb(0 0 0 / 0.25), rgb(0 0 0 / 0.7)); }
+.bcard-top { display: flex; gap: var(--space-1); align-items: start; }
+.bcard-link { flex: 1; display: block; font-weight: 600; line-height: 1.3; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+/* The title link covers the card: one link per card. */
+.bcard-link::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.bcard-link:focus-visible { outline: none; }
+.bcard:has(.bcard-link:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bcard-meta { display: flex; flex-wrap: wrap; gap: 0 var(--space-2); margin: 2px 0 0; font-size: 0.75rem; color: var(--muted); }
+.bcard-id { font-family: var(--mono); }
+.bcard-who { overflow-wrap: anywhere; }
+/* An approved plan being built: at the bottom right of the card. */
+.bcard-build { margin-left: auto; display: inline-flex; gap: var(--space-1); align-items: center; font-size: 0.95rem; line-height: 1; }
+.bcard-step { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); }
+.bcard-reason { margin: var(--space-1) 0 0; font-size: 0.75rem; color: var(--warn); }
+.bcard-attention { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn), 0 0 14px -2px color-mix(in srgb, var(--warn) 55%, transparent); animation: bcard-glow 2.8s ease-in-out infinite; }
+@keyframes bcard-glow { 50% { box-shadow: 0 0 0 1px var(--warn), 0 0 22px 0 color-mix(in srgb, var(--warn) 75%, transparent); } }
+/* One soft pulse when a card moved, changed or came. */
+.bcard-flash { animation: bcard-flash 1.1s ease-out; }
+@keyframes bcard-flash { 0% { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent); } }
+
+/* The action buttons: on each card (above its link) and by the heading. */
+.bcard-menu { position: relative; z-index: 1; flex: none; display: inline-grid; place-items: center; width: 1.75rem; height: 1.5rem; margin: -2px 0 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--muted); cursor: pointer; }
+.bcard-menu:hover, .bcard-menu:focus-visible, .bcard-menu[aria-expanded="true"] { border-color: var(--border); background: var(--surface-2); color: var(--text); }
+.board-actions { width: 2rem; height: 2rem; margin: 0; border-color: var(--border); background: var(--surface); }
+
+.board-status { display: flex; gap: var(--space-2); align-items: center; }
+.board-live { font-size: var(--text-sm); padding: 2px var(--space-3); border-radius: 999px; border: 1px solid var(--border); background: var(--surface); }
+.board-live::before { content: ""; display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-right: 0.4rem; background: var(--muted); vertical-align: middle; }
+.board-live[data-state="live"]::before { background: var(--ok); animation: board-breathe 2.4s ease-in-out infinite; }
+.board-live[data-state="paused"]::before { background: var(--warn); }
+.board-live[data-state="offline"]::before { background: var(--bad); }
+@keyframes board-breathe { 50% { opacity: 0.35; } }
+.board-debug { font-size: 0.75rem; white-space: pre-wrap; background: var(--surface-2); padding: var(--space-2); border-radius: var(--radius); }
+
+/* Menus and the preview are popovers placed by board.js. */
+.board-menu, .board-preview { position: fixed; inset: auto; margin: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: 0 10px 30px -10px light-dark(rgb(0 0 0 / 0.3), rgb(0 0 0 / 0.8)); }
+.board-menu { padding: var(--space-1); min-width: 15rem; }
+.board-menu [role=menuitem] { display: block; width: 100%; text-align: left; padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius); background: none; color: var(--text); font: inherit; text-decoration: none; cursor: pointer; }
+.board-menu [role=menuitem]:hover, .board-menu [role=menuitem]:focus-visible { background: var(--accent-soft); outline: none; }
+.board-preview { width: min(26rem, calc(100vw - 1rem)); max-height: min(28rem, calc(100vh - 1rem)); overflow: auto; padding: var(--space-3) var(--space-4); font-size: var(--text-sm); }
+.board-preview p { margin: 0 0 var(--space-2); }
+.board-preview-title { font-size: 1rem; }
+.board-preview-foot { display: flex; justify-content: space-between; gap: var(--space-3); border-top: 1px solid var(--border); padding-top: var(--space-2); margin-top: var(--space-2); }
+
+/* Movement: only the cards that changed are named for the transition. */
+::view-transition-group(*) { animation-duration: 0.45s; animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1); }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.2s; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+  .bcard-attention, .board-live[data-state="live"]::before { animation: none; }
+  .bcard:hover { transform: none; }
 }

@@ -50,7 +50,7 @@ flowchart LR
 | `admin` | Text reports for `init`, `project`, `key`, `reindex`, `archive` and `check`. |
 | `mcp` | `joedocs serve`: the axum app (`/mcp` behind bearer authentication, `/health`), rmcp's Streamable HTTP service with `Host`/`Origin` checks, the nineteen tools with JSON schemas, grant checks, audit logging, and error mapping. |
 | `mcp::admin_api` | The `/admin/v1/` API, merged into the router only when `admin.enabled`: `Host`/`Origin` checks, device-credential and admin-token session authentication, TOTP login, the user routes (`user_api.rs`: sign-in and setup in three phases around the hashing gate, `me`, devices, users), the `Deprecation` header on admin-token replies, one audit row per call, and routes that run the same `admin` command functions and return their text. `status`, `documents/{id}` and `backup` return data and the archive. The routes added in 0.4.2 (`documents`, `search`, `documents/{id}/history`, `documents/{id}/diff`, `audit`) return JSON built by `browse`, in the shapes of the matching MCP tool results, for client mode. One handler reads every request itself (a 64 KiB body limit), so nothing is rejected before it is checked and audited. A remote backup (`backup_download`, shared with the web interface) stages its snapshot under the store mutex and write lock, then compresses without them, so other calls carry on. |
-| `web` | The admin web interface under `/admin/`, merged into the router only when `admin.enabled` and `admin.web_ui`: routing and the audit tool of each page (`mod.rs`, whose documentation lists them), the session cookie, CSRF token and same-origin rule (`session.rs`), static files under content-hashed paths (`assets.rs`, with htmx and Pele vendored in `assets/vendor/`), Obsidian-style Markdown to safe HTML (`markdown.rs`) and PlantUML text encoding (`plantuml.rs`), and one module per workspace in `pages/` with its Askama template in `templates/`. Pages call the store, `browse` and `admin` functions in-process, never the JSON API. |
+| `web` | The admin web interface under `/admin/`, merged into the router only when `admin.enabled` and `admin.web_ui`: routing and the audit tool of each page (`mod.rs`, whose documentation lists them), the session cookie, CSRF token and same-origin rule (`session.rs`), the Board's change signal and stream (`board_signal.rs`), static files under content-hashed paths (`assets.rs`, with htmx and Pele vendored in `assets/vendor/`), Obsidian-style Markdown to safe HTML (`markdown.rs`) and PlantUML text encoding (`plantuml.rs`), and one module per workspace in `pages/` with its Askama template in `templates/`. Pages call the store, `browse` and `admin` functions in-process, never the JSON API. |
 | `browse` | `joedocs list`, `search`, `history`, `diff` and `audit`: from arguments to store requests, the JSON reply (the MCP tool result shapes, built from the same output types), and the tables printed from it. Local runs and client mode both render the reply, so they print the same; table cells escape control characters. |
 | `client` | `joedocs` as a client of a server's admin API (`client.server`, `--server`): reqwest with rustls (ring) and the OS root store, the session file and the device file (`client_user.rs`: `auth login` with TOTP setup, renewal with a device credential), the `Prompt` trait for codes and passwords, and the re-login retry. |
 | `status` | `joedocs status`: `StatusReport` (shared with the admin API), the `/health` probe, systemd unit state through `ServiceManager`, directory sizes. |
@@ -104,7 +104,7 @@ sequenceDiagram
 
 ## Web request path
 
-The web interface is the admin API's operations as server-rendered pages. It is off unless both `admin.enabled` and `admin.web_ui` are set. A user's name, password and TOTP code (or, deprecated, an admin token and a code) open a web session (`jdv_...` or `jdw_...`) that the API does not accept, held in an `HttpOnly`, `SameSite=Strict` cookie; neither a password nor a token is stored by the browser. The sign-in, TOTP setup, password change, user creation and reset posts hash a password, so they run in the same three phases as the API's. Every request is checked and audited before anything else runs, and the handler runs on a blocking thread under the store mutex, as an MCP tool does. htmx only swaps parts of a page in place: every page and form also works as a plain link or form post.
+The web interface is the admin API's operations as server-rendered pages. It is off unless both `admin.enabled` and `admin.web_ui` are set. A user's name, password and TOTP code (or, deprecated, an admin token and a code) open a web session (`jdv_...` or `jdw_...`) that the API does not accept, held in an `HttpOnly`, `SameSite=Strict` cookie; neither a password nor a token is stored by the browser. The sign-in, TOTP setup, password change, user creation and reset posts hash a password, so they run in the same three phases as the API's. Every request is checked and audited before anything else runs, and the handler runs on a blocking thread under the store mutex, as an MCP tool does; the Board's stream is the one exception, checked and audited the same way and then kept open outside those handlers (below). The pages need JavaScript: htmx swaps parts of a page in place, `app.js` wires the behaviour, and the Board's `board.js` keeps it live.
 
 ```mermaid
 sequenceDiagram
@@ -123,6 +123,29 @@ sequenceDiagram
     W->>S: rotate_key, then the audit row
     W-->>B: 200 with the new token, shown once
     Note over B,W: a static file under /admin/assets/ is served after the Host check alone, cached for a year and not audited
+```
+
+### The Board's change signal (0.5.5)
+
+The Board (`web::pages::board`) is a page like the others: the grid is rendered on the server and fetched again whole (`?fragment=1`). What keeps it live is `web::board_signal`. One watcher task per server reads `Store::change_marker`, the history commit the index reflects, every 200 ms, holding the store mutex only for the read. Because the marker is read from the database, a write by any writer moves it: MCP, the admin API, the web interface, or a local `joedocs` command in another process. The watcher runs only while a Board stream is open. It coalesces: the first change after a quiet window is published at once, later ones at most once per `admin.board_refresh_ms`, through a `tokio::sync::watch` channel.
+
+`GET /admin/board/stream` is a Server-Sent Events response that carries only a generation number and a time, never document content. It is checked (same-origin rule, session) and audited once, then runs outside the blocking handlers: it waits on the watch channel, sends a comment line every 15 seconds and checks the session then (ending with `event: expired` once it has lapsed or been revoked), and ends at server shutdown or when the browser goes away. At most 32 streams are open at once (`503 busy` beyond). The page passes the marker its grid was read at (`data-marker`), so a change made between the page and its stream is still announced.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as web stream
+    participant G as watcher
+    participant S as Store
+    B->>W: GET /admin/board/stream?marker=m1
+    W->>S: session check, audit row
+    W->>G: subscribe (starts the watcher if none runs)
+    loop every 200 ms while a stream is open
+        G->>S: change_marker
+    end
+    G-->>W: generation 1 (a change, coalesced)
+    W-->>B: id 1, data "1 <time>"
+    B->>W: GET /admin/board?fragment=1 (the page script)
 ```
 
 Documents are rendered to HTML on the server (`web::markdown`), so the browser never parses Markdown. Raw HTML in a document becomes text, links keep only safe schemes, and every element the renderer writes comes from escaped parts. Mermaid blocks are placeholders that the bundled Pele draws in the page; PlantUML blocks are images from the configured PlantUML server. The Content-Security-Policy allows no inline script, so `app.js` and htmx are the only scripts.

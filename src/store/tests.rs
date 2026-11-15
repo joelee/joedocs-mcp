@@ -196,6 +196,43 @@ fn a_document_can_be_parked_and_resumed_on_default_settings() {
 }
 
 #[test]
+fn the_change_marker_moves_on_every_write_including_another_processes() {
+    let mut fx = fixture();
+    let before = fx.store.change_marker().unwrap();
+    let created = fx.store.create(&actor(), new_doc("Marked")).unwrap();
+    let after_create = fx.store.change_marker().unwrap();
+    assert_ne!(after_create, before, "a write moves the marker");
+    fx.store.get(&created.id, None).unwrap();
+    assert_eq!(
+        fx.store.change_marker().unwrap(),
+        after_create,
+        "a read does not"
+    );
+    // Another process: a second store on the same files writes.
+    let mut other = Store::open(
+        fx.paths.clone(),
+        Settings::from_config(&Config::default()),
+        Box::new(git_for(&fx.paths)),
+        Arc::clone(&fx.clock) as Arc<dyn Clock>,
+    )
+    .unwrap();
+    other
+        .change_front_matter(
+            &actor(),
+            &created.id,
+            &fields(json!({"status": "review"})),
+            &[],
+            Some(1),
+        )
+        .unwrap();
+    assert_ne!(
+        fx.store.change_marker().unwrap(),
+        after_create,
+        "the first store sees the other's write"
+    );
+}
+
+#[test]
 fn init_is_idempotent_and_refuses_a_foreign_directory() {
     let fx = fixture();
     let git = git_for(&fx.paths);

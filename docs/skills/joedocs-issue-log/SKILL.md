@@ -107,6 +107,23 @@ evidence says.
    statuses: read them from `list_projects`. `parked` is optional: use it
    only when the server lists it.
 
+## The attention key
+
+`attention` is a front matter key holding a short reason, one line, that a
+document needs the user now. The web interface's Board (JoeDocs 0.5.5) lights
+a card while its main file has the key with non-empty text, and shows the
+text. A light that stays on after the need has passed teaches the user to
+ignore it, so set the key only when the user is needed, and remove it as soon
+as they are not: `change_document_front_matter` with `remove: ["attention"]`
+and `expected_revision`, in the same call as the status change when there is
+one. Never clear it by writing `false` or an empty string: remove the key.
+
+- **Set it** only for a `critical` issue that is open: `attention: "Critical:
+  <the summary>"`, when filing it or when its severity is raised to
+  `critical`.
+- **Remove it** in the same call that closes the issue (`done`, `rejected`,
+  `superseded`), parks it, or lowers its severity below `critical`.
+
 ## Statuses
 
 Issues use the server's statuses:

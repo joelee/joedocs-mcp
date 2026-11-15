@@ -63,6 +63,9 @@ pub struct ServerOptions {
     /// The admin web interface, when `admin.enabled` and `admin.web_ui`
     /// are both on.
     pub web: Option<crate::web::WebOptions>,
+    /// Configuration problems that did not stop the server, as
+    /// `key: message`: logged at start-up, reported by `check` and `status`.
+    pub config_warnings: Vec<String>,
 }
 
 impl ServerOptions {
@@ -93,7 +96,14 @@ impl ServerOptions {
             web: (config.admin.enabled && config.admin.web_ui).then(|| crate::web::WebOptions {
                 session_hours: config.admin.session_hours,
                 plantuml_url: config.admin.web_plantuml_url.clone(),
+                board: crate::web::BoardOptions {
+                    closed_statuses: config.documents.closed_statuses(),
+                    refresh_ms: config.admin.board_refresh_ms,
+                    preview_ms: config.admin.board_preview_ms,
+                    keep_alive: std::time::Duration::from_secs(15),
+                },
             }),
+            config_warnings: crate::config::warning_lines(config),
         }
     }
 }
@@ -198,7 +208,7 @@ pub fn router(shared: &Arc<Shared>, options: &ServerOptions, ct: &CancellationTo
         .route("/health", get(|| async { "ok" }))
         .merge(mcp);
     if let Some(web) = &options.web {
-        app = app.merge(crate::web::routes(shared, web, options));
+        app = app.merge(crate::web::routes(shared, web, options, ct));
     }
     match &options.admin {
         Some(admin) => app.nest("/admin/v1", admin_api::routes(shared, admin, options)),
@@ -227,6 +237,9 @@ pub async fn serve(
     options: &ServerOptions,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
+    for warning in &options.config_warnings {
+        tracing::warn!("configuration: {warning} (the server still starts)");
+    }
     let ct = CancellationToken::new();
     let app = router(&shared, options, &ct);
     axum::serve(listener, app)

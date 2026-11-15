@@ -1,0 +1,9 @@
+<div class="board-preview-body" data-preview-id="{{ id }}">
+  <p class="board-preview-title"><strong>{{ title }}</strong></p>
+  <p class="bcard-meta"><span class="bcard-id">{{ id }}</span> <span>{{ project }}</span> <span>{{ doc_type }}</span> <span class="badge badge-status-{{ status }}">{{ status }}</span> <span>r{{ revision }}</span></p>
+  <p class="bcard-meta"><span>{{ updated_by }}</span> <time datetime="{{ updated }}" data-ago title="{{ updated }}">{{ updated }}</time></p>
+  {% if let Some(reason) = attention %}<p class="bcard-reason"><span aria-hidden="true">&#9873;</span> {{ reason }}</p>{% endif %}
+  <div class="board-preview-text">{% for paragraph in paragraphs %}<p>{{ paragraph }}</p>{% endfor %}</div>
+  {% if cut %}<p class="hint" aria-label="Cut short">…</p>{% endif %}
+  <p class="board-preview-foot"><a href="/admin/documents/{{ id }}">Open the document</a> <span class="hint">Esc closes</span></p>
+</div>

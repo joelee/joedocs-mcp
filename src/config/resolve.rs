@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(resolved.config, Config::default());
         assert_eq!(resolved.file, None);
         assert!(resolved.sources.values().all(|s| *s == Source::Default));
-        assert_eq!(resolved.sources.len(), 21);
+        assert_eq!(resolved.sources.len(), 24);
     }
 
     #[test]
@@ -625,6 +625,39 @@ mod tests {
         let env = MapEnv::new().with("MY_APP__ADMIN__DEVICE_DAYS", "0");
         let err = resolve_with(&env, &MemFs::new()).unwrap_err();
         assert!(err.to_string().contains("admin.device_days"), "{err}");
+    }
+
+    #[test]
+    fn board_keys_have_defaults_and_overrides() {
+        let resolved = resolve_with(&MapEnv::new(), &MemFs::new()).unwrap();
+        assert_eq!(resolved.config.admin.board_refresh_ms, 1000);
+        assert_eq!(resolved.config.admin.board_preview_ms, 2000);
+        assert_eq!(
+            resolved.config.documents.closed_statuses,
+            ["done", "rejected", "superseded"]
+        );
+        let env = MapEnv::new()
+            .with("MY_APP__ADMIN__BOARD_REFRESH_MS", "3000")
+            .with("MY_APP__ADMIN__BOARD_PREVIEW_MS", "0")
+            .with("MY_APP__DOCUMENTS__CLOSED_STATUSES", "[\"done\"]");
+        let resolved = resolve_with(&env, &MemFs::new()).unwrap();
+        assert_eq!(resolved.config.admin.board_refresh_ms, 3000);
+        assert_eq!(resolved.config.admin.board_preview_ms, 0);
+        assert_eq!(resolved.config.documents.closed_statuses, ["done"]);
+        let env = MapEnv::new().with("MY_APP__ADMIN__BOARD_REFRESH_MS", "250");
+        let err = resolve_with(&env, &MemFs::new()).unwrap_err();
+        assert!(err.to_string().contains("admin.board_refresh_ms"), "{err}");
+        // An empty variable is still a start-up error; `[]` takes the
+        // warning path (validate.rs).
+        let env = MapEnv::new().with("MY_APP__DOCUMENTS__CLOSED_STATUSES", "");
+        let err = resolve_with(&env, &MemFs::new()).unwrap_err();
+        assert!(err.to_string().contains("CLOSED_STATUSES"), "{err}");
+        let env = MapEnv::new().with("MY_APP__DOCUMENTS__CLOSED_STATUSES", "[]");
+        let resolved = resolve_with(&env, &MemFs::new()).unwrap();
+        assert_eq!(
+            resolved.config.documents.closed_statuses,
+            Vec::<String>::new()
+        );
     }
 
     #[test]

@@ -26,6 +26,10 @@ pub struct AuditRequest {
     /// Every outcome but this one: `ok` for the refusals. The web
     /// interface's quick filter; `joedocs audit` has no flag for it.
     pub outcome_not: Option<String>,
+    /// Every tool but this one; ending in `*`, every tool that does not
+    /// start with the rest. The web interface's "Leave out Board" filter;
+    /// `joedocs audit` has no flag for it.
+    pub tool_not: Option<String>,
     /// 1-based position of the first entry, newest first.
     pub start: u64,
     /// Most entries to return, 1 to [`MAX_AUDIT_LIMIT`].
@@ -82,6 +86,13 @@ impl Store {
             },
             None => (None, None),
         };
+        let (tool_not, tool_not_prefix) = match request.tool_not.as_deref() {
+            Some(tool) => match tool.strip_suffix('*') {
+                Some(prefix) => (None, Some(prefix)),
+                None => (Some(tool), None),
+            },
+            None => (None, None),
+        };
         let offset = request.start - 1;
         let (items, total) = db::list_audit(
             &self.conn,
@@ -94,6 +105,8 @@ impl Store {
                 document_id: document.as_deref(),
                 outcome: request.outcome.as_deref(),
                 outcome_not: request.outcome_not.as_deref(),
+                tool_not,
+                tool_not_prefix,
                 offset,
                 limit: request.limit,
             },

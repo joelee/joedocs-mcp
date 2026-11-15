@@ -87,6 +87,7 @@ The admin web interface lives in `src/web/`, with its Askama templates in `templ
 - **No inline script or style.** The Content-Security-Policy allows no inline script, and no inline style except on pages with a Mermaid diagram. Behaviour goes in `src/web/assets/app.js` as event listeners (never `eval`, `hx-on` or `js:` values); styles go in `app.css`, with colours as the design tokens at its top (`light-dark()` pairs, at least 4.5:1 contrast in both themes). `tests/web.rs` checks every page for one `<h1>`, labelled controls, table headers, image `alt`, and no `style`, `on...` or inline `<script>`.
 - **Live filters.** A filter form that applies as it changes carries `hx-get` (its own path), `hx-trigger` (`change, submit` for selects, `input changed delay:300ms, submit` for text), `hx-target="#results"` and `hx-push-url="true"`; its results sit in `<section id="results" data-focus="keep" data-announce="...">`, rendered by their own template (`*_results.html`), which the handler sends alone when `WebRequest::wants_fragment`. The submit button sits in `<div class="filters-apply">`: `app.js` puts `js` on `<html>`, and `.js .filters-apply` hides the button from view but keeps it in the form, so Enter still submits and the button shows again when the keyboard reaches it.
 - **Sortable tables.** A table that shows every row is marked `<table data-sortable>`, and each header it sorts by `data-sort` (leave it off action columns). `app.js` turns those headers into buttons that cycle ascending, descending and the server's order, and sets `aria-sort`. A cell sorts by its `data-sort-value` when it has one (give every time cell its RFC 3339 value, empty for "never"), a `.num` column as numbers, and any other cell by its text, with numbers inside compared by value. A paged table sorts on the server instead, with header links (Documents, `src/web/pages/documents.rs`).
+- **The Board's script** is `src/web/assets/board.js`, loaded only by the Board (through the `scripts` block of `templates/base.html`, as `pele.global.js` is for documents); `app.js` does not know the Board. Styles that move with the content (`view-transition-name`, popover positions) are set through the CSSOM (`element.style`), which `style-src` does not restrict, never as `style` attributes. Only the cards that moved, changed, came or went are named for a view transition: naming every card is too slow on a large board. `?debug=1` on the Board shows the script's counters.
 - **Dialogs** open with invoker commands (`commandfor` and `command="show-modal"`) and close with a `formmethod="dialog"` button, so they work without JavaScript.
 - **Routes.** A new route is added to `Route` in `src/web/mod.rs` with its audit tool (the matching admin API operation), and to the route table in that module's documentation; a test requests every route in the table and checks its audit row. Every route but the sign-in page needs a session by default.
 - **Static files** are served under `/admin/assets/<hash>/<name>`; the hash changes with the content, so browsers never keep an old copy.
@@ -118,6 +119,22 @@ just scratch-server --port 8761 --https-port 8444 --no-tailscale
 - **It never touches real data:** every `joedocs` command it runs uses `.local/scratch/config.toml` (rewritten on each run) and none of your `JOEDOCS_*` variables, so the live server, the Docker stack's `.local/data` and your own configuration are left alone. The seeding key's token is never printed or written down.
 - **Stopping it** with Ctrl-C is the normal end: the script and `just` exit with status 0 (the recipe's `[continue]` attribute, `just` 1.54 or later). Ctrl-C during the build or the seeding exits with 130.
 - The script is bash, for Linux and macOS (`tailscale` from `PATH`, or the macOS app), and needs `curl`.
+
+### Driving the Board
+
+`just board-drive` plays the part of busy agents against a running scratch server, so the Board (0.5.5) can be watched, demonstrated and checked on other devices:
+
+```bash
+just scratch-server                  # in one terminal
+just board-drive                     # in another, with /admin/board open
+DRIVE_PAUSE_MS=5000 just board-drive # slower, for a demo
+just board-drive --port 8761         # a scratch server on another port
+```
+
+- **What it does,** over MCP as an agent would (`examples/board_drive.rs`), in about 40 seconds: a plan is drafted, lit for approval (`attention`), reviewed and approved; a builder picks it up (`implementation_status: in-progress`, the 🏗️ mark with its `current_step`) and works through STEP-01 to STEP-03; ten sample documents move from draft to review in about two seconds, and back; an issue arrives in `sandbox`, lit; the build completes and the plan is closed; the issue is archived, then restored by a local `joedocs archive restore`, a write from another process. Each step prints one line.
+- **Its key** is `board-drive`, with write on `demo` and `sandbox`: created on the first run and rotated on each later one. The token stays in the script's shell; it is never printed or written down.
+- **Another store:** `SCRATCH_DIR=/path/to/store just board-drive` drives a server using that scratch store (its `config.toml` and a seeded store), for example a copy of `.local/scratch`.
+- **`?debug=1`** on the Board shows the page script's counters (events, refreshes, transitions and skipped ones, latency, frames over 50 ms): developer use only.
 
 ### Vendored browser files
 
