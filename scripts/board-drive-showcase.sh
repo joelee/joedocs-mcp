@@ -10,6 +10,12 @@
 #            project-b and project-c, written over MCP
 #   serve    serve it with scripts/scratch-server.sh (its --https-port and
 #            --no-tailscale options pass through)
+#   (none)   play the feature flow on the served store: an idea becomes a
+#            plan, which is built from STEP-01 to STEP-05 and signed off,
+#            while another agent's plan is drafted and rejected, each beat
+#            written over MCP by the key named for it; DRIVE_PAUSE_MS sets
+#            the pause between beats (default 3000; 0 waits for a
+#            keystroke, which needs a terminal). Once per reset.
 #
 # --port N picks the port (default 8770, beside just scratch-server's 8760).
 # Tokens stay in this shell: never printed, never written down. Every
@@ -18,7 +24,7 @@
 set -euo pipefail
 
 usage() {
-    echo "usage: just board-drive-showcase reset|serve [--port N] [serve: --https-port N] [serve: --no-tailscale]" >&2
+    echo "usage: just board-drive-showcase [reset | serve] [--port N] [serve: --https-port N] [serve: --no-tailscale]" >&2
     exit 64
 }
 
@@ -27,10 +33,9 @@ fail() {
     exit 1
 }
 
-command=""
+command=play
 case "${1:-}" in
     reset | serve) command="$1"; shift ;;
-    *) usage ;;
 esac
 port=8770
 serve_args=()
@@ -45,6 +50,8 @@ while [ $# -gt 0 ]; do
 done
 case "$port" in '' | *[!0-9]*) fail "--port must be a number, not \"$port\"" ;; esac
 [ "$port" != 8750 ] || fail "port 8750 is the default server.bind (a real server or the Docker stack); pick another --port"
+pause_ms="${DRIVE_PAUSE_MS:-3000}"
+case "$pause_ms" in '' | *[!0-9]*) fail "DRIVE_PAUSE_MS must be a number of milliseconds" ;; esac
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 scratch="$root/.local/showcase"
@@ -64,6 +71,48 @@ fi
 if [ "$command" = serve ]; then
     exec env SCRATCH_DIR="$scratch" "$root/scripts/scratch-server.sh" --port "$port" \
         ${serve_args[@]+"${serve_args[@]}"}
+fi
+
+if [ "$command" = play ]; then
+    [ -f "$config" ] && [ -e "$scratch/seeded" ] ||
+        fail "no showcase store at $scratch; create it with: just board-drive-showcase reset"
+    [ -x "$bin" ] || fail "no $bin; just board-drive-showcase reset builds it"
+    listening "$port" ||
+        fail "nothing listens on 127.0.0.1:$port; start: just board-drive-showcase serve (or pass --port)"
+    [ "$(jd list -p project-a)" = "No documents." ] ||
+        fail "project-a already holds the flow; run it again after: just board-drive-showcase reset"
+
+    # With keys driving the run, the terminal goes back as it was however
+    # the script ends (Ctrl-C included).
+    trap keys_mode_off EXIT
+    trap 'exit 130' INT TERM
+    if [ "$pause_ms" = 0 ]; then
+        keys_mode_on
+    fi
+
+    grants=(project-a:write project-b:write project-c:write)
+    laptop_claude="$(token_for laptop-claude "${grants[@]}")"
+    laptop_opencode="$(token_for laptop-opencode "${grants[@]}")"
+    mac_claude="$(token_for mac-claude "${grants[@]}")"
+    mac_codex="$(token_for mac-codex "${grants[@]}")"
+    logs="$scratch/agents"
+    mkdir -p "$logs"
+
+    statuses="status=draft&status=review&status=approved&status=parked&status=done&status=rejected"
+    echo "The Board, a row per project, closed cards kept in view:"
+    echo "  http://127.0.0.1:$port/admin/board?$statuses&group=project"
+    echo "Each agent's log, for a terminal of its own:"
+    for key in laptop-claude laptop-opencode mac-claude mac-codex; do
+        echo "  tail -f $logs/$key.log"
+    done
+    echo
+    (cd "$root" && SCRATCH_MCP_URL="http://127.0.0.1:$port/mcp" SHOWCASE_LOG_DIR="$logs" \
+        SHOWCASE_TOKEN_LAPTOP_CLAUDE="$laptop_claude" SHOWCASE_TOKEN_LAPTOP_OPENCODE="$laptop_opencode" \
+        SHOWCASE_TOKEN_MAC_CLAUDE="$mac_claude" SHOWCASE_TOKEN_MAC_CODEX="$mac_codex" \
+        DRIVE_PAUSE_MS="$pause_ms" cargo run --locked --quiet --example board_drive_showcase -- play)
+    unset laptop_claude laptop_opencode mac_claude mac_codex
+    echo "board-drive-showcase: done; run it again after: just board-drive-showcase reset" >&2
+    exit 0
 fi
 
 # reset. A server on the port may be serving this store, and wiping a store
@@ -108,4 +157,5 @@ echo "Board showcase store ready (store: $scratch)"
 echo "  User: dev   one-time password: $password"
 echo "  The first sign-in sets a password and an authenticator (scan the QR code); each reset needs a new one."
 echo "  Serve it with:  just board-drive-showcase serve$( [ "$port" = 8770 ] || echo " --port $port")"
+echo "  Then play it, in another terminal:  just board-drive-showcase$( [ "$port" = 8770 ] || echo " --port $port")"
 echo

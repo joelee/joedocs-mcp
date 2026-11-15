@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **`just board-drive-showcase`** (developers): the Board staged for recording, on a store of its own (`.local/showcase`). `reset` creates it with three projects and four agents on two machines (`laptop-claude`, `laptop-opencode`, `mac-claude`, `mac-codex`). `serve` serves it, and with no argument it plays one feature from idea to done across them: an idea, its plan, the build from STEP-01 to STEP-05 and the sign-off, beside another agent's plan and background edits. It prints the Board address and writes a log per agent. See the developer guide.
+- **`SCRATCH_DIR` for `just scratch-server`** (developers): serves another seeded store directly under `.local/`, such as the showcase's.
+
 ### Changed
 
 - **`just board-drive`** (developers): `DRIVE_PAUSE_MS=0` now waits for a keystroke before each step, instead of not pausing, so a demo can be narrated; it needs a terminal. Other values keep the timed pauses.

@@ -146,11 +146,23 @@ just board-drive --port 8761         # a scratch server on another port
 ```bash
 just board-drive-showcase reset   # wipe .local/showcase and create it again
 just board-drive-showcase serve   # serve it on port 8770 (--no-tailscale, --https-port N as for scratch-server)
+just board-drive-showcase         # in another terminal: play the feature flow, once per reset
+DRIVE_PAUSE_MS=0 just board-drive-showcase   # wait for a keystroke before each beat
 ```
 
 - **`reset`** creates user `dev` and prints its one-time password, the projects `project-a`, `project-b` and `project-c` (card IDs `PA`, `PB`, `PC`), and four API keys, each with write on the three projects: `laptop-claude`, `laptop-opencode`, `mac-claude` and `mac-codex`. It then writes three background documents in `project-b` (by `laptop-opencode`, as the MCP client `opencode`) and three in `project-c` (by `mac-codex`, as `codex`), always with the same content, so a fresh store always gets the same IDs. It refuses to run while something listens on the port, and an interrupted reset leaves a store that `serve` refuses until the next reset.
 - **Each reset makes a new `dev`**, so the first sign-in after it sets a new password and authenticator.
 - **`serve`** runs `just scratch-server` on this store (`SCRATCH_DIR=.local/showcase`), on port 8770 so it can run beside the scratch server; `--port N` changes it for both commands.
+- **Playing** (no argument) runs one feature from idea to done, one beat at a time, each written over MCP by the key named for it, so every card shows its agent as the last writer:
+  1. `mac-claude` drafts the idea PA-1 "Offline sync for field notes", puts it to you (`review`, lit "Waiting for your decision") and records your acceptance (`approved`).
+  2. `laptop-claude` drafts the plan PA-2 from it and puts it to you (lit "Waiting for your approval"), while `mac-codex` drafts another plan, PB-4, in `project-b`.
+  3. PA-2 is approved, and PB-4 goes to review, lit.
+  4. `mac-claude` builds PA-2: 🏗️ with STEP-01, then STEP-02 to STEP-05. PB-4 stays lit beside it, which is the frame for a still of both kinds of card.
+  5. The build completes and PA-2 lights up for your sign-off. `laptop-claude` closes PA-2 and PA-1 (`done`), and `mac-codex`'s PB-4 is rejected.
+
+  Meanwhile `laptop-opencode` changes three documents in `project-b`. At the default pause (3000 ms) the flow takes about a minute; `DRIVE_PAUSE_MS=1500` halves it. `DRIVE_PAUSE_MS=0` waits for a keystroke before each beat, after a prompt naming it, as for `just board-drive`. A second play refuses to start until the next reset.
+- **The Board address** it prints at the start selects every status the flow uses, closed ones included, and a row per project, so done and rejected cards stay in view: `http://127.0.0.1:8770/admin/board?status=draft&status=review&status=approved&status=parked&status=done&status=rejected&group=project`.
+- **The agents' logs:** each beat line also goes to `.local/showcase/agents/<key>.log`, with the time of day (UTC). The four `tail -f` commands it prints give a terminal per agent beside the Board.
 - **The keys' tokens** stay in the script's shell; they are never printed or written down.
 
 ### Vendored browser files
