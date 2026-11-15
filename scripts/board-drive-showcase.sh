@@ -3,11 +3,13 @@
 # .local/showcase (git-ignored) with three projects and four agents, for
 # recording the README media.
 #
-#   reset    wipe .local/showcase and create it again: user dev (its one-time
-#            password is printed), projects project-a, project-b and
-#            project-c, the API keys laptop-claude, laptop-opencode,
-#            mac-claude and mac-codex, and background documents in
-#            project-b and project-c, written over MCP
+#   reset    wipe .local/showcase and create it again: user dev, carried
+#            over with its password and authenticator once it has set one
+#            up (else a new dev and its one-time password), projects
+#            project-a, project-b and project-c, the API keys
+#            laptop-claude, laptop-opencode, mac-claude and mac-codex, and
+#            background documents in project-b and project-c, written over
+#            MCP
 #   serve    serve it with scripts/scratch-server.sh on HTTPS port 8444
 #            (--https-port N changes it; --no-tailscale passes through)
 #   (none)   play the feature flow on the served store: an idea becomes a
@@ -65,13 +67,19 @@ bin="$root/target/debug/joedocs"
 # shellcheck source=scripts/scratch-lib.sh
 . "$root/scripts/scratch-lib.sh"
 
-# Only .local/showcase inside this repository is ever written or removed.
-if [ -L "$root/.local" ] || [ -L "$scratch" ]; then
-    fail "$scratch is a symbolic link; refusing to use it"
-fi
-if [ -d "$scratch" ] && [ "$(cd "$scratch" && pwd -P)" != "$scratch" ]; then
-    fail "$scratch resolves outside the repository; refusing to use it"
-fi
+# The store a reset is replacing, kept until its user dev is copied over.
+old="$root/.local/showcase.old"
+
+# Only .local/showcase and .local/showcase.old inside this repository are
+# ever written or removed.
+for dir in "$scratch" "$old"; do
+    if [ -L "$root/.local" ] || [ -L "$dir" ]; then
+        fail "$dir is a symbolic link; refusing to use it"
+    fi
+    if [ -d "$dir" ] && [ "$(cd "$dir" && pwd -P)" != "$dir" ]; then
+        fail "$dir resolves outside the repository; refusing to use it"
+    fi
+done
 
 if [ "$command" = serve ]; then
     exec env SCRATCH_DIR="$scratch" "$root/scripts/scratch-server.sh" --port "$port" \
@@ -137,18 +145,40 @@ saved="$(saved_port)"
 
 # Whatever ends the script stops the server started for writing the
 # background; Ctrl-C is an interruption (130), and leaves no seeded marker.
+# The old store is never removed on the way out: only once the new one is
+# complete.
 trap stop_server EXIT
 trap 'exit 130' INT TERM
 
 (cd "$root" && cargo build --locked --quiet)
-if [ -d "$scratch" ]; then
-    echo "board-drive-showcase: removing $scratch"
+# The old store goes aside. One already aside was left by an interrupted
+# reset: unless the store beside it was completed (its user already
+# copied), it is still the one to copy dev from.
+if [ -d "$old" ] && [ -e "$scratch/seeded" ]; then
+    rm -rf "$old"
+fi
+if [ -d "$old" ]; then
+    echo "board-drive-showcase: an earlier reset was interrupted; taking dev from $old"
     rm -rf "$scratch"
+elif [ -d "$scratch" ]; then
+    echo "board-drive-showcase: moving $scratch aside"
+    mv "$scratch" "$old"
 fi
 mkdir -p "$scratch"
 write_config
 jd init >/dev/null
-password="$(jd user create dev | tail -n 1)"
+# dev comes over with its password and authenticator when it has set one
+# up (copy-user says kept); otherwise a new dev gets a one-time password.
+kept=""
+if [ -f "$old/state/joedocs.db" ]; then
+    kept="$(cd "$root" && cargo run --locked --quiet --example board_drive_showcase -- \
+        copy-user "$old/state/joedocs.db" "$scratch/state/joedocs.db")"
+fi
+password=""
+if [ "$kept" != kept ]; then
+    [ -z "$kept" ] || echo "board-drive-showcase: dev not kept ($kept); a new dev gets a one-time password"
+    password="$(jd user create dev | tail -n 1)"
+fi
 jd project add project-a --key PA --title "Project A" >/dev/null
 jd project add project-b --key PB --title "Project B" >/dev/null
 jd project add project-c --key PC --title "Project C" >/dev/null
@@ -166,11 +196,16 @@ start_server "$scratch/seed-server.log"
 unset opencode_token codex_token
 stop_server
 touch "$scratch/seeded"
+rm -rf "$old"
 
 echo
 echo "Board showcase store ready (store: $scratch)"
-echo "  User: dev   one-time password: $password"
-echo "  The first sign-in sets a password and an authenticator (scan the QR code); each reset needs a new one."
+if [ -z "$password" ]; then
+    echo "  User: dev kept (same password and authenticator; sign in again)"
+else
+    echo "  User: dev   one-time password: $password"
+    echo "  The first sign-in sets a password and an authenticator (scan the QR code); later resets keep them."
+fi
 echo "  Serve it with:  just board-drive-showcase serve$( [ "$port" = 8770 ] || echo " --port $port")"
 echo "  Then play it, in another terminal:  just board-drive-showcase$( [ "$port" = 8770 ] || echo " --port $port")"
 echo

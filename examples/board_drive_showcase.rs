@@ -12,15 +12,22 @@
 //! `SHOWCASE_TOKEN_MAC_CODEX`), and for `play` the folder of the agents'
 //! logs in `SHOWCASE_LOG_DIR`. The content is the same on every run, so a
 //! fresh store always gets the same document IDs.
+//!
+//! `copy-user OLD_DB NEW_DB` carries the user `dev` over a reset: it copies
+//! `dev`'s row of the `users` table from the old store's database into the
+//! new one's, password hash and authenticator included, when `dev` has set
+//! up an authenticator. The row goes from one database to the other in SQL,
+//! never through this program's output. It prints `kept`, or why not.
 
 #[path = "common/drive.rs"]
 mod drive;
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rusqlite::{Connection, OpenFlags, OptionalExtension as _};
 use serde_json::{Value, json};
 
 use drive::{Client, Pause, Result};
@@ -67,12 +74,104 @@ impl Agent {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [mode, old, new] = args.as_slice()
+        && mode == "copy-user"
+    {
+        let outcome = copy_user(Path::new(old), Path::new(new))?;
+        writeln!(std::io::stdout(), "{outcome}")?;
+        return Ok(());
+    }
     let url = std::env::var("SCRATCH_MCP_URL").map_err(|_| "SCRATCH_MCP_URL is not set")?;
-    match std::env::args().nth(1).as_deref() {
+    match args.first().map(String::as_str) {
         Some("seed") => seed(&url).await,
         Some("play") => Play::new(&url).await?.run().await,
-        _ => Err("usage: board_drive_showcase seed|play".into()),
+        _ => Err("usage: board_drive_showcase seed|play|copy-user OLD_DB NEW_DB".into()),
     }
+}
+
+/// The columns of `users`, as `src/db/migrations/0007_users.sql` creates
+/// them. A store whose table has other columns is not copied from or into:
+/// the copy would not know what the new ones mean.
+const USER_COLUMNS: [&str; 16] = [
+    "id",
+    "name",
+    "password_hash",
+    "must_change_password",
+    "initial_password_until",
+    "totp_secret",
+    "totp_enrolled_at",
+    "totp_pending_secret",
+    "totp_pending_until",
+    "setup_ticket_sha256",
+    "last_totp_step",
+    "created_at",
+    "updated_at",
+    "last_login_at",
+    "disabled_at",
+    "removed_at",
+];
+
+/// The column names of `table` in `schema` (`main` or an attached name),
+/// sorted.
+fn columns(conn: &Connection, schema: &str, table: &str) -> Result<Vec<String>> {
+    let mut statement = conn.prepare(&format!("PRAGMA {schema}.table_info({table})"))?;
+    let mut names = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    names.sort();
+    Ok(names)
+}
+
+/// Copies `dev` from the database at `old` into the one at `new`, which
+/// must not have a `dev` yet. Returns `kept`, or the reason it did not copy
+/// (`no dev user`, `not enrolled`, `users table differs: ...`); an error
+/// for a database it cannot read or write.
+fn copy_user(old: &Path, new: &Path) -> Result<String> {
+    let mut known: Vec<String> = USER_COLUMNS.iter().map(|c| (*c).to_owned()).collect();
+    known.sort();
+    let conn = Connection::open_with_flags(new, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    let old_text = old.to_str().ok_or("the old database path is not UTF-8")?;
+    conn.execute("ATTACH DATABASE ?1 AS old", [old_text])?;
+    for schema in ["old", "main"] {
+        let found = columns(&conn, schema, "users")?;
+        if found != known {
+            let store = if schema == "old" { "old" } else { "new" };
+            return Ok(format!(
+                "users table differs in the {store} store: {}",
+                found.join(", ")
+            ));
+        }
+    }
+    let state: Option<(i64, bool)> = conn
+        .query_row(
+            "SELECT must_change_password, totp_secret IS NOT NULL AND totp_enrolled_at IS NOT NULL
+             FROM old.users WHERE name = 'dev' AND removed_at IS NULL",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    match state {
+        None => return Ok("no dev user".to_owned()),
+        Some((must_change, enrolled)) if must_change != 0 || !enrolled => {
+            return Ok("not enrolled".to_owned());
+        }
+        Some(_) => {}
+    }
+    let existing: i64 = conn.query_row(
+        "SELECT count(*) FROM main.users WHERE name = 'dev'",
+        [],
+        |row| row.get(0),
+    )?;
+    if existing != 0 {
+        return Err("the new store already has a user dev".into());
+    }
+    let list = USER_COLUMNS.join(", ");
+    conn.execute_batch(&format!(
+        "BEGIN; INSERT INTO main.users ({list}) SELECT {list} FROM old.users WHERE name = 'dev'; COMMIT;"
+    ))?;
+    conn.execute("DETACH DATABASE old", [])?;
+    Ok("kept".to_owned())
 }
 
 /// One line of progress on standard error.

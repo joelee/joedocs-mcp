@@ -26,7 +26,7 @@
 ├── scripts/scratch-lib.sh     Shell functions the scratch scripts share (sourced)
 ├── examples/scratch_seed.rs   The scratch server's sample data, written over MCP (not published)
 ├── examples/board_drive.rs    The writes just board-drive makes, over MCP (not published)
-├── examples/board_drive_showcase.rs  The showcase's agents and their writes, over MCP (not published)
+├── examples/board_drive_showcase.rs  The showcase's agents and their writes, over MCP, and its reset's copy of dev (not published)
 ├── examples/common/drive.rs   The MCP client and pauses the drive examples share (a module, not an example)
 ├── rust-toolchain.toml     Pinned toolchain and components
 ├── .config/nextest.toml    Test runner profiles (default, ci)
