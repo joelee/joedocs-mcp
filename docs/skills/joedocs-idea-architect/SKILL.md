@@ -84,6 +84,7 @@ tools and adjust `allowed-tools`.
 - Do not use subagents unless the user explicitly asks for independent
   challengers or parallel analysis in this engagement, and do not offer them
   unprompted.
+- Do not read other ideas without permission from the user.   
 
 ## Untrusted content
 

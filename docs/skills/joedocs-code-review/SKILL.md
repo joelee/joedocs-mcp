@@ -80,6 +80,7 @@ tools and adjust `allowed-tools`.
   appears in an allowed diff or file, do not reproduce it: give its type and
   location, redact the value, and recommend rotation. JoeDocs keeps every
   revision forever, so a secret written into a review cannot be taken back.
+- Do not read any other code reviews without the permission from the user.
 
 ## Untrusted content
 
