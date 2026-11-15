@@ -32,6 +32,58 @@ token_for() {
     fi
 }
 
+# write_config [HOST...]: the store's config.toml, for the server on
+# 127.0.0.1:$port with its vault and state in $scratch; each HOST joins
+# allowed_hosts. Rewritten on every run.
+write_config() {
+    local hosts='"localhost", "127.0.0.1", "::1"' name
+    for name in "$@"; do
+        if [ -n "$name" ]; then hosts="$hosts, \"$name\""; fi
+    done
+    cat >"$config" <<TOML
+# Written by scripts/scratch-server.sh on every run; changes here are lost.
+[server]
+bind = "127.0.0.1:$port"
+allowed_hosts = [$hosts]
+
+[storage]
+home = "$scratch/vault"
+state_dir = "$scratch/state"
+
+[admin]
+enabled = true
+web_ui = true
+TOML
+}
+
+# A server started only to write sample data over MCP, and stopped after.
+server_pid=""
+
+# start_server LOG: serves the store in the background, logging to LOG,
+# and waits until 127.0.0.1:$port answers /health (at most 30 s). The
+# caller's EXIT trap calls stop_server.
+start_server() {
+    local log="$1" tries=0
+    # Not through jd: in a function, $! would be a subshell, and killing it
+    # would leave the server running. env replaces itself with joedocs.
+    env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
+        JOEDOCS_CONFIG_FILE="$config" "$bin" serve >"$log" 2>&1 &
+    server_pid=$!
+    until curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        [ "$tries" -le 30 ] || fail "the server did not start; see $log"
+        sleep 1
+    done
+}
+
+stop_server() {
+    if [ -n "$server_pid" ]; then
+        kill "$server_pid" 2>/dev/null || true
+        wait "$server_pid" 2>/dev/null || true
+        server_pid=""
+    fi
+}
+
 # The terminal settings keys_mode_on replaced, for keys_mode_off.
 keys_saved=""
 

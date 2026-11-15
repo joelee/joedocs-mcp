@@ -3,8 +3,10 @@
 # interface in other browsers and on phones (`just scratch-server`).
 #
 # The store lives in .local/scratch (git-ignored) and is kept between runs;
-# `fresh` wipes it first. Every joedocs command runs with the scratch config
-# and none of your JOEDOCS_* variables, so it never touches a real store.
+# `fresh` wipes it first. SCRATCH_DIR names another store directly under
+# .local/, which the script only serves: another script creates it. Every
+# joedocs command runs with the store's config and none of your JOEDOCS_*
+# variables, so it never touches a real store.
 # Bash on Linux and macOS: no GNU-only options, no jq or python.
 set -euo pipefail
 
@@ -36,65 +38,51 @@ case "$port" in '' | *[!0-9]*) fail "--port must be a number, not \"$port\"" ;; 
 case "$https_port" in '' | *[!0-9]*) fail "--https-port must be a number, not \"$https_port\"" ;; esac
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
-scratch="$root/.local/scratch"
+default_store="$root/.local/scratch"
+scratch="$default_store"
+# Another store: an absolute or relative path whose parent is .local in this
+# repository; it is served as it is, never created or wiped here.
+if [ -n "${SCRATCH_DIR:-}" ]; then
+    case "$SCRATCH_DIR" in
+        /*) scratch="$SCRATCH_DIR" ;;
+        *) scratch="$PWD/$SCRATCH_DIR" ;;
+    esac
+    while [ "$scratch" != / ] && [ "${scratch%/}" != "$scratch" ]; do scratch="${scratch%/}"; done
+    store_name="${scratch##*/}"
+    store_parent="${scratch%/*}"
+    case "$store_name" in '' | . | ..) fail "SCRATCH_DIR=$SCRATCH_DIR does not name a store directory" ;; esac
+    if [ ! -d "$store_parent" ] || [ "$(cd "$store_parent" && pwd -P)" != "$root/.local" ]; then
+        fail "SCRATCH_DIR=$SCRATCH_DIR is not a directory directly under $root/.local; refusing to use it"
+    fi
+    scratch="$root/.local/$store_name"
+fi
 config="$scratch/config.toml"
 bin="$root/target/debug/joedocs"
+# shellcheck source=scripts/scratch-lib.sh
+. "$root/scripts/scratch-lib.sh"
 
-# Only .local/scratch inside this repository is ever written or removed.
+# Only the store inside this repository's .local is ever written, and only
+# .local/scratch is ever removed.
 if [ -L "$root/.local" ] || [ -L "$scratch" ]; then
     fail "$scratch is a symbolic link; refusing to use it"
 fi
 if [ -d "$scratch" ] && [ "$(cd "$scratch" && pwd -P)" != "$scratch" ]; then
     fail "$scratch resolves outside the repository; refusing to use it"
 fi
+if [ "$scratch" != "$default_store" ]; then
+    ! $fresh || fail "fresh starts over only in $default_store; $scratch is wiped by the script that creates it"
+    [ -d "$scratch/state" ] && [ -e "$scratch/seeded" ] ||
+        fail "no seeded store at $scratch; scratch-server serves it once another script has created it"
+fi
 
-listening() {
-    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
-}
 [ "$port" != 8750 ] || fail "port 8750 is the default server.bind (a real server or the Docker stack); pick another --port"
 ! listening "$port" || fail "something is already listening on 127.0.0.1:$port; pick another --port"
 
-# joedocs with the scratch config and a clean environment: an exported
-# JOEDOCS__STORAGE__HOME, for example, would otherwise win over the file.
-jd() {
-    env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
-        JOEDOCS_CONFIG_FILE="$config" "$bin" "$@"
-}
-
-write_config() {
-    local hosts='"localhost", "127.0.0.1", "::1"' name
-    for name in "$@"; do
-        if [ -n "$name" ]; then hosts="$hosts, \"$name\""; fi
-    done
-    cat >"$config" <<TOML
-# Written by scripts/scratch-server.sh on every run; changes here are lost.
-[server]
-bind = "127.0.0.1:$port"
-allowed_hosts = [$hosts]
-
-[storage]
-home = "$scratch/vault"
-state_dir = "$scratch/state"
-
-[admin]
-enabled = true
-web_ui = true
-TOML
-}
-
 # Whatever ends the script stops the server started for seeding and
 # removes the one `tailscale serve` entry this run added.
-seed_pid=""
 served=false
-stop_seed_server() {
-    if [ -n "$seed_pid" ]; then
-        kill "$seed_pid" 2>/dev/null || true
-        wait "$seed_pid" 2>/dev/null || true
-        seed_pid=""
-    fi
-}
 cleanup() {
-    stop_seed_server
+    stop_server
     if $served; then
         "$tailscale" serve --https="$https_port" off >/dev/null 2>&1 ||
             echo "scratch-server: could not remove the serve entry; run: tailscale serve --https=$https_port off" >&2
@@ -170,21 +158,11 @@ seed() {
     local token
     jd project add demo --key DEMO --title "Demo" >/dev/null
     jd project add sandbox --key SBX --title "Sandbox" >/dev/null
-    token="$(jd key create scratch-seed --grant demo:write --grant sandbox:write | tail -n 1)"
-    # Not through jd: in a function, $! would be a subshell, and killing it
-    # would leave the server running. env replaces itself with joedocs.
-    env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
-        JOEDOCS_CONFIG_FILE="$config" "$bin" serve >"$scratch/seed-server.log" 2>&1 &
-    seed_pid=$!
-    local tries=0
-    until curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; do
-        tries=$((tries + 1))
-        [ "$tries" -le 30 ] || fail "the server did not start; see $scratch/seed-server.log"
-        sleep 1
-    done
+    token="$(token_for scratch-seed demo:write sandbox:write)"
+    start_server "$scratch/seed-server.log"
     (cd "$root" && SCRATCH_MCP_URL="http://127.0.0.1:$port/mcp" SCRATCH_TOKEN="$token" \
         cargo run --locked --quiet --example scratch_seed)
-    stop_seed_server
+    stop_server
     touch "$scratch/seeded"
 }
 
