@@ -160,7 +160,7 @@ DRIVE_PAUSE_MS=0 just board-drive-showcase   # wait for a keystroke before each 
   4. `mac-claude` builds PA-2: 🏗️ with STEP-01, then STEP-02 to STEP-05. PB-4 stays lit beside it, which is the frame for a still of both kinds of card.
   5. The build completes and PA-2 lights up for your sign-off. `laptop-claude` closes PA-2 and PA-1 (`done`), and `mac-codex`'s PB-4 is rejected.
 
-  Meanwhile `laptop-opencode` changes three documents in `project-b`. At the default pause (3000 ms) the flow takes about a minute; `DRIVE_PAUSE_MS=1500` halves it. `DRIVE_PAUSE_MS=0` waits for a keystroke before each beat, after a prompt naming it, as for `just board-drive`. A second play refuses to start until the next reset.
+  Meanwhile `laptop-opencode` changes three documents in `project-b`. At the default pause (3000 ms) the flow takes about 45 seconds, almost all of it pauses, so a shorter `DRIVE_PAUSE_MS` shortens it in proportion. `DRIVE_PAUSE_MS=0` waits for a keystroke before each beat, after a prompt naming it, as for `just board-drive`. A second play refuses to start until the next reset.
 - **The Board address** it prints at the start selects every status the flow uses, closed ones included, and a row per project, so done and rejected cards stay in view: `http://127.0.0.1:8770/admin/board?status=draft&status=review&status=approved&status=parked&status=done&status=rejected&group=project`.
 - **The agents' logs:** each beat line also goes to `.local/showcase/agents/<key>.log`, with the time of day (UTC). The four `tail -f` commands it prints give a terminal per agent beside the Board.
 - **The keys' tokens** stay in the script's shell; they are never printed or written down.
