@@ -128,10 +128,12 @@ just scratch-server --port 8761 --https-port 8444 --no-tailscale
 just scratch-server                  # in one terminal
 just board-drive                     # in another, with /admin/board open
 DRIVE_PAUSE_MS=5000 just board-drive # slower, for a demo
+DRIVE_PAUSE_MS=0 just board-drive    # wait for a keystroke before each step
 just board-drive --port 8761         # a scratch server on another port
 ```
 
 - **What it does,** over MCP as an agent would (`examples/board_drive.rs`), in about 40 seconds: a plan is drafted, lit for approval (`attention`), reviewed and approved; a builder picks it up (`implementation_status: in-progress`, the 🏗️ mark with its `current_step`) and works through STEP-01 to STEP-03; ten sample documents move from draft to review in about two seconds, and back; an issue arrives in `sandbox`, lit; the build completes and the plan is closed; the issue is archived, then restored by a local `joedocs archive restore`, a write from another process. Each step prints one line.
+- **The pause** between steps is `DRIVE_PAUSE_MS` milliseconds (default 3000). `DRIVE_PAUSE_MS=0` waits for a keystroke instead, after a prompt naming the next step, so you can talk over a demo or hold a frame; any key will do, with no Enter. It needs a terminal, and stops before writing anything without one. The script puts the terminal back as it was when it ends, Ctrl-C included.
 - **Its key** is `board-drive`, with write on `demo` and `sandbox`: created on the first run and rotated on each later one. The token stays in the script's shell; it is never printed or written down.
 - **Another store:** `SCRATCH_DIR=/path/to/store just board-drive` drives a server using that scratch store (its `config.toml` and a seeded store), for example a copy of `.local/scratch`.
 - **`?debug=1`** on the Board shows the page script's counters (events, refreshes, transitions and skipped ones, latency, frames over 50 ms): developer use only.

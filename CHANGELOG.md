@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **`just board-drive`** (developers): `DRIVE_PAUSE_MS=0` now waits for a keystroke before each step, instead of not pausing, so a demo can be narrated; it needs a terminal. Other values keep the timed pauses.
+
 ## [0.5.5] - 2026-11-14
 
 A live Board in the web interface: the documents of several projects as cards in status columns, kept up to date as agents work, with a light for what needs you and a mark for plans being built. Three new configuration keys, and the agent skills mark what needs you. MCP tools and the database are unchanged.
