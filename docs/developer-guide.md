@@ -139,6 +139,20 @@ just board-drive --port 8761         # a scratch server on another port
 - **Another store:** `SCRATCH_DIR=/path/to/store just board-drive` drives a server using that scratch store (its `config.toml` and a seeded store), for example a copy of `.local/scratch`.
 - **`?debug=1`** on the Board shows the page script's counters (events, refreshes, transitions and skipped ones, latency, frames over 50 ms): developer use only.
 
+#### The showcase
+
+`just board-drive-showcase` stages the Board for recording the README media: a store of its own in `.local/showcase` (git-ignored), with three projects and four agents on two machines, kept apart from `.local/scratch`.
+
+```bash
+just board-drive-showcase reset   # wipe .local/showcase and create it again
+just board-drive-showcase serve   # serve it on port 8770 (--no-tailscale, --https-port N as for scratch-server)
+```
+
+- **`reset`** creates user `dev` and prints its one-time password, the projects `project-a`, `project-b` and `project-c` (card IDs `PA`, `PB`, `PC`), and four API keys, each with write on the three projects: `laptop-claude`, `laptop-opencode`, `mac-claude` and `mac-codex`. It then writes three background documents in `project-b` (by `laptop-opencode`, as the MCP client `opencode`) and three in `project-c` (by `mac-codex`, as `codex`), always with the same content, so a fresh store always gets the same IDs. It refuses to run while something listens on the port, and an interrupted reset leaves a store that `serve` refuses until the next reset.
+- **Each reset makes a new `dev`**, so the first sign-in after it sets a new password and authenticator.
+- **`serve`** runs `just scratch-server` on this store (`SCRATCH_DIR=.local/showcase`), on port 8770 so it can run beside the scratch server; `--port N` changes it for both commands.
+- **The keys' tokens** stay in the script's shell; they are never printed or written down.
+
 ### Vendored browser files
 
 Third-party browser files sit in `src/web/assets/vendor/`, unmodified, each with its licence text beside it. To update one, download the new version from the npm registry, check the tarball against the registry's `integrity` value, copy the file and its licence, and update this table.

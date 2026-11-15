@@ -72,7 +72,7 @@ fi
 if [ "$scratch" != "$default_store" ]; then
     ! $fresh || fail "fresh starts over only in $default_store; $scratch is wiped by the script that creates it"
     [ -d "$scratch/state" ] && [ -e "$scratch/seeded" ] ||
-        fail "no seeded store at $scratch; scratch-server serves it once another script has created it"
+        fail "no seeded store at $scratch; scratch-server serves it once another script has created it (for .local/showcase: just board-drive-showcase reset)"
 fi
 
 [ "$port" != 8750 ] || fail "port 8750 is the default server.bind (a real server or the Docker stack); pick another --port"
@@ -190,11 +190,18 @@ fi
 if $first_run; then
     echo "  User: dev   one-time password: $password"
     echo "  The first sign-in sets a password and an authenticator (scan the QR code)."
+elif [ "$scratch" != "$default_store" ]; then
+    echo "  User: dev (its one-time password came from the script that created the store). To start its sign-in again:"
+    echo "    JOEDOCS_CONFIG_FILE=$config $bin user reset-password dev   (or reset-totp dev)"
 else
     echo "  User: dev (set up earlier). To start its sign-in again:"
     echo "    JOEDOCS_CONFIG_FILE=$config $bin user reset-password dev   (or reset-totp dev)"
 fi
-echo "  Stop with Ctrl-C; start over with: just scratch-server fresh"
+if [ "$scratch" != "$default_store" ]; then
+    echo "  Stop with Ctrl-C"
+else
+    echo "  Stop with Ctrl-C; start over with: just scratch-server fresh"
+fi
 echo
 
 serving=true
