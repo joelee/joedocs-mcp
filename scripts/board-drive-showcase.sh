@@ -9,8 +9,9 @@
 #            project-a, project-b and project-c, the API keys
 #            laptop-claude, laptop-opencode, mac-claude and mac-codex, and
 #            background documents in project-b and project-c, written over
-#            MCP
-#   serve    serve it with scripts/scratch-server.sh on HTTPS port 8444
+#            MCP; refused while a serve or another reset of the store runs
+#            (they hold its lock, .local/showcase.lock)
+#   serve   serve it with scripts/scratch-server.sh on HTTPS port 8444
 #            (--https-port N changes it; --no-tailscale passes through)
 #   (none)   play the feature flow on the served store: an idea becomes a
 #            plan, which is built from STEP-01 to STEP-05 and signed off,
@@ -133,22 +134,26 @@ if [ "$command" = play ]; then
     exit 0
 fi
 
-# reset. A server on the port may be serving this store, and wiping a store
-# under a running server would spoil the next take.
+# reset. Wiping a store under a running server would spoil the next take.
+#
+# Whatever ends the script stops the server started for writing the
+# background and releases the store's lock; Ctrl-C (or SIGTERM, or SIGHUP)
+# is an interruption (130), and leaves no seeded marker. The old store is
+# never removed on the way out: only once the new one is complete.
+trap 'stop_server; store_unlock' EXIT
+trap 'exit 130' INT TERM HUP
+# One command at a time per store: a serve holds the lock while it runs, so
+# taking it here, before anything is checked or built, and keeping it to the
+# end means no serve or other reset of the store can start meanwhile.
+store_lock
+# A joedocs serve of the store started by hand takes no lock: something
+# listening on the port, or on the one serve last wrote into its
+# config.toml, may be one.
 ! listening "$port" ||
     fail "something is listening on 127.0.0.1:$port (a showcase server?); stop it before a reset"
-# The store may be served on another port: the one serve last wrote into
-# its config.toml (serve refuses to start while that one answers).
 saved="$(saved_port)"
 [ -z "$saved" ] || [ "$saved" = "$port" ] || ! listening "$saved" ||
     fail "the showcase store is being served on 127.0.0.1:$saved; stop that server before a reset"
-
-# Whatever ends the script stops the server started for writing the
-# background; Ctrl-C is an interruption (130), and leaves no seeded marker.
-# The old store is never removed on the way out: only once the new one is
-# complete.
-trap stop_server EXIT
-trap 'exit 130' INT TERM
 
 (cd "$root" && cargo build --locked --quiet)
 # The old store goes aside. One already aside was left by an interrupted
