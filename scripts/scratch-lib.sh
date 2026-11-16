@@ -111,15 +111,18 @@ stop_server() {
 # target is the owner's PID: ln -s creates it or fails in one step, so a
 # lock always names its owner. Call store_unlock from the caller's EXIT trap.
 store_lock() {
-    local lock="$scratch.lock" owner me="${0##*/}"
+    local lock="$scratch.lock" owner me="${0##*/}" made
     me="${me%.sh}"
     mkdir -p "${scratch%/*}"
-    if ln -s "$$" "$lock" 2>/dev/null; then
-        return 0
-    fi
+    made=0
+    store_link "$lock" || made=$?
+    case "$made" in
+        0) return 0 ;;
+        2) store_not_a_lock "$lock" ;;
+    esac
     owner="$(readlink "$lock" 2>/dev/null || true)"
     case "$owner" in
-        '' | *[!0-9]*) fail "$lock is not a lock these scripts made; remove it if no serve or reset of $scratch is running" ;;
+        '' | *[!0-9]*) store_not_a_lock "$lock" ;;
     esac
     # kill -0 fails for another user's process too; ps -p still sees it.
     if kill -0 "$owner" 2>/dev/null || ps -p "$owner" >/dev/null 2>&1; then
@@ -127,17 +130,46 @@ store_lock() {
     fi
     # Its owner has ended. One command at a time takes a lock over, and only
     # while it still names that owner.
-    ln -s "$$" "$lock.take" 2>/dev/null ||
-        fail "another command is taking over $lock; try again (if none is running, remove $lock.take)"
+    made=0
+    store_link "$lock.take" || made=$?
+    case "$made" in
+        1) fail "another command is taking over $lock; try again (if none is running, remove $lock.take)" ;;
+        2) store_not_a_lock "$lock.take" ;;
+    esac
     if [ "$(readlink "$lock" 2>/dev/null || true)" = "$owner" ]; then
         rm -f "$lock"
     fi
-    if ! ln -s "$$" "$lock" 2>/dev/null; then
+    made=0
+    store_link "$lock" || made=$?
+    if [ "$made" != 0 ]; then
         rm -f "$lock.take"
+        [ "$made" != 2 ] || store_not_a_lock "$lock"
         fail "$scratch is in use by process $(readlink "$lock" 2>/dev/null || echo unknown) (a serve or a reset of it); stop it first"
     fi
     rm -f "$lock.take"
     echo "$me: took over $lock from process $owner, which is no longer running" >&2
+}
+
+# store_link PATH: makes PATH a symbolic link naming this process. Returns 0
+# when PATH is now that link, 1 when something else is already at PATH, and
+# 2 when PATH is a directory (or a link to one): ln -s would put the link
+# inside it and still succeed, so a directory is refused before ln, and a
+# link that ends up inside one (a directory made meanwhile) is taken back.
+store_link() {
+    local path="$1"
+    [ ! -d "$path" ] || return 2
+    ln -s "$$" "$path" 2>/dev/null || return 1
+    if [ -L "$path" ] && [ "$(readlink "$path" 2>/dev/null || true)" = "$$" ]; then
+        return 0
+    fi
+    if [ -L "$path/$$" ] && [ "$(readlink "$path/$$" 2>/dev/null || true)" = "$$" ]; then
+        rm -f "$path/$$"
+    fi
+    return 2
+}
+
+store_not_a_lock() {
+    fail "$1 is not a lock these scripts made; remove it if no serve or reset of $scratch is running"
 }
 
 # Releases the lock if this process holds it; safe to call at any time.
