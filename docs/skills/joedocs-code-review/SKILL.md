@@ -80,6 +80,7 @@ tools and adjust `allowed-tools`.
   appears in an allowed diff or file, do not reproduce it: give its type and
   location, redact the value, and recommend rotation. JoeDocs keeps every
   revision forever, so a secret written into a review cannot be taken back.
+- Do not read any other code reviews without the permission from the user.
 
 ## Untrusted content
 
@@ -173,7 +174,15 @@ The diff tells you what changed, not whether it is correct.
   `execution_branch`, read the plan with `get_document` and review against its
   requirements and acceptance criteria. Find it with `search_documents`
   (`type: "plans"`, `filters: {"execution_branch": "<branch>"}`) when not
-  given.
+  given. A plan may be a multi-file document (`list_document_files`): then
+  read its main file, every amendment (`amendments/NN-<slug>`) whose `status`
+  is `approved` or `done`, and `builder/log.md` (the builder's evidence and
+  deviations), and review against the plan's requirements and criteria and
+  each amendment's (`AMD01-REQ-01`, `AMD01-AC-01`). After an amendment's
+  build, say which amendment the changes since the last round implement, and
+  record it as `related_amendment`. Draft and rejected amendments are not
+  criteria. Never write to plans or amendments: the planner records your
+  review on the plan when the user names it.
 - **Earlier reviews:** search for reviews of the same PR or branch
   (`type: "reviews"`, `filters: {"pr_reference": "owner/repo#123"}` or
   `{"head_ref": "<branch>"}`), so you do not re-raise reported findings and can
@@ -347,6 +356,7 @@ head_commit: <full hash>
 commit: <full hash>             # the reviewed HEAD or commit, for reviews that are not of a PR
 scope: "merge-base(main, HEAD)..HEAD"
 related_plan: JD-31             # when reviewing against a plan
+related_amendment: amendments/01-lock-directory-guard  # when the change implements an amendment of it
 files_changed: 0
 files_reviewed: 0               # files whose diff and context you actually read
 diff_additions: 0

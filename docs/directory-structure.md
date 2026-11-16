@@ -22,8 +22,12 @@
 ├── justfile                Local and CI entry points
 ├── scripts/scratch-server.sh  just scratch-server: a throwaway server from the working tree, kept in .local/scratch (git-ignored)
 ├── scripts/board-drive.sh     just board-drive: a scripted run of agent writes against a scratch server, the Board's demo
+├── scripts/board-drive-showcase.sh  just board-drive-showcase: the Board showcase on its own store, .local/showcase (git-ignored)
+├── scripts/scratch-lib.sh     Shell functions the scratch scripts share (sourced)
 ├── examples/scratch_seed.rs   The scratch server's sample data, written over MCP (not published)
 ├── examples/board_drive.rs    The writes just board-drive makes, over MCP (not published)
+├── examples/board_drive_showcase.rs  The showcase's agents and their writes, over MCP, and its reset's copy of dev (not published)
+├── examples/common/drive.rs   The MCP client and pauses the drive examples share (a module, not an example)
 ├── rust-toolchain.toml     Pinned toolchain and components
 ├── .config/nextest.toml    Test runner profiles (default, ci)
 ├── .env.example            Supported secret variables with placeholders

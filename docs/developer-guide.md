@@ -116,8 +116,10 @@ just scratch-server --port 8761 --https-port 8444 --no-tailscale
 - **On this machine:** `http://127.0.0.1:8760/admin/` (`--port` changes it; `8750`, the default `server.bind`, is refused, as is a port in use).
 - **On a phone:** signing in needs HTTPS off loopback, so, unless `--no-tailscale` is given, the script adds a `tailscale serve` entry on port `8443` (`--https-port`) and prints `https://<machine>.<tailnet>.ts.net:8443/admin/`. The phone needs the Tailscale app on the same tailnet. The entry is removed when the server stops, also after Ctrl-C or an error; if one is ever left, `tailscale serve --https=8443 off` removes it. On Linux, if `tailscale serve` is refused, allow your user once with `sudo tailscale set --operator=$USER`; the script never uses `sudo`. A port that Tailscale already serves is refused.
 - **A proxy of your own** (Caddy, for example) can point at the loopback address. List the names it passes as `Host` in `SCRATCH_ALLOWED_HOSTS` (comma-separated), or the server answers `403`: `SCRATCH_ALLOWED_HOSTS=scratch.example.net just scratch-server`.
-- **It never touches real data:** every `joedocs` command it runs uses `.local/scratch/config.toml` (rewritten on each run) and none of your `JOEDOCS_*` variables, so the live server, the Docker stack's `.local/data` and your own configuration are left alone. The seeding key's token is never printed or written down.
-- **Stopping it** with Ctrl-C is the normal end: the script and `just` exit with status 0 (the recipe's `[continue]` attribute, `just` 1.54 or later). Ctrl-C during the build or the seeding exits with 130.
+- **Another store:** `SCRATCH_DIR=.local/<name> just scratch-server` serves a store that another script created directly under `.local/`, with the same addresses and options. The script only serves such a store: it refuses one that has not been seeded, `fresh`, a symbolic link, and any path outside `.local/`. Only `.local/scratch` is ever wiped by it.
+- **It never touches real data:** every `joedocs` command it runs uses `.local/scratch/config.toml` (rewritten on each run) and none of your `JOEDOCS_*` variables. It also runs in the store directory, so a `.env` where you start the script is not read (one inside the store directory is refused). The live server, the Docker stack's `.local/data` and your own configuration are left alone. The seeding key's token is never printed or written down.
+- **One run per store:** each run locks its store for as long as it runs, with `.local/<store>.lock` (`.local/scratch.lock` here), a symbolic link naming the script's process ID. A second run on the same store, `fresh` included, stops before it checks, wipes or builds anything: `... is in use by process N (a serve or a reset of it); stop it first`. A lock whose process has ended (after `kill -9`, a crash or a reboot) is taken over, with a notice. If the refusal names a process that is not a serve or a reset (a reboot can give its number to another program), remove the lock file it names. Anything else at the lock path, a directory included, is refused with the path to remove.
+- **Stopping it** with Ctrl-C is the normal end: the script and `just` exit with status 0 (the recipe's `[continue]` attribute, `just` 1.54 or later). Closing its terminal stops it the same way. Ctrl-C during the build or the seeding exits with 130. Every way of stopping releases the lock.
 - The script is bash, for Linux and macOS (`tailscale` from `PATH`, or the macOS app), and needs `curl`.
 
 ### Driving the Board
@@ -128,13 +130,42 @@ just scratch-server --port 8761 --https-port 8444 --no-tailscale
 just scratch-server                  # in one terminal
 just board-drive                     # in another, with /admin/board open
 DRIVE_PAUSE_MS=5000 just board-drive # slower, for a demo
+DRIVE_PAUSE_MS=0 just board-drive    # wait for a keystroke before each step
 just board-drive --port 8761         # a scratch server on another port
 ```
 
 - **What it does,** over MCP as an agent would (`examples/board_drive.rs`), in about 40 seconds: a plan is drafted, lit for approval (`attention`), reviewed and approved; a builder picks it up (`implementation_status: in-progress`, the 🏗️ mark with its `current_step`) and works through STEP-01 to STEP-03; ten sample documents move from draft to review in about two seconds, and back; an issue arrives in `sandbox`, lit; the build completes and the plan is closed; the issue is archived, then restored by a local `joedocs archive restore`, a write from another process. Each step prints one line.
+- **The pause** between steps is `DRIVE_PAUSE_MS` milliseconds (default 3000). `DRIVE_PAUSE_MS=0` (or `00`: the value is read as a base-10 number) waits for a keystroke instead, after a prompt naming the next step, so you can talk over a demo or hold a frame; any key will do, with no Enter. It needs a terminal, and stops before writing anything without one. The script puts the terminal back as it was when it ends, Ctrl-C included.
 - **Its key** is `board-drive`, with write on `demo` and `sandbox`: created on the first run and rotated on each later one. The token stays in the script's shell; it is never printed or written down.
-- **Another store:** `SCRATCH_DIR=/path/to/store just board-drive` drives a server using that scratch store (its `config.toml` and a seeded store), for example a copy of `.local/scratch`.
+- **Another store:** `SCRATCH_DIR=/path/to/store just board-drive` drives a server using that scratch store (its `config.toml` and a seeded store), for example a copy of `.local/scratch`. A relative path is taken from the directory the command runs in, which is the repository root under `just`.
 - **`?debug=1`** on the Board shows the page script's counters (events, refreshes, transitions and skipped ones, latency, frames over 50 ms): developer use only.
+
+#### The showcase
+
+`just board-drive-showcase` stages the Board for recording the README media: a store of its own in `.local/showcase` (git-ignored), with three projects and four agents on two machines, kept apart from `.local/scratch`.
+
+```bash
+just board-drive-showcase reset   # wipe .local/showcase and create it again
+just board-drive-showcase serve   # serve it on port 8770, and over Tailscale on HTTPS port 8444 (--no-tailscale, --https-port N)
+just board-drive-showcase         # in another terminal: play the feature flow, once per reset
+DRIVE_PAUSE_MS=0 just board-drive-showcase   # wait for a keystroke before each beat
+```
+
+- **`reset`** creates the projects `project-a`, `project-b` and `project-c` (card IDs `PA`, `PB`, `PC`), and four API keys, each with write on the three projects: `laptop-claude`, `laptop-opencode`, `mac-claude` and `mac-codex`. It then writes three background documents in `project-b` (by `laptop-opencode`, as the MCP client `opencode`) and three in `project-c` (by `mac-codex`, as `codex`), always with the same content, so a fresh store always gets the same IDs. It refuses to run while a serve or another reset of the store runs (each holds the store's lock, `.local/showcase.lock`, from before it checks or builds anything until it ends), or while something answers on the port given or on the one `serve` last used (a `joedocs serve` of the store started by hand). An interrupted reset leaves a store that `serve` refuses until the next reset (which picks up where it stopped).
+- **`dev` is kept across resets** once it has set up an authenticator: reset moves the old store to `.local/showcase.old`, copies `dev`'s row of the users table (password hash and authenticator; not its sessions or devices) into the new store's database, and removes the old store once the new one is complete. After a reset, sign in again with the same password and a code: no new setup. The row goes from database to database and is never printed. The first reset, a `dev` that has not finished its first sign-in, or a users table of another shape than the copy knows (after a database migration, until the copy is updated), gives a new `dev` and prints its one-time password, with the reason.
+- **`serve`** runs `just scratch-server` on this store (`SCRATCH_DIR=.local/showcase`), on port 8770 and Tailscale HTTPS port 8444, so it can run beside the scratch server (8760 and 8443); `--port N` changes the first for every command, `--https-port N` the second. One server per store: `serve` refuses while another serve or a reset of the store runs (it holds the store's lock, `.local/showcase.lock`, as `just scratch-server` does), and while the port it last used answers, which catches a `joedocs serve` of the store started by hand.
+- **Playing** (no argument) runs one feature from idea to done, one beat at a time, each written over MCP by the key named for it, so every card shows its agent as the last writer:
+  1. `mac-claude` drafts the idea PA-1 "Offline sync for field notes", puts it to you (`review`, lit "Waiting for your decision") and records your acceptance (`approved`).
+  2. `laptop-claude` drafts the plan PA-2 from it and puts it to you (lit "Waiting for your approval"), while `mac-codex` drafts another plan, PB-4, in `project-b`.
+  3. PA-2 is approved, and PB-4 goes to review, lit.
+  4. `mac-claude` builds PA-2: 🏗️ with STEP-01, then STEP-02 to STEP-05. PB-4 stays lit beside it, which is the frame for a still of both kinds of card.
+  5. The build completes and PA-2 lights up for your sign-off. `laptop-claude` closes PA-2 and PA-1 (`done`), and `mac-codex`'s PB-4 is rejected.
+
+  Meanwhile `laptop-opencode` changes three documents in `project-b`. At the default pause (3000 ms) the flow takes about 45 seconds, almost all of it pauses, so a shorter `DRIVE_PAUSE_MS` shortens it in proportion. `DRIVE_PAUSE_MS=0` waits for a keystroke before each beat, after a prompt naming it, as for `just board-drive`. A second play refuses to start until the next reset.
+- **The Board address** it prints at the start selects every status the flow uses, closed ones included, and a row per project, so done and rejected cards stay in view: `http://127.0.0.1:8770/admin/board?status=draft&status=review&status=approved&status=parked&status=done&status=rejected&group=project`.
+- **The agents' logs:** each beat line also goes to `.local/showcase/agents/<key>.log`, with the local time of day (this machine's offset from UTC, from `date +%z`). The four `tail -F` commands it prints give a terminal per agent beside the Board; start them before the play if you like, as `-F` waits for the files.
+- **Kept apart from real data** as `just scratch-server` is: every `joedocs` command uses the showcase's config, none of your `JOEDOCS_*` variables and no `.env`.
+- **The keys' tokens** stay in the script's shell; they are never printed or written down.
 
 ### Vendored browser files
 

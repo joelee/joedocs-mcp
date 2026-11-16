@@ -3,8 +3,10 @@
 # interface in other browsers and on phones (`just scratch-server`).
 #
 # The store lives in .local/scratch (git-ignored) and is kept between runs;
-# `fresh` wipes it first. Every joedocs command runs with the scratch config
-# and none of your JOEDOCS_* variables, so it never touches a real store.
+# `fresh` wipes it first. SCRATCH_DIR names another store directly under
+# .local/, which the script only serves: another script creates it. Every
+# joedocs command runs with the store's config and none of your JOEDOCS_*
+# variables, so it never touches a real store.
 # Bash on Linux and macOS: no GNU-only options, no jq or python.
 set -euo pipefail
 
@@ -36,81 +38,80 @@ case "$port" in '' | *[!0-9]*) fail "--port must be a number, not \"$port\"" ;; 
 case "$https_port" in '' | *[!0-9]*) fail "--https-port must be a number, not \"$https_port\"" ;; esac
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
-scratch="$root/.local/scratch"
+default_store="$root/.local/scratch"
+scratch="$default_store"
+# Another store: an absolute or relative path whose parent is .local in this
+# repository; it is served as it is, never created or wiped here.
+if [ -n "${SCRATCH_DIR:-}" ]; then
+    case "$SCRATCH_DIR" in
+        /*) scratch="$SCRATCH_DIR" ;;
+        *) scratch="$PWD/$SCRATCH_DIR" ;;
+    esac
+    while [ "$scratch" != / ] && [ "${scratch%/}" != "$scratch" ]; do scratch="${scratch%/}"; done
+    store_name="${scratch##*/}"
+    store_parent="${scratch%/*}"
+    case "$store_name" in '' | . | ..) fail "SCRATCH_DIR=$SCRATCH_DIR does not name a store directory" ;; esac
+    if [ ! -d "$store_parent" ] || [ "$(cd "$store_parent" && pwd -P)" != "$root/.local" ]; then
+        fail "SCRATCH_DIR=$SCRATCH_DIR is not a directory directly under $root/.local; refusing to use it"
+    fi
+    scratch="$root/.local/$store_name"
+fi
 config="$scratch/config.toml"
 bin="$root/target/debug/joedocs"
+# shellcheck source=scripts/scratch-lib.sh
+. "$root/scripts/scratch-lib.sh"
 
-# Only .local/scratch inside this repository is ever written or removed.
+# Only the store inside this repository's .local is ever written, and only
+# .local/scratch is ever removed.
 if [ -L "$root/.local" ] || [ -L "$scratch" ]; then
     fail "$scratch is a symbolic link; refusing to use it"
 fi
 if [ -d "$scratch" ] && [ "$(cd "$scratch" && pwd -P)" != "$scratch" ]; then
     fail "$scratch resolves outside the repository; refusing to use it"
 fi
+# One serve of a store at a time, and none while a showcase reset of it
+# runs: the lock is taken before anything is checked, wiped or built, and
+# held until the script ends (cleanup releases it).
+trap store_unlock EXIT
+trap 'exit 130' INT TERM HUP
+store_lock
+if [ "$scratch" != "$default_store" ]; then
+    ! $fresh || fail "fresh starts over only in $default_store; $scratch is wiped by the script that creates it"
+    [ -d "$scratch/state" ] && [ -e "$scratch/seeded" ] ||
+        fail "no seeded store at $scratch; scratch-server serves it once another script has created it (for .local/showcase: just board-drive-showcase reset)"
+    # One server per store: the port the last run wrote must not answer,
+    # so that port always names the server a reset has to wait for.
+    saved="$(saved_port)"
+    [ -z "$saved" ] || ! listening "$saved" ||
+        fail "$scratch is already being served on 127.0.0.1:$saved; stop that server first"
+fi
 
-listening() {
-    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
-}
 [ "$port" != 8750 ] || fail "port 8750 is the default server.bind (a real server or the Docker stack); pick another --port"
 ! listening "$port" || fail "something is already listening on 127.0.0.1:$port; pick another --port"
 
-# joedocs with the scratch config and a clean environment: an exported
-# JOEDOCS__STORAGE__HOME, for example, would otherwise win over the file.
-jd() {
-    env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
-        JOEDOCS_CONFIG_FILE="$config" "$bin" "$@"
-}
-
-write_config() {
-    local hosts='"localhost", "127.0.0.1", "::1"' name
-    for name in "$@"; do
-        if [ -n "$name" ]; then hosts="$hosts, \"$name\""; fi
-    done
-    cat >"$config" <<TOML
-# Written by scripts/scratch-server.sh on every run; changes here are lost.
-[server]
-bind = "127.0.0.1:$port"
-allowed_hosts = [$hosts]
-
-[storage]
-home = "$scratch/vault"
-state_dir = "$scratch/state"
-
-[admin]
-enabled = true
-web_ui = true
-TOML
-}
-
 # Whatever ends the script stops the server started for seeding and
 # removes the one `tailscale serve` entry this run added.
-seed_pid=""
 served=false
-stop_seed_server() {
-    if [ -n "$seed_pid" ]; then
-        kill "$seed_pid" 2>/dev/null || true
-        wait "$seed_pid" 2>/dev/null || true
-        seed_pid=""
-    fi
-}
 cleanup() {
-    stop_seed_server
+    stop_server
     if $served; then
         "$tailscale" serve --https="$https_port" off >/dev/null 2>&1 ||
             echo "scratch-server: could not remove the serve entry; run: tailscale serve --https=$https_port off" >&2
         served=false
     fi
+    store_unlock
 }
 trap cleanup EXIT
-# Ctrl-C (or SIGTERM) while the server runs is how it is meant to stop, so
-# that ends the script cleanly (status 0, which `just` does not report as a
-# failure); during the build or the seeding it is an interruption (130).
+# Ctrl-C (or SIGTERM, or SIGHUP when the terminal closes) while the server
+# runs is how it is meant to stop, so that ends the script cleanly (status
+# 0, which `just` does not report as a failure); during the build or the
+# seeding it is an interruption (130).
 serving=false
 stopped() {
     if $serving; then exit 0; fi
     exit 130
 }
-trap stopped INT TERM
+trap stopped INT TERM HUP
 
 if $fresh && [ -d "$scratch" ]; then
     echo "scratch-server: removing $scratch"
@@ -170,21 +171,11 @@ seed() {
     local token
     jd project add demo --key DEMO --title "Demo" >/dev/null
     jd project add sandbox --key SBX --title "Sandbox" >/dev/null
-    token="$(jd key create scratch-seed --grant demo:write --grant sandbox:write | tail -n 1)"
-    # Not through jd: in a function, $! would be a subshell, and killing it
-    # would leave the server running. env replaces itself with joedocs.
-    env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" \
-        JOEDOCS_CONFIG_FILE="$config" "$bin" serve >"$scratch/seed-server.log" 2>&1 &
-    seed_pid=$!
-    local tries=0
-    until curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; do
-        tries=$((tries + 1))
-        [ "$tries" -le 30 ] || fail "the server did not start; see $scratch/seed-server.log"
-        sleep 1
-    done
+    token="$(token_for scratch-seed demo:write sandbox:write)"
+    start_server "$scratch/seed-server.log"
     (cd "$root" && SCRATCH_MCP_URL="http://127.0.0.1:$port/mcp" SCRATCH_TOKEN="$token" \
         cargo run --locked --quiet --example scratch_seed)
-    stop_seed_server
+    stop_server
     touch "$scratch/seeded"
 }
 
@@ -212,11 +203,18 @@ fi
 if $first_run; then
     echo "  User: dev   one-time password: $password"
     echo "  The first sign-in sets a password and an authenticator (scan the QR code)."
+elif [ "$scratch" != "$default_store" ]; then
+    echo "  User: dev (its one-time password came from the script that created the store). To start its sign-in again:"
+    echo "    JOEDOCS_CONFIG_FILE=$config $bin user reset-password dev   (or reset-totp dev)"
 else
     echo "  User: dev (set up earlier). To start its sign-in again:"
     echo "    JOEDOCS_CONFIG_FILE=$config $bin user reset-password dev   (or reset-totp dev)"
 fi
-echo "  Stop with Ctrl-C; start over with: just scratch-server fresh"
+if [ "$scratch" != "$default_store" ]; then
+    echo "  Stop with Ctrl-C"
+else
+    echo "  Stop with Ctrl-C; start over with: just scratch-server fresh"
+fi
 echo
 
 serving=true

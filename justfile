@@ -140,7 +140,12 @@ docker-test port="18750":
 scratch-server *args:
     scripts/scratch-server.sh {{args}}
 
-# Drive an open Board on a running scratch-server with a scripted run of agent writes, the Board's demo (args: --port N; DRIVE_PAUSE_MS=3000)
+# Drive an open Board on a running scratch-server with a scripted run of agent writes, the Board's demo (args: --port N; DRIVE_PAUSE_MS=3000, 0 waits for a keystroke)
 [continue]
 board-drive *args:
     scripts/board-drive.sh {{args}}
+
+# The Board showcase for the README media, on its own store in .local/showcase: three projects, four agents (args: reset, serve, or none to play; --port N; serve also takes --https-port N, --no-tailscale; DRIVE_PAUSE_MS=3000, 0 waits for a keystroke)
+[continue]
+board-drive-showcase *args:
+    scripts/board-drive-showcase.sh {{args}}

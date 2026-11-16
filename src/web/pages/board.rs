@@ -551,10 +551,27 @@ fn attention(store: &Store, projects: &[String]) -> Result<HashMap<String, Strin
 /// A plan's build, as its builder records it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Building {
-    /// `implementation_status`: `in-progress` or `blocked`.
+    /// `implementation_status`: one of [`BUILDING_STATES`].
     state: String,
     /// `current_step` when it is a string, cut to [`STEP_CHARS`].
     step: Option<String>,
+}
+
+/// The `implementation_status` values of a plan being built: building its
+/// steps, stopped on a blocker, paused for the user, or building an
+/// amendment's steps.
+const BUILDING_STATES: [&str; 4] = ["in-progress", "blocked", "waiting-for-user", "fixing"];
+
+impl Building {
+    /// How the mark names a state other than plain building.
+    fn phrase(&self) -> Option<&'static str> {
+        match self.state.as_str() {
+            "blocked" => Some("blocked"),
+            "waiting-for-user" => Some("waiting for you"),
+            "fixing" => Some("fixing"),
+            _ => None,
+        }
+    }
 }
 
 /// The longest `current_step` a card shows, in characters.
@@ -569,7 +586,7 @@ fn building(store: &Store, projects: &[String]) -> Result<HashMap<String, Buildi
     if !store.settings().types.iter().any(|t| t == "plans") {
         return Ok(found);
     }
-    for state in ["in-progress", "blocked"] {
+    for state in BUILDING_STATES {
         for id in matching(
             store,
             projects,

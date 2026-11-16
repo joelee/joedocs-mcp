@@ -5,24 +5,20 @@
 //!
 //! Reads the MCP endpoint from `SCRATCH_MCP_URL`, an API key with write on
 //! the `demo` and `sandbox` projects from `SCRATCH_TOKEN`, and the pause
-//! between steps from `DRIVE_PAUSE_MS` (default 3000). Writes one line per
-//! step on standard error, and on standard output the ID of the document it
-//! archived last, for the script to restore with a local `joedocs` command
-//! (a write from another process).
+//! between steps from `DRIVE_PAUSE_MS` (default 3000; `0` waits for a
+//! keystroke instead). Writes one line per step on standard error, and on
+//! standard output the ID of the document it archived last, for the script
+//! to restore with a local `joedocs` command (a write from another process).
 
-use std::error::Error;
+#[path = "common/drive.rs"]
+mod drive;
+
 use std::io::Write as _;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation};
-use rmcp::service::RunningService;
-use rmcp::transport::StreamableHttpClientTransport;
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use rmcp::{RoleClient, ServiceExt as _};
 use serde_json::{Value, json};
 
-type Client = RunningService<RoleClient, ClientConfig>;
-type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+use drive::{Client, Pause, Result};
 
 /// How many documents the burst moves, about 200 ms apart.
 const BURST: usize = 10;
@@ -30,7 +26,7 @@ const BURST: usize = 10;
 /// A run against one server.
 struct Drive {
     client: Client,
-    pause: Duration,
+    pause: Pause,
     started: Instant,
     /// Makes this run's titles unique, so runs can repeat on one store.
     run: u64,
@@ -40,24 +36,9 @@ struct Drive {
 async fn main() -> Result<()> {
     let url = std::env::var("SCRATCH_MCP_URL").map_err(|_| "SCRATCH_MCP_URL is not set")?;
     let token = std::env::var("SCRATCH_TOKEN").map_err(|_| "SCRATCH_TOKEN is not set")?;
-    let pause = std::env::var("DRIVE_PAUSE_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3000);
-    // reqwest is built with rustls but no crypto provider, as in the tests.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let transport = StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(url).auth_header(token),
-    );
-    let client = ClientConfig::new(
-        ClientCapabilities::default(),
-        Implementation::new("board-drive", "1.0"),
-    )
-    .serve(transport)
-    .await?;
     let drive = Drive {
-        client,
-        pause: Duration::from_millis(pause),
+        client: drive::connect(&url, &token, "board-drive").await?,
+        pause: Pause::from_env(),
         started: Instant::now(),
         run: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -85,40 +66,29 @@ impl Drive {
         Ok(())
     }
 
-    async fn wait(&self) {
-        tokio::time::sleep(self.pause).await;
+    /// The pause before the step `next`.
+    async fn wait(&self, next: &str) -> Result<()> {
+        self.pause.wait(next).await
     }
 
-    /// Calls `tool`, failing on a tool error, and returns its result.
+    /// Two pauses, after a burst: one keystroke when keys drive the run.
+    async fn long_wait(&self, next: &str) -> Result<()> {
+        if let Pause::Timed(_) = self.pause {
+            self.pause.wait(next).await?;
+        }
+        self.pause.wait(next).await
+    }
+
     async fn call(&self, tool: &str, args: Value) -> Result<Value> {
-        let args = args.as_object().cloned().unwrap_or_default();
-        let result = self
-            .client
-            .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(args))
-            .await?;
-        let content = result.structured_content.unwrap_or(Value::Null);
-        if result.is_error == Some(true) {
-            return Err(format!("{tool} failed: {content}").into());
-        }
-        Ok(content)
+        drive::call(&self.client, tool, args).await
     }
 
-    /// Sets front matter keys on `id`, and removes `remove`.
     async fn front(&self, id: &str, set: Value, remove: &[&str]) -> Result<()> {
-        let mut args = json!({"document_id": id, "set": set});
-        if !remove.is_empty() {
-            args["remove"] = json!(remove);
-        }
-        self.call("change_document_front_matter", args).await?;
-        Ok(())
+        drive::front(&self.client, id, set, remove).await
     }
 
     async fn create(&self, args: Value) -> Result<String> {
-        let made = self.call("new_document", args).await?;
-        Ok(made["document_id"]
-            .as_str()
-            .ok_or("new_document returned no document_id")?
-            .to_owned())
+        drive::create(&self.client, args).await
     }
 
     /// A plan is drafted, lit for approval, reviewed and approved.
@@ -132,7 +102,7 @@ impl Drive {
             }))
             .await?;
         self.say(&format!("created {plan} (plans, draft)"))?;
-        self.wait().await;
+        self.wait("attention on the plan").await?;
         self.front(
             &plan,
             json!({"attention": "Waiting for your approval"}),
@@ -140,14 +110,14 @@ impl Drive {
         )
         .await?;
         self.say(&format!("{plan}: attention set"))?;
-        self.wait().await;
+        self.wait("draft -> review").await?;
         self.front(&plan, json!({"status": "review"}), &[]).await?;
         self.say(&format!("{plan}: draft -> review"))?;
-        self.wait().await;
+        self.wait("review -> approved").await?;
         self.front(&plan, json!({"status": "approved"}), &["attention"])
             .await?;
         self.say(&format!("{plan}: review -> approved, attention removed"))?;
-        self.wait().await;
+        self.wait("the builder starts").await?;
         Ok(plan)
     }
 
@@ -161,7 +131,7 @@ impl Drive {
         )
         .await?;
         self.say(&format!("{plan}: the builder picked it up (STEP-01)"))?;
-        self.wait().await;
+        self.wait("STEP-02").await?;
         for n in 2..=3 {
             self.call(
                 "append_to_document",
@@ -171,9 +141,11 @@ impl Drive {
             self.front(plan, json!({"current_step": format!("STEP-0{n}")}), &[])
                 .await?;
             self.say(&format!("{plan}: edited, now at STEP-0{n}"))?;
-            tokio::time::sleep(self.pause / 2).await;
+            self.pause
+                .half(if n == 2 { "STEP-03" } else { "the burst" })
+                .await?;
         }
-        self.wait().await;
+        self.wait("the burst").await?;
         Ok(())
     }
 
@@ -200,8 +172,7 @@ impl Drive {
             self.front(id, json!({"status": to}), &[]).await?;
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        self.wait().await;
-        self.wait().await;
+        self.long_wait("an issue arrives in sandbox").await?;
         Ok(ids)
     }
 
@@ -217,7 +188,7 @@ impl Drive {
             }))
             .await?;
         self.say(&format!("created {issue} in sandbox, with attention"))?;
-        self.wait().await;
+        self.wait("the burst back").await?;
         Ok(issue)
     }
 
@@ -231,8 +202,7 @@ impl Drive {
             self.front(id, json!({"status": "draft"}), &[]).await?;
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        self.wait().await;
-        self.wait().await;
+        self.long_wait("the build completes").await?;
         Ok(())
     }
 
@@ -245,10 +215,10 @@ impl Drive {
         )
         .await?;
         self.say(&format!("{plan}: build completed, awaiting sign-off"))?;
-        self.wait().await;
+        self.wait("approved -> done").await?;
         self.front(plan, json!({"status": "done"}), &[]).await?;
         self.say(&format!("{plan}: approved -> done (closed)"))?;
-        self.wait().await;
+        self.wait("the issue is archived").await?;
         self.call(
             "archive_document",
             json!({"document_id": issue, "reason": "Board drive"}),

@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **`just board-drive-showcase`** (developers): the Board staged for recording, on a store of its own (`.local/showcase`). `reset` creates it with three projects and four agents on two machines (`laptop-claude`, `laptop-opencode`, `mac-claude`, `mac-codex`), keeping the user `dev` with its password and authenticator from one reset to the next. `serve` serves it, and with no argument it plays one feature from idea to done across them: an idea, its plan, the build from STEP-01 to STEP-05 and the sign-off, beside another agent's plan and background edits. It prints the Board address and writes a log per agent. See the developer guide.
+- **`SCRATCH_DIR` for `just scratch-server`** (developers): serves another seeded store directly under `.local/`, such as the showcase's.
+
+### Changed
+
+- **The Board's 🏗️ mark** also shows for an approved plan whose `implementation_status` is `waiting-for-user` (paused for you) or `fixing` (building an amendment's steps), as well as `in-progress` and `blocked`, and its label and tooltip name the state ("Being built, waiting for you, STEP-02").
+- **Agent skills: plans with amendments.** `joedocs-planner` now writes a plan as a multi-file document: the plan, fixed once approved, and `builder/steps.md` and `builder/log.md`, which only `joedocs-builder` writes. After a build, the planner records the reviews you name (`reviews`, `implementation_status: in-review`) and puts the fixes or additions you agree into an **amendment** of the plan (`amendments/NN-<slug>`, steps `AMD01-01`, ...), approved on its own, which the builder builds on the same branch (`fixing`) without touching the plan's approval; your sign-off closes the plan with its amendments. `implementation_status` gains `waiting-for-user`, `in-review` and `fixing`, and `joedocs-code-review` reviews against a plan's approved amendments too. Plans written before keep working as before. See `docs/skills/README.md`.
+- **`just scratch-server`** (developers): one run per store. Each run locks its store (`.local/<store>.lock`) until it stops, so a second run on the same store, such as `fresh` beside a running server, stops before it wipes or builds anything. A lock left by a process that has ended is taken over.
+- **`just board-drive`** (developers): `DRIVE_PAUSE_MS=0` (`00` too) now waits for a keystroke before each step, instead of not pausing, so a demo can be narrated; it needs a terminal. Other values keep the timed pauses.
+
 ## [0.5.5] - 2026-11-14
 
 A live Board in the web interface: the documents of several projects as cards in status columns, kept up to date as agents work, with a light for what needs you and a mark for plans being built. Three new configuration keys, and the agent skills mark what needs you. MCP tools and the database are unchanged.
