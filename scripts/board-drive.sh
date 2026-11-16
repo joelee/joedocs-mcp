@@ -37,6 +37,10 @@ pause_ms=$((10#$pause_ms))
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 scratch="${SCRATCH_DIR:-$root/.local/scratch}"
+# A relative store is taken from the directory the script runs in (the
+# repository root under just), as scratch-server takes it.
+case "$scratch" in /*) ;; *) scratch="$PWD/$scratch" ;; esac
+while [ "$scratch" != / ] && [ "${scratch%/}" != "$scratch" ]; do scratch="${scratch%/}"; done
 config="$scratch/config.toml"
 bin="$root/target/debug/joedocs"
 [ -f "$config" ] && [ -e "$scratch/seeded" ] ||

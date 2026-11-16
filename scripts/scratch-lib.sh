@@ -1,10 +1,15 @@
 # Shared by the scratch tooling in scripts/: sourced, never run. Bash on
 # Linux and macOS: no GNU-only options, no jq or python.
 #
-# The caller sets `scratch` (the store directory), `config` (its
-# config.toml) and `bin` (the joedocs binary) before sourcing it, and
-# defines `fail MESSAGE`, which prints the message with the script's name
-# and exits 1.
+# The caller sets `scratch` (the store directory) and `config` (its
+# config.toml), both absolute paths, and `bin` (the joedocs binary) before
+# sourcing it, and defines `fail MESSAGE`, which prints the message with the
+# script's name and exits 1.
+
+# Every joedocs here runs in the store directory, so a relative path would
+# name another file there.
+case "$scratch" in /*) ;; *) fail "scratch (the store directory) must be an absolute path, not \"$scratch\"" ;; esac
+case "$config" in /*) ;; *) fail "config (the store's config.toml) must be an absolute path, not \"$config\"" ;; esac
 
 # joedocs reads a .env file in its working directory, whose JOEDOCS__*
 # values win over the config file, so every joedocs here runs in the store
