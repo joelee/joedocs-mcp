@@ -41,7 +41,7 @@ Working documents go in JoeDocs, and only there:
 | `plans` | Delivery plans (multi-file: the plan, its amendments, and the builder's `builder/steps.md` and `builder/log.md`) | `joedocs-planner`; the builder writes only its two files and its front matter keys |
 | `reviews` | Code reviews and their findings | `joedocs-code-review` |
 | `issues` | Bugs, regressions and incidents | `joedocs-issue-log` |
-| `research` | Research notes with their sources | an agent asked to research |
+| `research` | A research, as one multi-file document: brief, plan, sources, notes, synthesis, report, critiques, and the coordinator's state | `joedocs-research-coordinator` and the skills it dispatches (beta); `joedocs-research-critic` also on its own |
 | `specs` | Specifications and decision records | an agent asked to write one |
 | `notes` | Anything else worth keeping: meeting notes, backlogs, session notes | an agent asked to take notes |
 | `home` | The project's landing page | the user, or an agent asked to write it |
@@ -67,6 +67,8 @@ The usual path is: idea, accepted by the user; plan, approved by the user; build
 Approval belongs to the user. Accept an idea, approve a plan or an amendment, or mark a plan `done`, only when the user says so. A plan's `approved` means approved and being built, reviewed and amended, and is not closed; `done` means implemented and closed, with its approved amendments, and is set only on the user's explicit sign-off, never because the build finished (`implementation_status: completed`). What the user approved never changes afterwards: an amendment adds work beside it. `parked`, when the server has it, is work the user has set aside to come back to later: an idea, a draft plan or an open issue, and only on the user's decision.
 
 The `attention` front matter key holds a short reason that a document needs the user now (a decision, an approval, a review, a sign-off). The Board lights such cards. Set it only when the user is needed, and remove it (`change_document_front_matter` with `remove`) as soon as they have answered; never leave it set as a reminder.
+
+Research (beta) has its own path: the user talks to `joedocs-research-coordinator`, which writes the brief and plan, dispatches `joedocs-research-scout` and `joedocs-research-writer`, has `joedocs-research-critic` check and critique the report, and stops for the user's approval at each checkpoint. Never run the scout or writer yourself; send the user to the coordinator.
 
 The skills are a route, not a gate. A small, direct change that the user asks for (a typo, a one-line fix, a dependency bump, a question about the code) can be done without an idea or a plan. For anything larger, offer the planner, but do as the user decides.
 

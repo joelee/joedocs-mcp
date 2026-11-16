@@ -219,7 +219,7 @@ One multi-file document of type `research`, titled `Research - <topic>`, in the 
 
 **IDs:** research questions `RQ-NN`, tasks `T-NNN`, sources `S-NNN`, claims `C-NN`; in a critique file, findings `RN-CRIT-NN`, `RN-MAJ-NN`, `RN-MED-NN`, `RN-LOW-NN` (round N), cited from outside as `critiques/methodology-claude R1-MAJ-02`.
 
-**Output stamps:** every file a specialist writes carries in its front matter `skill`, `task` (when dispatched), `complete` (`false` while it is being written, `true` when finished), and what it read (`report_revision` for a critique).
+**Output stamps:** every file a specialist writes carries in its front matter `skill`, `task` (when dispatched), `complete` (`true` only when finished; a file written in one call carries `true` at once), and what it read (`report_revision` for a critique). A `notes/RQ-NN` file gathers several scout tasks, so it lists the finished ones in `tasks_complete`; a scout task is done only when its ID is there.
 
 **Status:** `draft` until you approve the plan at CP2; `approved` while the research runs; `done` when you approve the final report at CP7; `parked` or `rejected` on your word.
 
@@ -280,7 +280,7 @@ The coordinator holds nothing that matters only in its session:
   | T-001 | joedocs-research-scout | RQ-01, sub-question 1 | `plan` r12 | `sources/`, `notes/RQ-01` | `dispatched` | ... | - |
 
   Status is `dispatched`, then `done`, `lost` or `cancelled`. A re-dispatch is a new row naming the task it replaces.
-- **The lease.** On start the coordinator sets `coordinator_lease_by` (host and a session tag) and `coordinator_lease_at`, and renews them at each main-file write. A live lease (younger than the plan's lease limit, default 2 hours) held by another session stops a second coordinator; an older one is taken over only after you confirm. Every write passes `expected_revision`, so two writers of one file never overwrite each other unnoticed.
+- **The lease.** When it starts working the coordinator sets `coordinator_lease_by` (host and a session tag) and `coordinator_lease_at`, renews them at each main-file write, and removes them whenever it stops to wait for you, so your answer can come from any session. A live lease (younger than the plan's lease limit, default 2 hours) held by another session stops a second coordinator; an older one is taken over only after you confirm. Every write passes `expected_revision`, so two writers of one file never overwrite each other unnoticed.
 - **Resuming.** Asked to resume, the coordinator reads the main file, `coordinator/state`, `coordinator/tasks`, the end of `coordinator/log` and the file list; claims the lease; marks each `dispatched` task `done` when its outputs say `complete: true`, else `lost` and dispatches it again (the scout skips sources it already has); lists critique rounds not yet answered in `responses/`; tells you where things stand; and carries on. When the files and the ledger disagree with `coordinator/state`, the files win and the state is rewritten.
 
 ### Dispatch

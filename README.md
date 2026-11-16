@@ -191,7 +191,8 @@ flowchart LR
 Planned:
 
 - Members and key ownership for user accounts: users who manage only their own MCP keys, within the projects an admin grants them, and keys stopped with their owner.
-- More agent skills: research notes, decision records, a session journal and a gardener.
+- The research workflow skills out of beta (shipped as beta in 0.5.6: a coordinator, a scout, a writer and a critic, with your approval at each checkpoint), after a live trial.
+- More agent skills: decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
 - More ways to install: `cargo binstall joedocs` (the release binaries, no compiling), an Arch Linux AUR package `joedocs-bin`, and a container image on GitHub Container Registry, published with each release.
 
