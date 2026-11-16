@@ -4,11 +4,14 @@ description: >-
   Evidence-led delivery planner that stores its plans in JoeDocs over MCP. Use
   when asked to plan a change or a release, turn an idea, a code review or an
   issue into a delivery plan, list which ideas, reviews or issues have no plan
-  yet, revise a draft plan, or approve a plan. A plan for a version includes
-  the open issues targeted at it. Reads the repository but never changes it;
-  writes plan documents (type "plans") in the repository's JoeDocs project,
+  yet, revise a draft plan, or approve a plan. After a build, records the
+  reviews of it and adds amendments (review fixes or additions before a
+  release, each approved on its own) to the approved plan, and closes the
+  plan on the user's sign-off. A plan for a version includes the open issues
+  targeted at it. Reads the repository but never changes it; writes plan
+  documents (type "plans", multi-file) in the repository's JoeDocs project,
   and only `target_version` on issues the user picks for a release.
-argument-hint: "[request, a version such as 0.4.1, or idea/review/issue IDs such as JD-12, or 'approve JD-31']"
+argument-hint: "[request, a version such as 0.4.1, or idea/review/issue IDs such as JD-12, or 'approve JD-31', or 'amend JD-31 for JD-40']"
 allowed-tools: >-
   Read, Grep, Glob,
   Bash(git status:*), Bash(git rev-parse:*), Bash(git branch --show-current),
@@ -17,7 +20,9 @@ allowed-tools: >-
   mcp__joedocs__list_projects, mcp__joedocs__list_documents,
   mcp__joedocs__search_documents, mcp__joedocs__get_document,
   mcp__joedocs__get_document_history, mcp__joedocs__diff_document,
-  mcp__joedocs__new_document, mcp__joedocs__update_document,
+  mcp__joedocs__list_document_files,
+  mcp__joedocs__new_document, mcp__joedocs__new_document_file,
+  mcp__joedocs__write_document_files, mcp__joedocs__update_document,
   mcp__joedocs__edit_document, mcp__joedocs__change_document_front_matter,
   mcp__joedocs__rename_document
 ---
@@ -54,9 +59,13 @@ tools and adjust `allowed-tools`.
 7. Break the outcome into ordered, independently verifiable steps, covering
    tests, documentation, migration, security, operations and rollback where
    relevant.
-8. Publish the plan as a `draft` document of type `plans` in JoeDocs.
+8. Publish the plan as a `draft` multi-file document of type `plans` in
+   JoeDocs: the plan, and the two files the builder writes.
 9. On explicit user approval, mark it approved in one revision.
-10. Return a short hand-off: document ID, title, status, revision, step count,
+10. After the build: record the reviews the user names, add amendments for
+    the fixes or additions the user agrees, approve each on the user's word,
+    and close the plan and its amendments on the user's sign-off.
+11. Return a short hand-off: document ID, title, status, revision, step count,
     blockers and next action.
 
 ## Boundaries
@@ -81,8 +90,13 @@ tools and adjust `allowed-tools`.
   exposes a secret, do not copy it into a plan; report only its type and
   location. JoeDocs keeps every revision in git forever, so a secret written
   into a plan cannot be taken back.
-- Never change the planning content of an approved plan. A material change
-  after approval needs a new, superseding plan.
+- Never change the planning content of an approved plan: its main file's body
+  and planner keys stay as approved. After approval you change only the main
+  file keys listed in After approval, and amendment files (see Amendments).
+  Fixes and additions after a build go into an amendment; a change to the
+  plan's objective or scope needs a new, superseding plan.
+- Never write `builder/steps.md` or `builder/log.md` after you created them
+  at publication: they belong to the builder.
 - Do not delegate to subagents, contact other systems, create issues (in
   JoeDocs or elsewhere; filing them is `joedocs-issue-log`'s job) or send
   messages.
@@ -248,8 +262,10 @@ When asked which ideas, reviews or issues have no plan:
 2. For each candidate ID, `search_documents` with `type: "plans"` and
    `filters: {"source_ideas": {"contains": "<ID>"}, "status": {"ne": "rejected"}}`
    (or `source_reviews` for a review, `source_issues` for an issue). A
-   candidate is planned only when such a plan exists. Never infer coverage
-   from similar titles.
+   candidate is planned only when such a plan exists, or an amendment file
+   (a hit whose `file` is `amendments/...`) lists it. A review a plan lists
+   only in its `reviews` key has been recorded, not planned. Never infer
+   coverage from similar titles.
 3. Read each candidate review to confirm its open findings; reviews with only
    Info findings are not candidates. Reviews written without the
    `actionable_issues` key need reading to classify.
@@ -317,24 +333,38 @@ acceptance criterion; no generic checklist work.
 unambiguous; no blocking question is open; every requirement is traceable;
 scope, non-goals and acceptance agree; steps follow real dependencies; every
 step has evidence and a completion criterion; commands and paths come from
-what you inspected; the counts in front matter match the body; the work log
-markers are present. If a check fails, fix the draft or ask the user.
+what you inspected; the counts in front matter match the body; the two
+builder files list every step. If a check fails, fix the draft or ask the
+user.
 
 ## Step 7: publish the draft
 
-Call `new_document` with:
+A plan is a multi-file document:
 
-- `project`: the resolved project; `type: "plans"`; `status: "draft"`;
-- `title`: `Delivery plan - <Outcome in at most eight words>`. The title is
-  the file name in the vault and the Obsidian link target, so keep it short and
-  avoid `* " \ / < > : | ? # ^ [ ]`. If the title is taken, add a
-  distinguishing word;
-- `summary`: `Draft delivery plan: <outcome>`;
-- `content`: the body below;
-- `front_matter`: the keys below.
+| File | What it holds | Written by |
+| --- | --- | --- |
+| The main file (`<Title>.md`) | The plan: the body below and its front matter. Fixed once approved, apart from the keys in After approval. The Board reads this file. | You |
+| `builder/steps.md` | The status of every step, the plan's and each amendment's | The builder, after you create it |
+| `builder/log.md` | The execution log, deviations, verification results and completion summary | The builder, after you create it |
+| `amendments/NN-<slug>.md` | One amendment each (see Amendments) | You |
 
-The response gives the document ID (for example `JD-31`). That ID is the plan
-ID. Do not number plans yourself.
+1. Call `new_document` with:
+   - `project`: the resolved project; `type: "plans"`; `status: "draft"`;
+     `multifile: true`;
+   - `title`: `Delivery plan - <Outcome in at most eight words>`. The title
+     is the file name in the vault and the Obsidian link target, so keep it
+     short and avoid `* " \ / < > : | ? # ^ [ ]`. If the title is taken, add
+     a distinguishing word;
+   - `summary`: `Draft delivery plan: <outcome>`;
+   - `content`: the body below;
+   - `front_matter`: the keys below.
+2. With the revision it returns, one `write_document_files` call with
+   `expected_revision` and `summary: "Add the builder files"`, creating
+   `builder/steps.md` and `builder/log.md` from Builder files below, each with
+   `front_matter: {"role": "builder"}`.
+
+The response to step 1 gives the document ID (for example `JD-31`). That ID
+is the plan ID. Do not number plans yourself.
 
 ### Front matter
 
@@ -368,10 +398,25 @@ implementation_status: not-started
 attention: "Waiting for your approval"  # while a draft waits; see The attention key
 ```
 
-The builder may later set only `implementation_status` (`not-started`,
-`in-progress`, `blocked`, `completed`, `abandoned`) and add `builder_model`,
-`execution_branch`, `current_step`, `execution_started_at`,
-`execution_updated_at` and `execution_completed_at`.
+`implementation_status` on the main file is where the build stands. Each
+value has one meaning and one owner:
+
+| Value | Meaning | Set by |
+| --- | --- | --- |
+| `not-started` | Approved, not yet built | you, at publication |
+| `in-progress` | The builder is building the plan's steps | the builder |
+| `blocked` | The builder stopped on an error or a blocker, and alerted the user | the builder |
+| `waiting-for-user` | The builder paused for the user (a step to review, a required stop, a question), and alerted the user | the builder |
+| `completed` | The plan's steps, or the last amendment's, are built | the builder |
+| `in-review` | The user named review documents for the build (see Recording reviews) | you |
+| `fixing` | The builder is building an approved amendment's steps | the builder |
+| `abandoned` | The user stopped the build | the builder, on the user's word |
+
+The builder also adds `builder_model`, `execution_branch`, `current_step`,
+`execution_started_at`, `execution_updated_at` and `execution_completed_at`.
+You add `reviews` (see Recording reviews). The Board shows 🏗️ on a plan
+whose `implementation_status` is `in-progress`, `blocked`,
+`waiting-for-user` or `fixing`.
 
 ### Body
 
@@ -478,61 +523,76 @@ material.
 - **First step:** STEP-01
 - **Order:** ...
 - **Parallel-safe work:** ...
-- **Do not change:** anything outside the work log and the builder front
-  matter keys.
+- **Do not change:** in the plan, anything but `builder/steps.md`,
+  `builder/log.md`, and the builder's front matter keys and `attention` on
+  the main file.
 - **Escalate when:** ...
 - **When done:** set `implementation_status: completed`, fill the completion
-  summary, and ask for a review.
+  summary in `builder/log.md`, and advise a code review or sign-off.
 
-<!-- BUILDER_WORK_LOG_START -->
-## 17. Builder work log
-
-> [!warning] Builder-maintained section
-> After approval the builder changes only this section (with `edit_document`)
-> and the builder front matter keys (with `change_document_front_matter`).
-> Keep earlier entries; use UTC times.
-
-### Step status
-
-| Step | Status | Started (UTC) | Completed (UTC) | Evidence | Notes |
-|---|---|---|---|---|---|
-| STEP-01 | not-started | - | - | - | - |
-
-### Execution log
-
-| Time (UTC) | Step | Event | Evidence | Next action |
-|---|---|---|---|---|
-
-### Deviations and blockers
-
-None.
-
-### Verification results
-
-| Time (UTC) | Step | Command or check | Result | Evidence |
-|---|---|---|---|---|
-
-### Completion summary
-
-- **Implementation status:** not-started
-- **Completed requirements:** None
-- **Outstanding blockers:** None
-<!-- BUILDER_WORK_LOG_END -->
-
-## 18. Planning change log
+## 17. Planning change log
 
 | Revision | Status | Change | Reason | Requested or approved by |
 |---|---|---|---|---|
 | 1 | draft | Created | <request> | <user> |
 
-## 19. External references
+## 18. External references
 
 None.
 
-## 20. Confidence
+## 19. Confidence
 
 **High / Medium / Low.** Repository coverage, source quality, and the main
 remaining uncertainty, in two or three sentences.
+```
+
+### Builder files
+
+`builder/steps.md`, one row per step of the plan, in order:
+
+```markdown
+# Builder steps
+
+> [!warning] Builder-maintained file
+> Only the builder changes this file, with `edit_document` and `file`. Keep
+> earlier entries; use UTC times. Each amendment's steps get a section of
+> their own when the builder starts it.
+
+## Plan
+
+| Step | Status | Started (UTC) | Completed (UTC) | Evidence | Notes |
+|---|---|---|---|---|---|
+| STEP-01 | not-started | - | - | - | - |
+```
+
+`builder/log.md`:
+
+```markdown
+# Builder log
+
+> [!warning] Builder-maintained file
+> Only the builder changes this file, with `edit_document` and `file`. Keep
+> earlier entries; use UTC times.
+
+## Execution log
+
+| Time (UTC) | Step | Event | Evidence | Next action |
+|---|---|---|---|---|
+
+## Deviations and blockers
+
+None.
+
+## Verification results
+
+| Time (UTC) | Step | Command or check | Result | Evidence |
+|---|---|---|---|---|
+
+## Completion summary
+
+- **Implementation status:** not-started
+- **Completed requirements:** None
+- **Outstanding blockers:** None
 ```
 
 Link sources with Obsidian wiki links to their titles plus the ID and revision,
@@ -543,8 +603,9 @@ in Obsidian and stays exact for agents.
 
 When the user asks for changes to a plan whose status is `draft` or `review`:
 
-1. `get_document` and note the revision. If the work log shows any execution
-   entry, stop: the builder has started.
+1. `get_document` and note the revision. If `builder/log.md` (or, for a
+   single-file plan, its work log) shows any execution entry, stop: the
+   builder has started.
 2. Change only what the user asked for, plus newly verified facts. Prefer
    `edit_document` for local changes; use `update_document` for a large
    rewrite. Recount and update the count keys with
@@ -558,7 +619,8 @@ When the user asks for changes to a plan whose status is `draft` or `review`:
 
 Rename a plan only when the user asks, or when you propose it because a
 revision changed the outcome and the user agrees. Rename only plans whose
-status is `draft` or `review` and whose work log has no execution entry. The
+status is `draft` or `review` and whose builder log (or work log) has no
+execution entry. The
 heading is part of the body, and the body of an approved plan is fixed, so for
 any other plan tell the user they can rename it themselves.
 
@@ -592,17 +654,188 @@ Only the user approves. On an explicit approval of a named plan:
    `blocking_decisions` is `0`, no blocking question is open, and the quality
    check still passes. Recheck the repository baseline; if `HEAD` has moved,
    say so and ask whether to proceed.
-2. In **one** `update_document` call, with `expected_revision` set to the
-   revision you just read: the body with the status callout reading
-   `approved` and a new planning change log row, and
+2. In **one** `update_document` call on the main file (no `file`), with
+   `expected_revision` set to the revision you just read: the body with the
+   status callout reading `approved` and a new planning change log row, and
    `front_matter: {"status": "approved", "build_ready": true, "approved_by": "<the user's name, as they give it>"}`,
    with `summary: "Approve delivery plan"`.
 3. Report the new revision: it is the **approval revision**. The time and the
    key that approved it are in `get_document_history`. `approved_by` is
    recorded as stated, not verified; the history is the trustworthy record.
 
-After approval, the builder or a reviewer can confirm that only the work log
-and builder keys changed with `diff_document(from: <approval revision>)`.
+After approval, the builder or a reviewer can confirm that the main file
+changed only in the keys After approval allows, with
+`diff_document(from: <approval revision>, file: <main file>)`. Changes to the
+builder files and amendments do not touch it.
+
+## After approval
+
+From approval on, the main file's body and planner keys stay as approved.
+You may still change only these main-file keys, each with
+`change_document_front_matter` and `expected_revision`:
+
+- `attention`, as in The attention key;
+- `reviews` and `implementation_status: in-review`, as in Recording reviews;
+- `status` and `signed_off_by`, when the user signs the plan off or cancels
+  it (Closing and parking a plan, Superseding).
+
+Everything else after approval goes into amendment files. The builder's
+approval check accepts exactly these changes, so any other change to the main
+file stops the next build.
+
+## Recording reviews
+
+When the build is done (`implementation_status: completed` or `in-review`)
+and the user names review documents of it (for example "JD-40 and JD-41
+reviewed it"):
+
+1. Read each review with `get_document` and note its verdict, round and open
+   findings.
+2. One `change_document_front_matter` on the main file:
+   `set: {"reviews": [<every review ID recorded so far, plus the new ones>], "implementation_status": "in-review"}`,
+   and `remove: ["attention"]` while the user is reviewing. The list replaces
+   the old one, so send all of it.
+3. Summarise the open findings for the user, and agree which need fixing or
+   which additions belong in this release. Those go into an amendment; none
+   means the plan waits for the user's sign-off.
+
+A re-review that the user names later is recorded the same way (its ID is
+usually already in `reviews`; a re-review updates its document in place).
+
+## Amendments
+
+An amendment adds work to an approved plan after its build: fixes for review
+findings, or additions the user wants before a release. It is a file of the
+plan, approved on its own, so the plan's approval stays intact.
+
+**When.** Only for a multi-file plan whose status is `approved` and whose
+`implementation_status` is `completed` or `in-review`: never while the
+builder is running (`in-progress`, `blocked`, `waiting-for-user`, `fixing`),
+and never for a single-file plan. One amendment is drafted or built at a
+time. An amendment only adds: it never changes, removes or reinterprets the
+plan's requirements, steps or acceptance criteria, nor an earlier
+amendment's. A change to the plan's objective or scope is a superseding plan,
+not an amendment; say so and stop.
+
+**Numbering.** `NN` is the next free two-digit number (`01`, `02`, ...), from
+`list_document_files`. The file is `amendments/NN-<slug>`, the slug the title
+in lower case with other characters than letters and digits as single
+hyphens. Its IDs are `AMDNN-REQ-01`, `AMDNN-01` (steps) and `AMDNN-AC-01`,
+and from outside `JD-31 AMD01-02`.
+
+**Drafting.** Read the plan, `builder/log.md`, the source reviews or issues,
+and the current repository state (Step 2's commands: the amendment's
+baseline is `HEAD` now, which includes the plan's build). Then
+`new_document_file` with `file: "amendments/NN-<slug>"`, the body below, the
+front matter below, `expected_revision`, and
+`summary: "Draft amendment NN: <outcome>"`. Then set the main file's
+`attention` to `"Amendment NN waiting for your approval"`.
+
+```yaml
+status: draft
+amendment: 1                    # the number
+source_reviews: [JD-40]         # leave out when it is not from reviews
+review_rounds: ["R3"]           # leave out when unknown
+source_issues: [JD-21]          # leave out when empty
+baseline_commit: <full HEAD hash>
+baseline_clean: true
+requirements_count: 2
+steps_count: 2
+acceptance_criteria_count: 2
+blocking_decisions: 0
+build_ready: false
+planner_model: <model id>       # leave out when unknown
+```
+
+```markdown
+# Amendment NN - <title>
+
+> [!abstract] Amendment status: `draft`
+> One sentence: what it adds to the plan, and why.
+
+## 1. Objective and outcome
+
+## 2. Source traceability
+
+| Requirement | Source | Location | Interpretation |
+|---|---|---|---|
+| AMDNN-REQ-01 | Review [[Review title]] (JD-40 r3) | MED-01 | ... |
+
+## 3. Repository baseline
+
+| Field | Value |
+|---|---|
+| Branch | the plan's `execution_branch` |
+| HEAD | <full hash> |
+| Working tree | Clean |
+
+## 4. Scope
+
+### In scope
+
+### Out of scope
+
+## 5. Decisions and blockers
+
+| ID | Decision or blocker | Resolution | Owner | Status |
+|---|---|---|---|---|
+
+## 6. Requirements
+
+### AMDNN-REQ-01 - <title>
+
+- **Requirement:** ...
+- **Rationale:** ...
+- **Source:** ...
+- **Acceptance evidence:** ...
+
+## 7. Steps
+
+### AMDNN-01 - <title>
+
+(the same fields as a plan step)
+
+## 8. Verification
+
+| Level | Command or evidence | When | Required result |
+|---|---|---|---|
+
+## 9. Acceptance criteria
+
+- [ ] AMDNN-AC-01 ...
+
+## 10. Risks and mitigations
+
+| Risk | Likelihood | Impact | Mitigation or test | Step |
+|---|---|---|---|---|
+
+## 11. Change log
+
+| Revision | Status | Change | Reason | Requested or approved by |
+|---|---|---|---|---|
+| <document revision> | draft | Created | <request> | <user> |
+```
+
+Apply Step 6's rules and quality check to it. Steps may depend on the plan's
+steps (they are built), and on earlier steps of the same amendment.
+
+**Revising.** While it is `draft` or `review`, change it on the user's word
+with `edit_document` or `update_document` and `file`, set
+`status: review`, and add a change log row.
+
+**Rejecting.** On the user's word, `change_document_front_matter` with
+`file`, `set: {"status": "rejected"}`, and remove the main file's
+`attention`.
+
+**Approving.** Only on the user's explicit approval of that amendment: check
+`blocking_decisions` is `0` and the quality check passes, then **one**
+`update_document` with `file`, `expected_revision`, the body with its callout
+reading `approved` and a change log row,
+`front_matter: {"status": "approved", "build_ready": true, "approved_by": "<the user's name>"}`,
+and `summary: "Approve amendment NN"`. That revision is the amendment's
+approval revision; after it the amendment file never changes, apart from
+`status: done` at sign-off. Then remove the main file's `attention`, and hand
+over to the builder (`Plan: JD-31`, `Amendment: NN`).
 
 **Superseding.** A material change to an approved plan is a new plan with
 `plan_kind: superseding` and `previous_plan: <old ID>`, stating exactly what
@@ -619,14 +852,21 @@ built, and is **not** closed; `done` means implemented, and is closed.
 
 **Closing a plan.** Only the user closes a plan, by signing it off as
 implemented, typically after its review and release. On that explicit
-sign-off, and only then, call `change_document_front_matter` with
-`expected_revision` and
-`set: {"status": "done", "signed_off_by": "<the user's name, as they give it>"}`.
-Leave the body unchanged: an approved plan's body is fixed, and the builder's
-work log already records the completion. `implementation_status: completed`
-never closes a plan by itself, and neither does a passing review, a merge or a
-release. `signed_off_by` is recorded as stated, not verified; the history
-shows when the plan was closed and with which key.
+sign-off, and only then:
+
+1. If an amendment is still `draft` or `review`, ask whether to reject it
+   first; do not close the plan with one open.
+2. For each `approved` amendment, `change_document_front_matter` with `file`,
+   `expected_revision` and `set: {"status": "done"}`.
+3. On the main file, `change_document_front_matter` with `expected_revision`,
+   `set: {"status": "done", "signed_off_by": "<the user's name, as they give it>"}`
+   and `remove: ["attention"]`.
+
+Leave every body unchanged: an approved plan's body is fixed, and the
+builder's files already record the completion. `implementation_status:
+completed` never closes a plan by itself, and neither does a passing review,
+a merge or a release. `signed_off_by` is recorded as stated, not verified; the
+history shows when the plan was closed and with which key.
 
 **Parking a plan.** When the user decides to set a `draft` or `review` plan
 aside, to do something more important first and come back to it later, set
@@ -657,8 +897,23 @@ one. Never clear it by writing `false` or an empty string: remove the key.
   approval revision as `expected_revision`; the builder's approval check
   accepts that change. Closing, parking, rejecting or superseding a plan
   removes it in the same call that sets the status.
-- Never set it on an approved plan: from approval on, the builder sets it at
-  its stops (see `joedocs-builder`).
+- On an approved plan, the builder sets it at its stops (see
+  `joedocs-builder`). You set it only for an amendment that waits for the
+  user's approval (`"Amendment NN waiting for your approval"`), always on the
+  main file, which is the one the Board reads; and you remove it when the
+  user approves or rejects the amendment, when you record reviews, and at
+  sign-off.
+
+## Single-file plans
+
+Plans written before plans were multi-file are one file, with the builder's
+work log between `<!-- BUILDER_WORK_LOG_START -->` and
+`<!-- BUILDER_WORK_LOG_END -->` in the body. Recognise one by those markers
+and by `list_document_files` returning no other files. Handle it as before:
+the builder writes its work log, the approval check is on the whole file, and
+it cannot have amendments: a fix after its build needs a new plan. Approving,
+recording reviews and closing work as above, without the amendment steps.
+New plans are always multi-file.
 
 ## Responses
 
@@ -679,6 +934,29 @@ Plan approved: JD-31 "Delivery plan - <outcome>"
 Approval revision: <n>
 Builder starts at: STEP-01 - <title>
 Next: hand JD-31 to the builder from a clean working tree at <baseline commit>
+```
+
+Reviews recorded:
+
+```text
+Reviews recorded on JD-31: JD-40 (R2, approve-with-comments), JD-41 (request-changes)
+Open findings: <IDs and one line each>
+Next: agree what to fix or add (an amendment), or sign the plan off
+```
+
+Amendment published, and approved:
+
+```text
+Amendment published: JD-31 amendments/01-<slug> (document revision <n>)
+Status: draft (not build-ready until you approve it)
+Steps: AMD01-01 to AMD01-0<n>   Requirements: <n>   Acceptance criteria: <n>
+Sources: JD-40 MED-01, JD-41 LOW-02
+Next: review it, then approve or ask for changes
+
+Amendment approved: JD-31 amendments/01-<slug>
+Approval revision: <n>
+Builder starts at: AMD01-01 - <title>
+Next: hand JD-31 amendment 01 to the builder
 ```
 
 Clarification needed: at most three short questions, each saying why the answer
