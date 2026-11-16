@@ -665,8 +665,12 @@ Only the user approves. On an explicit approval of a named plan:
 
 After approval, the builder or a reviewer can confirm that the main file
 changed only in the keys After approval allows, with
-`diff_document(from: <approval revision>, file: <main file>)`. Changes to the
-builder files and amendments do not touch it.
+`diff_document(from: <approval revision>, file: <main file>)`, where the main
+file is named by the plan's title, as `list_document_files` lists it (other
+files without `.md`, such as `builder/log`). Changes to the builder files and
+amendments do not touch it. JoeDocs records the summary with the action and
+ID in front (`Update JD-31: Approve delivery plan`), and the builder matches
+it by how it ends, so give the summary exactly.
 
 ## After approval
 

@@ -234,10 +234,16 @@ The plan's own build must be finished: `implementation_status` is
 **Approval revision.** For a **multi-file plan**, file by file, because the
 builder files and amendments change after the plan's approval:
 
-1. **The plan.** `get_document_history` with `file: <main file>` (its path from
-   `get_document`), and find the revision whose summary is
-   `Approve delivery plan`. Confirm with `get_document(version: N)` that its
-   status is `approved` and with `version: N - 1` that it was not. Then
+Files are named as `list_document_files` lists them, without `.md`: the main
+file is the plan's title (`Delivery plan - <outcome>`), the others
+`builder/steps`, `builder/log` and `amendments/NN-<slug>`. JoeDocs records a
+summary with the action and ID in front of it (`Update JD-31: Approve
+delivery plan`), so match a summary by how it ends.
+
+1. **The plan.** `get_document_history` with `file: <main file>`, and find
+   the revision whose summary ends with `: Approve delivery plan`. Confirm
+   with `get_document(version: N)` that its status is `approved` and with
+   `version: N - 1` that it was not. Then
    `diff_document(from: N, file: <main file>)` against the latest revision and
    confirm every changed line is:
    - a builder front matter key;
@@ -247,14 +253,17 @@ builder files and amendments change after the plan's approval:
    - a server key that changes on every write (`revision`, `updated`,
      `updated_by`, `client`).
 2. **The amendment**, when you build one. `get_document_history` with
-   `file: <amendment file>` and find the revision whose summary is
-   `Approve amendment NN`; confirm with `get_document(version: N, file: ...)`
-   that it is `approved` there and was not at the revision before its
-   approval. Then `diff_document(from: N, file: <amendment file>)` must show
-   no change but server keys.
+   `file: <amendment file>` and find the revision whose summary ends with
+   `: Approve amendment NN`; confirm with
+   `get_document(version: N, file: ...)` that it is `approved` there and was
+   not at `version: N - 1`. Then `diff_document(from: N, file: <amendment file>)`
+   must show no change but server keys.
+
+A list key such as `reviews` shows in a diff as its key line and one `- `
+line per item; those item lines belong to the key.
 
 For a **single-file plan**, as before: `get_document_history` and the
-revision whose summary is `Approve delivery plan`, the same `status` checks,
+revision whose summary ends with `: Approve delivery plan`, the same `status` checks,
 then `diff_document(from: N)` against the latest revision, where every
 changed line is inside the work log markers, a builder front matter key, the
 `attention` key, or a server key.
