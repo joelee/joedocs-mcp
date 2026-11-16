@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- **The Board's 🏗️ mark** also shows for an approved plan whose `implementation_status` is `waiting-for-user` (paused for you) or `fixing` (building an amendment's steps), as well as `in-progress` and `blocked`, and its label and tooltip name the state ("Being built, waiting for you, STEP-02").
 - **`just scratch-server`** (developers): one run per store. Each run locks its store (`.local/<store>.lock`) until it stops, so a second run on the same store, such as `fresh` beside a running server, stops before it wipes or builds anything. A lock left by a process that has ended is taken over.
 - **`just board-drive`** (developers): `DRIVE_PAUSE_MS=0` (`00` too) now waits for a keystroke before each step, instead of not pausing, so a demo can be narrated; it needs a terminal. Other values keep the timed pauses.
 

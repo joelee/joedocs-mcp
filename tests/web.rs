@@ -4957,6 +4957,82 @@ fn data_values(body: &str, name: &str) -> Vec<String> {
         .collect()
 }
 
+/// One approved plan in each builder state, AL-1 to AL-7 in this order,
+/// all at `STEP-02`.
+fn board_build_fixture(store: &mut Store) -> TestResult<()> {
+    use serde_json::json;
+    store.add_project("alpha", "AL", Some("Alpha"))?;
+    for state in [
+        "in-progress",
+        "blocked",
+        "waiting-for-user",
+        "fixing",
+        "in-review",
+        "completed",
+        "not-started",
+    ] {
+        board_doc(
+            store,
+            ("alpha", "plans", "approved"),
+            &format!("Plan {state}"),
+            json!({"implementation_status": state, "current_step": "STEP-02"}),
+        )?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_board_marks_plans_being_built_waiting_or_fixing() -> TestResult<()> {
+    let server = start_full(|_| {}, board_build_fixture).await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    for (id, state, label, title) in [
+        (
+            "AL-1",
+            "in-progress",
+            "Being built, STEP-02",
+            "Being built: STEP-02",
+        ),
+        (
+            "AL-2",
+            "blocked",
+            "Being built, blocked, STEP-02",
+            "Being built (blocked): STEP-02",
+        ),
+        (
+            "AL-3",
+            "waiting-for-user",
+            "Being built, waiting for you, STEP-02",
+            "Being built (waiting for you): STEP-02",
+        ),
+        (
+            "AL-4",
+            "fixing",
+            "Being built, fixing, STEP-02",
+            "Being built (fixing): STEP-02",
+        ),
+    ] {
+        let card = board_card(&page.body, id);
+        for part in [
+            format!("data-building=\"{state}\""),
+            format!("aria-label=\"{label}\""),
+            format!("title=\"{title}\""),
+        ] {
+            assert!(card.contains(&part), "{id}: {part}: {card}");
+        }
+    }
+    // Reviewed, built and not yet started plans are not being built.
+    for id in ["AL-5", "AL-6", "AL-7"] {
+        let card = board_card(&page.body, id);
+        assert!(
+            !card.is_empty() && !card.contains("data-building"),
+            "{id}: {card}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn the_board_shows_open_documents_by_status_and_type() -> TestResult<()> {
     let server = start_full(|_| {}, board_fixture).await?;
