@@ -100,6 +100,12 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.5.5 to 0.5.6
+
+- **Nothing changes for a server's data:** no migration; the database stays at version 8. No configuration key, MCP tool or admin API route changed.
+- **The Board** also shows 🏗️ for plans whose `implementation_status` is `waiting-for-user` or `fixing`.
+- **Agent skills:** if you installed the skills from `docs/skills/`, copy them again. New plans are multi-file documents (the plan, `builder/steps.md`, `builder/log.md`, and amendments); plans written before stay single-file and keep working as before. The four research skills (`joedocs-research-coordinator`, `-scout`, `-writer`, `-critic`) are new and beta; install them only if you want to try the research workflow.
+
 ### 0.5.4 to 0.5.5
 
 - **No migration:** the database stays at version 8.

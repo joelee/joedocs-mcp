@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-16
+
+Agent skills that keep work in step with you: plans take amendments after a build, so review fixes no longer need new plans, and a research workflow (beta) runs deep research through checkpoints you approve, resumable from any session. The Board marks plans waiting for you or being fixed. For developers, the Board showcase drive. The server, MCP tools, configuration and database are unchanged.
+
 ### Added
 
 - **`just board-drive-showcase`** (developers): the Board staged for recording, on a store of its own (`.local/showcase`). `reset` creates it with three projects and four agents on two machines (`laptop-claude`, `laptop-opencode`, `mac-claude`, `mac-codex`), keeping the user `dev` with its password and authenticator from one reset to the next. `serve` serves it, and with no argument it plays one feature from idea to done across them: an idea, its plan, the build from STEP-01 to STEP-05 and the sign-off, beside another agent's plan and background edits. It prints the Board address and writes a log per agent. See the developer guide.
@@ -295,7 +299,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/joelee/joedocs-mcp/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...v0.5.3
