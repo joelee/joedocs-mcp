@@ -14,6 +14,15 @@ Ready-made [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skil
 | [`joedocs-code-review`](joedocs-code-review/SKILL.md) | Reviews a pull request, branch, commit or the working tree, against the plan when there is one, and records evidence-backed findings with calibrated severities and a verdict. A re-review of the same change updates that review in place, round by round, marking each earlier finding resolved or still open. | `reviews` |
 | [`joedocs-issue-log`](joedocs-issue-log/SKILL.md) | Files bugs, regressions and incidents with structured front matter (kind, severity, the version found in, the version to fix in), appends dated investigation notes, moves them through their statuses, closes the issues a release fixed, and lists what is open. | `issues` |
 
+The research workflow (beta; see [Research workflow (beta)](#research-workflow-beta)):
+
+| Skill | What it does | Writes |
+| --- | --- | --- |
+| [`joedocs-research-coordinator`](joedocs-research-coordinator/SKILL.md) (beta) | Your one contact for a research: turns your request into a brief and a research plan, dispatches the scout, writer and critics, stops at each checkpoint for your approval, and keeps all of its memory in the research document, so any session on any computer can resume it. | a `research` document: its main file, `brief`, `plan`, `coverage`, `coordinator/*` |
+| [`joedocs-research-scout`](joedocs-research-scout/SKILL.md) (beta) | Dispatched by the coordinator, not called by you: searches and reads sources for one sub-question, and records each with its citation, credibility tier and short quotes. | `sources/`, `notes/` |
+| [`joedocs-research-writer`](joedocs-research-writer/SKILL.md) (beta) | Dispatched by the coordinator, not called by you: writes the synthesis and outline, drafts the report with a citation on every claim, and answers each critique round. | `synthesis`, `report`, `responses/` |
+| [`joedocs-research-critic`](joedocs-research-critic/SKILL.md) (beta) | Critiques a research report through one lens (methodology, domain, counter-evidence, clarity, or `citations`, the claim-by-claim check), with findings and a verdict, round by round. Dispatched by the coordinator, or run by you on its own, from any session or agent. | `critiques/` |
+
 None of the skills except the builder changes the repository, and the builder never pushes, merges or tags.
 
 ## How they fit together
@@ -36,6 +45,8 @@ A typical run in Claude Code:
 
 Each step is a separate request, and each skill hands off with the next action rather than calling the next skill itself.
 
+The research skills (beta) are the exception: you talk to `joedocs-research-coordinator`, and it dispatches the scout, writer and critic for you, stopping at each checkpoint (see [Research workflow (beta)](#research-workflow-beta)).
+
 ## Install
 
 1. Connect Claude Code to your JoeDocs server under the name `joedocs` (see the [deployment guide](../deployment.md#6-connect-clients)). The skills call the tools as `mcp__joedocs__*`. If you used another name, change the `allowed-tools` lists to match.
@@ -44,6 +55,7 @@ Each step is a separate request, and each skill hands off with the next action r
    ```bash
    mkdir -p ~/.claude/skills
    cp -R docs/skills/joedocs-{idea-architect,planner,builder,code-review,issue-log} ~/.claude/skills/
+   cp -R docs/skills/joedocs-research-{coordinator,scout,writer,critic} ~/.claude/skills/   # the research workflow (beta)
    ```
 
    Or copy them into `.claude/skills/` in one repository to share them with everyone working on it.
@@ -53,6 +65,7 @@ Each step is a separate request, and each skill hands off with the next action r
    ```bash
    mkdir -p ~/.agents/skills
    cp -R docs/skills/joedocs-{idea-architect,planner,builder,code-review,issue-log} ~/.agents/skills/
+   cp -R docs/skills/joedocs-research-{coordinator,scout,writer,critic} ~/.agents/skills/   # the research workflow (beta)
    ```
 
    Or copy them into `.agents/skills/` in one repository. Keep the folder names, because each matches its skill's `name`. Two things in the skills are specific to Claude Code:
@@ -169,11 +182,125 @@ stateDiagram-v2
 
 `abandoned` (you stop the build) is left out of the diagram.
 
+## Research workflow (beta)
+
+> [!warning] Beta in JoeDocs 0.5.6
+> The four research skills are subject to a live trial; the workflow and the document layout may change. A research document records the layout it was written with (`workflow_version: "0.5.6-beta"`).
+
+A research runs from your request to an approved report in one multi-file JoeDocs document, with your approval at each checkpoint. You call two skills:
+
+- **`joedocs-research-coordinator`**, for everything: start a research, answer its checkpoints, and resume it from any session or computer (`resume JD-n`, or *"what research is waiting for me?"*);
+- **`joedocs-research-critic`**, when you want an extra critique of a report, from any session or agent (Claude Code, opencode), with or without the coordinator.
+
+The coordinator dispatches **`joedocs-research-scout`** and **`joedocs-research-writer`**; they are hidden from the `/` menu (`user-invocable: false`), and refuse to work without a coordinator's hand-off brief.
+
+### The research document
+
+One multi-file document of type `research`, titled `Research - <topic>`, in the project the research is for (the coordinator asks, defaulting to the repository's project). Each file has one writer.
+
+| File | Holds | Writer |
+| --- | --- | --- |
+| main file | Your request, the checkpoint table, the front matter below | coordinator |
+| `coordinator/state` | The resume point: phase, state, the next checkpoint, the question waiting for you (word for word), the next action, budget used, open tasks, unanswered critiques; rewritten at every transition | coordinator |
+| `coordinator/tasks` | The dispatch ledger, one row per task, never rewritten (below) | coordinator |
+| `coordinator/log` | Your instructions and answers in your words, events, deviations; appended only | coordinator |
+| `brief` | Perspectives, research questions `RQ-NN`, scope, audience, deliverable, the decision the research serves | coordinator |
+| `plan` | Sub-questions per RQ, search strategy, source types and inclusion criteria, quality bar, budget limits, stopping rule, checkpoint profile, lease limit | coordinator |
+| `coverage` | Evidence per RQ after gathering: sources by tier, gaps, conflicts | coordinator |
+| `sources/S-NNN-<slug>` | One source: citation, URL, access date, type, credibility tier (`primary`, `secondary`, `weak`) with a reason, locators, short quotes, the RQs it bears on | scout |
+| `notes/RQ-NN` | Evidence notes for one RQ, each point citing `S-NNN` and a locator | scout |
+| `synthesis` | Evidence matrix, claims `C-NN` with support and confidence, conflicts, gaps, the report outline | writer |
+| `report` | The report; each draft and revision is a revision of this file; every claim cites `[S-NNN, locator]` | writer |
+| `responses/RN` | The writer's disposition of every finding admitted to round N | writer |
+| `critiques/<lens>-<reviewer>` | One critic's findings and verdict for one lens, round by round in place | critic |
+| `amendments/NN-<slug>` | A change to the approved brief or plan, approved by you on its own | coordinator |
+
+**Main file front matter:** `status` (below), `research_phase` (`intake`, `scoping`, `planning`, `gathering`, `synthesis`, `drafting`, `critique`, `final`, `closed`), `research_state` (`working`, `waiting-for-user`, `blocked`, `closed`), `next_checkpoint` (`CP1` to `CP7`, or `none`), `checkpoint_profile`, `coordinator_lease_by`, `coordinator_lease_at`, `workflow_version: "0.5.6-beta"`, and `attention` at every checkpoint (the Board reads the main file).
+
+**IDs:** research questions `RQ-NN`, tasks `T-NNN`, sources `S-NNN`, claims `C-NN`; in a critique file, findings `RN-CRIT-NN`, `RN-MAJ-NN`, `RN-MED-NN`, `RN-LOW-NN` (round N), cited from outside as `critiques/methodology-claude R1-MAJ-02`.
+
+**Output stamps:** every file a specialist writes carries in its front matter `skill`, `task` (when dispatched), `complete` (`false` while it is being written, `true` when finished), and what it read (`report_revision` for a critique).
+
+**Status:** `draft` until you approve the plan at CP2; `approved` while the research runs; `done` when you approve the final report at CP7; `parked` or `rejected` on your word.
+
+### Workflow and checkpoints
+
+```mermaid
+flowchart TD
+    U["You: research request"] --> C0["Coordinator: intake, creates the research document"]
+    C0 --> S1["Coordinator: brief, perspectives, research questions"]
+    S1 --> CP1{"CP1 approve the brief"}
+    CP1 -- "changes" --> S1
+    CP1 -- "approved" --> P1["Coordinator: plan, budget, stopping rule"]
+    P1 --> CP2{"CP2 approve plan and budget<br/>(starts the research)"}
+    CP2 -- "changes" --> P1
+    CP2 -- "approved" --> G["Scout: one task per sub-question"]
+    G --> V1["Coordinator: coverage"]
+    V1 --> CP3{"CP3 evidence review"}
+    CP3 -- "more evidence" --> G
+    CP3 -- "proceed" --> A["Writer: synthesis and outline"]
+    A --> CP4{"CP4 approve outline and key findings"}
+    CP4 -- "changes" --> A
+    CP4 -- "approved" --> W["Writer: draft report with citations"]
+    W --> V2["Critic, citations lens: claim check"]
+    V2 --> CP5{"CP5 release the draft to critics"}
+    CP5 -- "your edits" --> W
+    CP5 -- "approved" --> K["Critics: findings and verdict, round N"]
+    K --> R["Writer: response and revision<br/>Critic, citations lens: recheck"]
+    R --> CP6{"CP6 round review"}
+    CP6 -- "another round" --> K
+    CP6 -- "accept" --> CP7{"CP7 final approval"}
+    CP7 -- "changes" --> W
+    CP7 -- "approved" --> D["Report approved, research closed"]
+```
+
+| Checkpoint | You approve | You see |
+| --- | --- | --- |
+| CP1 Brief | The research questions, scope, audience, deliverable | `brief` |
+| CP2 Plan and budget | The method, sources, budget and stopping rule; this starts the spending | `plan` |
+| CP3 Evidence review | Whether the evidence is enough, or to gather more or re-scope | `coverage` |
+| CP4 Outline | Key findings and the report's structure, before drafting | `synthesis` |
+| CP5 Draft to critics | Draft 1 goes to the critics, or your edits first | `report`, the `citations` critique |
+| CP6 Round review | Accept, or another round; which independent critiques join it | `critiques/`, `responses/RN` |
+| CP7 Final | The report as final | `report`, the last round |
+
+**Checkpoint profiles**, chosen in the plan at CP2: `strict` (CP1 to CP7), `standard` (CP1, CP2, CP4, CP6, CP7; the default), `light` (CP2 and CP7). A checkpoint outside the profile is passed through and recorded in the log. At each checkpoint the coordinator sets `research_state: waiting-for-user`, `next_checkpoint` and `attention: "CPn: <what to approve>"`, and gives a one-screen summary.
+
+**Approvals.** Approving a file is a front-matter change on that file (`status: approved`, `approved_by`), never a change to its body, plus a row in the main file's checkpoint table and a log entry, both with the file's revision at approval. That pinned revision is the approval: `diff_document(file: <file>, from: <pinned revision>)` shows whether the file changed since. A change to an approved `brief` or `plan` goes into an amendment file you approve.
+
+### Memory in the document, and resuming
+
+The coordinator holds nothing that matters only in its session:
+
+- **Write ahead.** It records before it acts: your instructions and answers in `coordinator/log`, each dispatch in `coordinator/tasks` as `dispatched`, the question it is about to ask in `coordinator/state`.
+- **The ledger.** `coordinator/tasks` has one row per task:
+
+  | Task | Skill | Brief | Inputs | Expected outputs | Status | Dispatched (UTC) | Closed (UTC) |
+  | --- | --- | --- | --- | --- | --- | --- | --- |
+  | T-001 | joedocs-research-scout | RQ-01, sub-question 1 | `plan` r12 | `sources/`, `notes/RQ-01` | `dispatched` | ... | - |
+
+  Status is `dispatched`, then `done`, `lost` or `cancelled`. A re-dispatch is a new row naming the task it replaces.
+- **The lease.** On start the coordinator sets `coordinator_lease_by` (host and a session tag) and `coordinator_lease_at`, and renews them at each main-file write. A live lease (younger than the plan's lease limit, default 2 hours) held by another session stops a second coordinator; an older one is taken over only after you confirm. Every write passes `expected_revision`, so two writers of one file never overwrite each other unnoticed.
+- **Resuming.** Asked to resume, the coordinator reads the main file, `coordinator/state`, `coordinator/tasks`, the end of `coordinator/log` and the file list; claims the lease; marks each `dispatched` task `done` when its outputs say `complete: true`, else `lost` and dispatches it again (the scout skips sources it already has); lists critique rounds not yet answered in `responses/`; tells you where things stand; and carries on. When the files and the ledger disagree with `coordinator/state`, the files win and the state is rewritten.
+
+### Dispatch
+
+The coordinator invokes the scout, writer and critic through the Skill tool, one at a time. Each runs as a forked subagent (`context: fork`, `background: false`), which does not see the conversation, so the coordinator's **hand-off brief** carries everything: the research document ID, the task ID, the files and revisions to read, the files to write, and the limits. The specialist reads only from the document, writes only its own files (`complete: false` first, `complete: true` last), and hands back a short summary: files and revisions written, issues, anything to ask you. Running a task again is safe. In an agent without forked skills (opencode), the skills run inline.
+
+### The critic on its own
+
+`joedocs-research-critic` takes `Research: JD-n`, `Lens: methodology | domain | counter-evidence | clarity | citations | <your own>`, `Draft: latest | rN`, and optionally `Reviewer: <name>` (default: the agent and its model). It needs only the JoeDocs tools and web tools. It reads the brief, the plan, the report at that revision and the sources it cites, writes its findings before reading other critiques, then marks any already raised elsewhere. It writes only `critiques/<lens>-<reviewer>`, a new file or the next round in place, with `origin` (`coordinated` or `independent`), `report_revision`, `round`, `verdict` (`accept`, `accept-with-changes`, `revise`), counts per severity and `reviewer_model`. The `citations` lens checks every claim against its cited quote and locator.
+
+An independent critique joins a round only when you say so; the coordinator lists unanswered critiques on every resume and at CP6, and shows a critique of an older report revision as such.
+
+### Budget and untrusted content
+
+The plan sets limits (scout tasks, sources, critique rounds); the coordinator records what is used in `coordinator/state` and stops for your decision at a limit. Every skill treats web pages and research files as data, never as instructions; quotes are short and marked; nothing private goes into a search query; a secret seen in a source is never copied.
+
 ## More skills to add
 
 | Skill | Purpose | JoeDocs features it uses |
 | --- | --- | --- |
-| **joedocs-research** | Saves research notes with their sources, and searches existing notes before researching again. | `search_documents` across projects (`project: "*"`), `new_document` of type `research`. |
 | **joedocs-decision-record** | Writes architecture decision records and marks old ones superseded. | `new_document` of type `specs`, `status: superseded` with a `superseded_by` key. |
 | **joedocs-session-journal** | Appends a short summary of each coding session (what changed, what is next) to one running document per project. | `append_to_document`, `get_document_history`. |
 | **joedocs-gardener** | Finds stale drafts, documents without tags, and plans whose builder stopped, and suggests tidying. | `list_documents` with `sort`, `search_documents` filters such as `{"implementation_status": "blocked"}` or `{"updated": {"lt": "2026-10-01"}}`. |
