@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- **`just scratch-server`** (developers): one run per store. Each run locks its store (`.local/<store>.lock`) until it stops, so a second run on the same store, such as `fresh` beside a running server, stops before it wipes or builds anything. A lock left by a process that has ended is taken over.
 - **`just board-drive`** (developers): `DRIVE_PAUSE_MS=0` (`00` too) now waits for a keystroke before each step, instead of not pausing, so a demo can be narrated; it needs a terminal. Other values keep the timed pauses.
 
 ## [0.5.5] - 2026-11-14

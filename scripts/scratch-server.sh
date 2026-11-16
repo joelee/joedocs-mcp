@@ -69,6 +69,12 @@ fi
 if [ -d "$scratch" ] && [ "$(cd "$scratch" && pwd -P)" != "$scratch" ]; then
     fail "$scratch resolves outside the repository; refusing to use it"
 fi
+# One serve of a store at a time, and none while a showcase reset of it
+# runs: the lock is taken before anything is checked, wiped or built, and
+# held until the script ends (cleanup releases it).
+trap store_unlock EXIT
+trap 'exit 130' INT TERM HUP
+store_lock
 if [ "$scratch" != "$default_store" ]; then
     ! $fresh || fail "fresh starts over only in $default_store; $scratch is wiped by the script that creates it"
     [ -d "$scratch/state" ] && [ -e "$scratch/seeded" ] ||
@@ -93,17 +99,19 @@ cleanup() {
             echo "scratch-server: could not remove the serve entry; run: tailscale serve --https=$https_port off" >&2
         served=false
     fi
+    store_unlock
 }
 trap cleanup EXIT
-# Ctrl-C (or SIGTERM) while the server runs is how it is meant to stop, so
-# that ends the script cleanly (status 0, which `just` does not report as a
-# failure); during the build or the seeding it is an interruption (130).
+# Ctrl-C (or SIGTERM, or SIGHUP when the terminal closes) while the server
+# runs is how it is meant to stop, so that ends the script cleanly (status
+# 0, which `just` does not report as a failure); during the build or the
+# seeding it is an interruption (130).
 serving=false
 stopped() {
     if $serving; then exit 0; fi
     exit 130
 }
-trap stopped INT TERM
+trap stopped INT TERM HUP
 
 if $fresh && [ -d "$scratch" ]; then
     echo "scratch-server: removing $scratch"

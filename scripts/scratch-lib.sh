@@ -105,6 +105,48 @@ stop_server() {
     fi
 }
 
+# One command at a time per store: a serve of it (scratch-server.sh) or a
+# showcase reset. The lock is a symbolic link beside the store,
+# $scratch.lock, outside the directories a reset moves and removes, whose
+# target is the owner's PID: ln -s creates it or fails in one step, so a
+# lock always names its owner. Call store_unlock from the caller's EXIT trap.
+store_lock() {
+    local lock="$scratch.lock" owner me="${0##*/}"
+    me="${me%.sh}"
+    mkdir -p "${scratch%/*}"
+    if ln -s "$$" "$lock" 2>/dev/null; then
+        return 0
+    fi
+    owner="$(readlink "$lock" 2>/dev/null || true)"
+    case "$owner" in
+        '' | *[!0-9]*) fail "$lock is not a lock these scripts made; remove it if no serve or reset of $scratch is running" ;;
+    esac
+    # kill -0 fails for another user's process too; ps -p still sees it.
+    if kill -0 "$owner" 2>/dev/null || ps -p "$owner" >/dev/null 2>&1; then
+        fail "$scratch is in use by process $owner (a serve or a reset of it); stop it first (if none is running, remove $lock)"
+    fi
+    # Its owner has ended. One command at a time takes a lock over, and only
+    # while it still names that owner.
+    ln -s "$$" "$lock.take" 2>/dev/null ||
+        fail "another command is taking over $lock; try again (if none is running, remove $lock.take)"
+    if [ "$(readlink "$lock" 2>/dev/null || true)" = "$owner" ]; then
+        rm -f "$lock"
+    fi
+    if ! ln -s "$$" "$lock" 2>/dev/null; then
+        rm -f "$lock.take"
+        fail "$scratch is in use by process $(readlink "$lock" 2>/dev/null || echo unknown) (a serve or a reset of it); stop it first"
+    fi
+    rm -f "$lock.take"
+    echo "$me: took over $lock from process $owner, which is no longer running" >&2
+}
+
+# Releases the lock if this process holds it; safe to call at any time.
+store_unlock() {
+    if [ "$(readlink "$scratch.lock" 2>/dev/null || true)" = "$$" ]; then
+        rm -f "$scratch.lock"
+    fi
+}
+
 # The terminal settings keys_mode_on replaced, for keys_mode_off.
 keys_saved=""
 
