@@ -56,9 +56,14 @@ doctest:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
 
-# Supply-chain checks: advisories, licences, bans, sources
+# Supply-chain checks: licences, bans, sources (part of `just ci`)
 deny:
-    cargo deny check
+    cargo deny check bans licenses sources
+
+# RustSec advisories: its own CI check, not part of `just ci`. An active
+# advisory blocks a production release (AGENTS.md, Security).
+advisories:
+    cargo deny check advisories
 
 # Scan full git history (CI needs a full-depth checkout)
 secrets:

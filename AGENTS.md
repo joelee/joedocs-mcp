@@ -17,12 +17,13 @@ This Rust project targets Linux and macOS and was generated from the team's carg
 | Tests only (nextest) | `just test` |
 | Coverage (fails under 80% lines) | `just coverage` |
 | Secret scan of staged changes | `just secrets-staged` |
+| RustSec advisories (its own CI check; blocks production releases) | `just advisories` |
 | Pre-commit checks (what the git hook runs) | `just pre-commit` |
 | Check the MSRV builds (library profile) | `just msrv` |
 | Start the local Docker Compose stack (data in `.local/data`) | `just docker-up` |
 | Deployment tests against Docker Compose (needs Docker) | `just docker-test` |
 
-`just ci` runs, in order: `fetch` → `fmt-check` → `lint` → `actionlint` → `coverage` → `doctest` → `doc` → `deny` → `secrets` → `build`. Never weaken a gate (threshold, lint level, `--locked`) to make it pass.
+`just ci` runs, in order: `fetch` → `fmt-check` → `lint` → `actionlint` → `coverage` → `doctest` → `doc` → `deny` (licences, bans and sources) → `secrets` → `build`. RustSec advisories run as their own CI check, `just advisories` (`.github/workflows/advisories.yml`): it does not block a merge, but an active advisory blocks a production release (see Security). Never weaken a gate (threshold, lint level, `--locked`) to make it pass.
 
 ## Toolchain And Tools
 
@@ -60,7 +61,7 @@ The MSRV is declared in `Cargo.toml` as `rust-version`. Do not use APIs newer th
 
 - Prefer the standard library and the crates already in use. Adding a new dependency requires a one-line justification in the change summary.
 - Use `default-features = false` and enable only what is needed when a crate has heavy defaults.
-- `cargo deny check` (config in `deny.toml`) must pass. The licence allow-list, banned crates, and allowed sources are set per project in `deny.toml`; never edit them without asking.
+- `cargo deny check bans licenses sources` (`just deny`, config in `deny.toml`) must pass, and `cargo deny check advisories` (`just advisories`) must pass for a production release. The licence allow-list, banned crates, and allowed sources are set per project in `deny.toml`; never edit them without asking.
 
 ## Security
 
@@ -68,6 +69,7 @@ The MSRV is declared in `Cargo.toml` as `rust-version`. Do not use APIs newer th
 - `.env` is git-ignored. `.env.example` lists every supported secret variable with safe placeholder values and is kept in sync.
 - Secrets are not part of the `config.toml` schema and cannot be set through config env overrides. Hold them in `secrecy::SecretString` (or equivalent) so they cannot leak via `Debug` or logs.
 - Never commit tokens, passwords, API keys, private keys, or secret-bearing connection strings.
+- **No production release with an active RUSTSEC advisory.** Never make a production release (a `vX.Y.Z` tag, a crates.io publish, a Homebrew bump, the GitHub Latest release, or a release by hand) while `cargo deny check advisories` reports an active RustSec advisory against the dependency tree, of any kind, `unmaintained` included. Never ignore an advisory in `deny.toml`, or narrow the advisory check, to make a release: file an issue, and wait for or make a fixed dependency. A pre-release (`vX.Y.Z-<pre>`, such as `v0.5.6-dev`, tagged from `main`) may go out with an active advisory, only as a GitHub pre-release that lists the advisory; the release workflow never publishes it to crates.io or Homebrew.
 
 ## Configuration
 
@@ -143,7 +145,7 @@ The Rust library in the crate is internal; its API may change in any release. Re
 
 ## CI/CD
 
-The CI platform is GitHub Actions (`.github/workflows/ci.yml`, with action updates from `.github/dependabot.yml`). Every pipeline is a thin wrapper that installs the required tools and runs `just ci` on the pinned toolchain with `NEXTEST_PROFILE=ci`. Library-profile projects add the `just msrv` job. The secret scan uses `gitleaks git` against full history, so CI must check out with full depth. The git hook `.githooks/pre-commit` (enabled by `just setup` through `core.hooksPath`) runs `just pre-commit`: `gitleaks git --pre-commit --staged --redact` on every commit, plus `fmt-check` and `lint` when Rust files or the Cargo manifests are staged and `actionlint` when workflows are. Releases run `.github/workflows/release.yml` on a signed `vX.Y.Z` tag: it reuses `ci.yml` (`workflow_call`) on the tagged commit, then publishes to crates.io with Trusted Publishing after approval in the `release` environment (see `docs/developer-guide.md` § Releasing).
+The CI platform is GitHub Actions (`.github/workflows/ci.yml`, with action updates from `.github/dependabot.yml`). Every pipeline is a thin wrapper that installs the required tools and runs `just ci` on the pinned toolchain with `NEXTEST_PROFILE=ci`. Library-profile projects add the `just msrv` job. The secret scan uses `gitleaks git` against full history, so CI must check out with full depth. The git hook `.githooks/pre-commit` (enabled by `just setup` through `core.hooksPath`) runs `just pre-commit`: `gitleaks git --pre-commit --staged --redact` on every commit, plus `fmt-check` and `lint` when Rust files or the Cargo manifests are staged and `actionlint` when workflows are. `.github/workflows/advisories.yml` runs `just advisories` on pushes to `main`, pull requests and daily; it is not a required check. Releases run `.github/workflows/release.yml` on a signed tag: it reuses `ci.yml` (`workflow_call`) on the tagged commit and checks advisories. A production tag `vX.Y.Z` then publishes to crates.io with Trusted Publishing after approval in the `release` environment, bumps Homebrew and makes the Latest GitHub release, and fails before publishing while an advisory is active. A pre-release tag `vX.Y.Z-<pre>` makes only a GitHub pre-release, after the same approval, listing any active advisories (see `docs/developer-guide.md` § Releasing).
 
 ## Documentation
 

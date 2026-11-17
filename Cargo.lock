@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "joedocs"
-version = "0.5.5"
+version = "0.5.6-dev"
 dependencies = [
  "argon2",
  "askama",

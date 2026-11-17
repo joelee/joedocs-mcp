@@ -1,0 +1,45 @@
+# Checks the dependency tree against the RustSec advisory database with
+# `just advisories`. It is not one of the required checks on `main`, so an
+# advisory does not block a merge, but it shows red on every pull request and
+# on `main` while one is active, and runs daily so a new or cleared advisory
+# shows without a push. An active advisory blocks a production release:
+# release.yml runs the same check (AGENTS.md, Security).
+name: Advisories
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    name: cargo deny advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: just@1.59.0,cargo-deny@0.20.2
+
+      - name: just advisories
+        run: just advisories

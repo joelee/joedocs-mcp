@@ -4,10 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.6-dev] - 2026-11-17
+
+**Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. JoeDocs does not use `chrono` itself; it comes in only through `rmcp`, the MCP SDK. No production release is made while a RustSec advisory is active, so 0.5.6 follows when `rmcp` drops `chrono` ([modelcontextprotocol/rust-sdk#1469](https://github.com/modelcontextprotocol/rust-sdk/issues/1469); tracked in the project's JoeDocs as JD-64). To try this pre-release, take the binaries from its GitHub release, or build it from its tag.
+
+Agent skills that keep work in step with you: plans take amendments after a build, so review fixes no longer need new plans, and a research workflow (beta) runs deep research through checkpoints you approve, resumable from any session. The Board marks plans waiting for you or being fixed. For developers, the Board showcase drive. The server, MCP tools, configuration and database are unchanged.
+
 ### Added
 
 - **`just board-drive-showcase`** (developers): the Board staged for recording, on a store of its own (`.local/showcase`). `reset` creates it with three projects and four agents on two machines (`laptop-claude`, `laptop-opencode`, `mac-claude`, `mac-codex`), keeping the user `dev` with its password and authenticator from one reset to the next. `serve` serves it, and with no argument it plays one feature from idea to done across them: an idea, its plan, the build from STEP-01 to STEP-05 and the sign-off, beside another agent's plan and background edits. It prints the Board address and writes a log per agent. See the developer guide.
 - **`SCRATCH_DIR` for `just scratch-server`** (developers): serves another seeded store directly under `.local/`, such as the showcase's.
+- **Research workflow agent skills (beta).** Four new skills in `docs/skills/`: `joedocs-research-coordinator`, your one contact, which turns a request into a brief and a research plan and carries it to an approved report through seven checkpoints; `joedocs-research-scout` and `joedocs-research-writer`, which the coordinator dispatches (hidden from the `/` menu); and `joedocs-research-critic`, which critiques a report through one lens (`citations` checks every claim against its source) and also runs on its own from any session or agent. A research is one multi-file `research` document; the coordinator keeps its state, task ledger and log there, so any session on any computer can resume it. Beta: subject to a live trial; the workflow and document layout may change. See `docs/skills/README.md`.
 
 ### Changed
 
@@ -15,6 +22,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Agent skills: plans with amendments.** `joedocs-planner` now writes a plan as a multi-file document: the plan, fixed once approved, and `builder/steps.md` and `builder/log.md`, which only `joedocs-builder` writes. After a build, the planner records the reviews you name (`reviews`, `implementation_status: in-review`) and puts the fixes or additions you agree into an **amendment** of the plan (`amendments/NN-<slug>`, steps `AMD01-01`, ...), approved on its own, which the builder builds on the same branch (`fixing`) without touching the plan's approval; your sign-off closes the plan with its amendments. `implementation_status` gains `waiting-for-user`, `in-review` and `fixing`, and `joedocs-code-review` reviews against a plan's approved amendments too. Plans written before keep working as before. See `docs/skills/README.md`.
 - **`just scratch-server`** (developers): one run per store. Each run locks its store (`.local/<store>.lock`) until it stops, so a second run on the same store, such as `fresh` beside a running server, stops before it wipes or builds anything. A lock left by a process that has ended is taken over.
 - **`just board-drive`** (developers): `DRIVE_PAUSE_MS=0` (`00` too) now waits for a keystroke before each step, instead of not pausing, so a demo can be narrated; it needs a terminal. Other values keep the timed pauses.
+- **RustSec advisories and pre-releases** (developers): `just ci` and `just deny` no longer check advisories; the new `just advisories` does, in a CI workflow of its own (`advisories.yml`, on pull requests, `main` and daily) that does not block a merge. An active advisory still blocks a production release: the release workflow checks advisories before publishing to crates.io or Homebrew. A pre-release tag (`vX.Y.Z-<pre>`, such as `v0.5.6-dev`) makes a GitHub pre-release only, after the same approval, with any active advisories listed in its notes.
 
 ## [0.5.5] - 2026-11-14
 
@@ -295,6 +303,7 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
 [Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...HEAD
+[0.5.6-dev]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...feature/jd-62-research-workflow-skills-beta-and-0-5-6-release
 [0.5.5]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/joelee/joedocs-mcp/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...v0.5.3
