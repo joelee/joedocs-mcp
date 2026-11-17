@@ -139,12 +139,13 @@ Find only what your lens covers; leave the rest to other lenses.
 | `methodology` | Does the method in the plan answer the questions? Were the inclusion criteria and quality bar applied? Is the evidence enough for each conclusion; are limitations stated; is the stopping rule met? Selection bias, circular sources, a conclusion stronger than its evidence. |
 | `domain` | Is the report right about the subject: facts, terms, current state of the field, important work or positions it misses? |
 | `counter-evidence` | What would contradict each main conclusion? Search for it (public terms only), and report credible counter-evidence the report does not address. |
-| `clarity` | Can the audience in the brief follow it: structure against the outline, definitions, unsupported jargon, claims hard to tell from opinion, length. |
+| `clarity` | Can the audience in the brief follow it: structure against the outline, definitions, unsupported jargon, claims hard to tell from opinion, length. Diagrams: where one would explain a process, timeline or set of scenarios better than prose, and where one confuses, repeats the text or would not render (a label with `;`, `#` or `"`, a diagram type other than `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `gantt` or `pie`). |
 | `citations` | Every claim against its citation (below). |
 | `<your own>` | The lens the user names, stated in your file's summary with what it covers. |
 
 **The `citations` lens.** For every sentence of the report that states a
-fact, a number or a finding:
+fact, a number or a finding, and every fact, number or date a diagram shows
+(checked against its caption's citations):
 
 1. It must cite `[S-NNN, locator]`. An uncited factual claim is `uncited`.
 2. The source file `sources/S-NNN-<slug>` must exist: otherwise

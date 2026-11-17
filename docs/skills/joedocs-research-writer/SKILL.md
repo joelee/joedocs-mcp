@@ -198,6 +198,37 @@ What the evidence could not settle, weak sources relied on, the method's limits.
 - S-001: <citation as in the source file>
 ```
 
+### Diagrams
+
+The report is read by people. Where a picture explains faster than prose,
+add a Mermaid diagram: a process or decision path, a timeline, scenarios and
+their outcomes, how parties or parts relate. A few well-chosen diagrams help
+more than many; a diagram that only repeats a sentence does not belong.
+
+- **Cite it.** Put a caption sentence right after each diagram that cites
+  the sources of every fact, number or date it shows, as `[S-NNN, locator]`.
+  A diagram states claims too, and the critics check them.
+- **Keep it rendering.** The report is read on GitHub, in Obsidian and in
+  JoeDocs, which bundle older Mermaid versions, and you cannot render it to
+  check, so:
+  - use only `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `gantt` or
+    `pie`;
+  - give nodes short ASCII IDs (never `end`), and quote every label:
+    `A["Book covered 6x"]`, edge labels too: `-->|"if priced high"|`;
+  - keep `;`, `#`, `"` and `%%` out of labels (write `#59;` for `;`,
+    `#35;` for `#`, `#quot;` for `"`); use `<br/>` for a line break, never
+    `\n`.
+
+For example:
+
+```mermaid
+flowchart LR
+    A["Order book<br/>oversubscribed"] -->|"price raised"| B["Smaller allocations"]
+    A -->|"price held"| C["Larger first-day gain"]
+```
+
+*Figure 1. Two pricing paths and what followed in past IPOs [S-047, §2; S-048, p. 4].*
+
 ## Job: round N
 
 The brief names the round and the critiques the user admitted to it (each a
@@ -224,6 +255,10 @@ where an interrupted one stopped:
    Every finding of every admitted critique gets one row. `not-accepted`
    needs evidence; `needs-evidence` says what source would settle it, for the
    coordinator to raise with the user.
+
+Keep the report's diagrams in step with its text: change, add or remove a
+diagram with the claims it shows, and its caption's citations with them
+(Diagrams).
 
 A finding that would change an approved key finding is `needs-evidence` or
 a question for the user (Boundaries), never a silent change.
