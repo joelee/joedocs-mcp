@@ -12,7 +12,8 @@
 // while the tab is hidden and opened again when it is shown, from the
 // revision the page holds, so a change in between is sent at once; a stream
 // refused on opening is followed by one fetch of the page, which says
-// whether the document is gone or the session ended (MED-05).
+// whether the document is gone or the session ended (MED-05). A page's
+// first Mermaid diagram reloads it, for Pele and its content policy (MED-03).
 "use strict";
 
 (() => {
@@ -90,6 +91,16 @@
       return;
     }
     if (Number(fresh.dataset.revision || 0) <= Number(wrapper.dataset.revision || 0)) {
+      return;
+    }
+    // The page's first Mermaid diagram (JD-66 MED-03): Pele and the
+    // content policy that lets it style its drawing come only with a whole
+    // page, so the page reloads (the browser keeps the scroll position).
+    // A page that had a diagram when it opened has both, and swaps.
+    if (typeof pele === "undefined" && fresh.querySelector(".diagram.mermaid")) {
+      ended = true;
+      close();
+      location.reload();
       return;
     }
     const y = window.scrollY;
