@@ -1,6 +1,7 @@
 {% extends "layout.html" %}
-{% block scripts %}{% if needs_pele %}<script src="{{ assets.pele|safe }}" defer></script>{% endif %}{% endblock %}
+{% block scripts %}{% if needs_pele %}<script src="{{ assets.pele|safe }}" defer></script>{% endif %}{% if live.is_some() %}<script src="{{ assets.document|safe }}" defer></script>{% endif %}{% endblock %}
 {% block content %}
+<div class="doc-page" data-doc-page{% if let Some(stream) = live %} data-live="{{ stream }}" data-revision="{{ fetched.document.revision }}"{% endif %}>
 <div class="page-head doc-head">
   <p class="crumbs"><a href="/admin/documents?project={{ fetched.document.project }}">{{ fetched.document.project }}</a> / <code>{{ fetched.document.id }}</code>{% if let Some(file) = file %} / {{ file }}{% endif %}</p>
   <h1>{{ facts.title }}</h1>
@@ -154,5 +155,6 @@
       {% if older %}<p class="hint">Older revisions are in the History.</p>{% endif %}
     </section>
   </aside>
+</div>
 </div>
 {% endblock %}

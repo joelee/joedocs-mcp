@@ -97,6 +97,9 @@ struct DocumentPage<'a> {
     notice: Option<String>,
     /// What the Actions menu offers.
     menu: Menu,
+    /// The stream of the document's revisions, on its latest revision
+    /// only: the page then updates itself (`document.js`).
+    live: Option<String>,
 }
 
 /// The Actions menu of the page shown.
@@ -256,23 +259,15 @@ pub(crate) fn view(
         aliases: strings(fields.get("aliases")),
         properties: properties(&fields, &resolver, file.is_some()),
         files: file_tree(&document.id, &files, file, pinned),
-        revisions: (latest.saturating_sub(PICKER_REVISIONS) + 1..=latest)
-            .rev()
-            .map(|v| Link {
-                href: href(&document.id, file, (v != latest).then_some(v), source),
-                label: if v == latest {
-                    format!("{v} (latest)")
-                } else {
-                    v.to_string()
-                },
-                current: v == shown_version,
-            })
-            .collect(),
+        revisions: revision_links(&document.id, file, source, latest, shown_version),
         older: latest > PICKER_REVISIONS,
         headings: rendered.headings,
         rendered_href: href(&document.id, file, pinned, false),
         source_href: href(&document.id, file, pinned, true),
         latest_href: href(&document.id, file, None, source),
+        live: pinned
+            .is_none()
+            .then(|| format!("/admin/documents/{}/stream", document.id)),
         notice: notice(request, document, file),
         menu: Menu {
             archive: pinned.is_none() && file.is_none(),
@@ -550,6 +545,29 @@ pub(crate) fn restore_file(
             ("from", Some(&version)),
         ],
     )))
+}
+
+/// The newest revisions for the picker, newest first, the one shown
+/// marked.
+fn revision_links(
+    id: &str,
+    file: Option<&str>,
+    source: bool,
+    latest: u64,
+    shown: u64,
+) -> Vec<Link> {
+    (latest.saturating_sub(PICKER_REVISIONS) + 1..=latest)
+        .rev()
+        .map(|v| Link {
+            href: href(id, file, (v != latest).then_some(v), source),
+            label: if v == latest {
+                format!("{v} (latest)")
+            } else {
+                v.to_string()
+            },
+            current: v == shown,
+        })
+        .collect()
 }
 
 /// A directory of the Files panel: its name, its path in the document,

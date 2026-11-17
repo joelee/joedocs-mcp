@@ -404,6 +404,16 @@
   setUpSorting(document);
   setUpFiles(document);
 
+  // A live document page (document.js) swapped in its latest revision.
+  document.addEventListener("joedocs:swapped", (event) => {
+    const region = event.target instanceof Element ? event.target : null;
+    if (region) {
+      drawDiagrams(region);
+      setUpSorting(region);
+      setUpFiles(region);
+    }
+  });
+
   // After htmx swaps a region in, move focus there so keyboard and
   // screen-reader users land on the new content, and announce it. htmx 4
   // fires the event on the element that made the request; the swapped

@@ -6051,6 +6051,75 @@ async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
 }
 
 #[tokio::test]
+async fn the_latest_revision_of_a_document_is_live_and_an_older_one_is_not() -> TestResult<()> {
+    let server = start_full(|_| {}, files_tree_fixture).await?;
+    let cookie = server.login().await?;
+    // The script, a cached asset served under its hash.
+    let page = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let at = page
+        .body
+        .find("/document.js\"")
+        .ok_or("document.js not linked")?;
+    let start = page.body[..at]
+        .rfind("/admin/assets/")
+        .ok_or("no asset path")?;
+    let path = &page.body[start..at + "/document.js".len()];
+    assert!(page.body[..start].ends_with("<script src=\""), "{path}");
+    let script = server.get(path, None).await?;
+    assert_eq!(script.status, 200, "{path}");
+    assert_eq!(
+        script.header("cache-control"),
+        Some("public, max-age=31536000, immutable")
+    );
+    // The latest revision, rendered, as source and as a file, carries the
+    // stream and the revision it shows (the document's, for a file too).
+    for (target, revision) in [
+        ("/admin/documents/JD-1", 2),
+        ("/admin/documents/JD-1?view=source", 2),
+        ("/admin/documents/JD-3?file=sources/S-001-one", 5),
+    ] {
+        let page = server.get(target, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{target}");
+        let live = tags(&page.body)
+            .into_iter()
+            .find(|t| t.get("data-doc-page").is_some())
+            .ok_or("no page wrapper")?;
+        let id = if target.contains("JD-3") {
+            "JD-3"
+        } else {
+            "JD-1"
+        };
+        assert_eq!(
+            live.get("data-live"),
+            Some(format!("/admin/documents/{id}/stream").as_str()),
+            "{target}"
+        );
+        assert_eq!(
+            live.get("data-revision"),
+            Some(revision.to_string().as_str()),
+            "{target}"
+        );
+    }
+    // An older revision stays as it was: no stream, no script.
+    let old = server
+        .get("/admin/documents/JD-1?version=1", Some(&cookie))
+        .await?;
+    assert_eq!(old.status, 200);
+    assert!(old.body.contains("data-doc-page"));
+    assert!(
+        !old.body.contains("data-live"),
+        "an old revision is not live"
+    );
+    assert!(!old.body.contains("document.js"));
+    // Other pages do not load it.
+    for other in ["/admin/", "/admin/board", "/admin/documents"] {
+        let page = server.get(other, Some(&cookie)).await?;
+        assert!(!page.body.contains("document.js"), "{other}");
+    }
+    server.stop().await
+}
+
+#[tokio::test]
 async fn only_the_board_loads_its_script_which_is_a_cached_asset() -> TestResult<()> {
     let server = start_full(|_| {}, board_fixture).await?;
     let cookie = server.login().await?;
