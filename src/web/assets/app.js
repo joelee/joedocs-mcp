@@ -12,8 +12,9 @@
   // Whether buttons open dialogs by themselves (invoker commands).
   const NATIVE_COMMANDS = "command" in HTMLButtonElement.prototype;
 
-  // localStorage holds the theme choice and nothing else. It can be
-  // unavailable (private windows, blocked storage); the page works anyway.
+  // localStorage holds the theme choice; sessionStorage holds the Files
+  // panel's folds (below). Either can be unavailable (private windows,
+  // blocked storage); the page works anyway.
   const storedTheme = () => {
     try {
       return localStorage.getItem(THEME_KEY);
@@ -74,6 +75,50 @@
     scrollTo({ top: 0, behavior: reduceMotion.matches ? "auto" : "smooth" });
     document.getElementById("main")?.focus({ preventScroll: true });
   };
+
+  // The Files panel of a multi-file document: each directory folds. What
+  // was opened or closed is kept for the tab (sessionStorage), per
+  // document, as `{ "<dir path>": true | false }`; a directory holding the
+  // file shown is always open. Unavailable storage changes nothing.
+  const filesKey = (panel) => `joedocs-files-${panel.dataset.files}`;
+  const readFolds = (panel) => {
+    try {
+      const folds = JSON.parse(sessionStorage.getItem(filesKey(panel)) || "{}");
+      return folds && typeof folds === "object" ? folds : {};
+    } catch {
+      return {};
+    }
+  };
+  const setUpFiles = (root) => {
+    for (const panel of root.querySelectorAll("[data-files]")) {
+      const folds = readFolds(panel);
+      for (const dir of panel.querySelectorAll("details[data-dir]")) {
+        const open = folds[dir.dataset.dir];
+        if (typeof open === "boolean" && !dir.hasAttribute("data-holds-current")) {
+          dir.open = open;
+        }
+      }
+    }
+  };
+  // `toggle` does not bubble, so it is caught on the way down.
+  document.addEventListener(
+    "toggle",
+    (event) => {
+      const dir = event.target instanceof HTMLDetailsElement ? event.target : null;
+      const panel = dir?.dataset.dir !== undefined ? dir.closest("[data-files]") : null;
+      if (!panel) {
+        return;
+      }
+      const folds = readFolds(panel);
+      folds[dir.dataset.dir] = dir.open;
+      try {
+        sessionStorage.setItem(filesKey(panel), JSON.stringify(folds));
+      } catch {
+        // Kept for this page only.
+      }
+    },
+    true,
+  );
 
   const toggleTheme = () => {
     const current =
@@ -279,6 +324,7 @@
 
   drawDiagrams(document);
   setUpSorting(document);
+  setUpFiles(document);
 
   // After htmx swaps a region in, move focus there so keyboard and
   // screen-reader users land on the new content, and announce it. htmx 4
@@ -321,6 +367,7 @@
     }
     drawDiagrams(region);
     setUpSorting(region);
+    setUpFiles(region);
     // Results can say what changed (the Documents order); otherwise the
     // region's own label is announced.
     const said = region.querySelector(":scope > [data-announcement]");

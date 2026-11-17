@@ -8,8 +8,9 @@
 //!
 //! `demo` gets more than one page of documents (the web interface and
 //! `list` show 200), in every default type and status, plus documents with
-//! diagrams, callouts and links, several revisions, a multi-file backlog and
-//! an archived one; `sandbox` gets a few.
+//! diagrams, callouts and links, several revisions, a multi-file backlog, a
+//! multi-file research with files in nested directories, and an archived
+//! one; `sandbox` gets a few.
 
 use std::error::Error;
 use std::io::Write as _;
@@ -61,6 +62,7 @@ async fn main() -> Result<()> {
     backlog(&client).await?;
     archived(&client).await?;
     sandbox(&client).await?;
+    research(&client).await?;
 
     client.cancel().await?;
     say("sample data written")?;
@@ -313,6 +315,62 @@ async fn backlog(client: &Client) -> Result<()> {
         .await?;
     }
     say("multi-file backlog")?;
+    Ok(())
+}
+
+/// A multi-file research document laid out as the research workflow writes
+/// one, with files in directories and a nested one, for the Files panel.
+/// Written last, so the other sample documents keep their IDs.
+async fn research(client: &Client) -> Result<()> {
+    let made = call(
+        client,
+        "new_document",
+        json!({
+            "project": "demo",
+            "type": "research",
+            "status": "draft",
+            "title": "Research - Sample layout",
+            "content": "# Research - Sample layout\n\nA sample research document: its files sit in folders, as the research workflow writes them.\n",
+            "multifile": true,
+            "summary": "Sample data",
+        }),
+    )
+    .await?;
+    let id = made["document_id"]
+        .as_str()
+        .ok_or("new_document returned no document_id")?
+        .to_owned();
+    let files: Vec<Value> = [
+        "brief",
+        "plan",
+        "report",
+        "coordinator/state",
+        "coordinator/tasks",
+        "coordinator/log",
+        "sources/S-001-official-guide",
+        "sources/S-002-vendor-paper",
+        "sources/S-003-survey",
+        "sources/archive/S-000-superseded-draft",
+        "notes/RQ-01",
+        "notes/RQ-02",
+        "critiques/methodology-sample",
+        "critiques/citations-sample",
+    ]
+    .iter()
+    .map(|file| {
+        json!({
+            "file": file,
+            "content": format!("# {file}\n\nA sample file.\n"),
+        })
+    })
+    .collect();
+    call(
+        client,
+        "write_document_files",
+        json!({"document_id": id, "files": files, "summary": "Sample data"}),
+    )
+    .await?;
+    say("multi-file research with directories")?;
     Ok(())
 }
 

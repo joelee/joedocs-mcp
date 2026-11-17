@@ -4829,6 +4829,98 @@ async fn the_navigation_folds_behind_a_menu_control_that_works_without_scripts()
     server.stop().await
 }
 
+/// The STEP-08 vault plus files in two more directories of the backlog
+/// JD-3: `sources/S-001-one`, `sources/S-002-two` and
+/// `critiques/methodology`, beside `items/one`.
+fn files_tree_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewFile};
+    fixture(store)?;
+    for file in [
+        "sources/S-001-one",
+        "sources/S-002-two",
+        "critiques/methodology",
+    ] {
+        store.create_file(
+            &Actor::new("laptop-key", "claude-code"),
+            &NewFile {
+                document_id: "JD-3".into(),
+                file: file.into(),
+                content: format!("{file} body.\n"),
+                front_matter: joedocs::document::front_matter::Fields::new(),
+                expected_revision: None,
+                summary: None,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_files_panel_folds_each_directory_and_opens_the_shown_files() -> TestResult<()> {
+    let server = start_full(|_| {}, files_tree_fixture).await?;
+    let cookie = server.login().await?;
+    let page = server
+        .get(
+            "/admin/documents/JD-3?file=sources/S-002-two",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    let panel = page
+        .body
+        .split("data-files=\"JD-3\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</section>").next())
+        .ok_or("no Files panel")?;
+    let dirs: Vec<(String, bool)> = tags(panel)
+        .into_iter()
+        .filter(|t| t.name == "details")
+        .map(|t| {
+            (
+                t.get("data-dir").unwrap_or_default().to_owned(),
+                t.get("open").is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        dirs,
+        [
+            ("critiques".to_owned(), false),
+            ("items".to_owned(), false),
+            ("sources".to_owned(), true),
+        ],
+        "{panel}"
+    );
+    // The main file first, then each directory with its count; files are
+    // named within their directory.
+    let at = positions(
+        panel,
+        &[
+            "Backlog (main file)</a>",
+            "<summary>critiques <span class=\"file-count\">1",
+            ">methodology</a>",
+            "<summary>items <span class=\"file-count\">1",
+            ">one</a>",
+            "<summary>sources <span class=\"file-count\">2",
+            ">S-001-one</a>",
+            "href=\"/admin/documents/JD-3?file=sources%2FS-002-two\" aria-current=\"page\">S-002-two</a>",
+        ],
+    )?;
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{panel}");
+    assert_eq!(panel.matches("aria-current").count(), 1, "{panel}");
+    // The main file shown: every directory starts closed.
+    let main = server.get("/admin/documents/JD-3", Some(&cookie)).await?;
+    let panel = main
+        .body
+        .split("data-files=\"JD-3\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</section>").next())
+        .ok_or("no Files panel")?;
+    assert_eq!(panel.matches("<details").count(), 3, "{panel}");
+    assert!(!panel.contains(" open"), "{panel}");
+    server.stop().await
+}
+
 #[tokio::test]
 async fn every_signed_in_page_has_one_back_to_top_button() -> TestResult<()> {
     let server = start_full(|_| {}, fixture).await?;

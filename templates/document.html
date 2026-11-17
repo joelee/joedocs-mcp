@@ -113,12 +113,14 @@
     </section>
 
     {% if !files.is_empty() %}
-    <section aria-labelledby="files-heading">
+    <section aria-labelledby="files-heading" data-files="{{ fetched.document.id }}">
       <h2 id="files-heading">Files</h2>
-      <ul class="side-list">
-        {% for link in files %}
-        <li><a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a></li>
-        {% endfor %}
+      <ul class="side-list files-tree">
+        {% for item in files %}{% match item %}
+        {% when FileItem::Open(dir) %}<li><details class="file-dir" data-dir="{{ dir.path }}"{% if dir.open %} open data-holds-current{% endif %}><summary>{{ dir.name }} <span class="file-count">{{ dir.count }}<span class="visually-hidden"> files</span></span></summary><ul class="side-list">
+        {% when FileItem::File(link) %}<li><a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a></li>
+        {% when FileItem::Close %}</ul></details></li>
+        {% endmatch %}{% endfor %}
       </ul>
     </section>
     {% endif %}
