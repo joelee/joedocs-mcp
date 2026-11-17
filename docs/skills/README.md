@@ -200,26 +200,26 @@ One multi-file document of type `research`, titled `Research - <topic>`, in the 
 
 | File | Holds | Writer |
 | --- | --- | --- |
-| main file | Your request, the checkpoint table, the front matter below | coordinator |
+| main file | Your request; the Outputs table, linking each output (brief, plan, coverage, synthesis, report, critiques, responses, amendments, notes, the coordinator's files) with one line on what it says now and its revision; the checkpoint table; the front matter below | coordinator |
 | `coordinator/state` | The resume point: phase, state, the next checkpoint, the question waiting for you (word for word), the next action, budget used, open tasks, unanswered critiques; rewritten at every transition | coordinator |
-| `coordinator/tasks` | The dispatch ledger, one row per task, never rewritten (below) | coordinator |
-| `coordinator/log` | Your instructions and answers in your words, events, deviations; appended only | coordinator |
+| `coordinator/tasks` | The dispatch ledger, one row per task, newest first, never rewritten (below) | coordinator |
+| `coordinator/log` | Your instructions and answers in your words, events, deviations; newest first, never rewritten | coordinator |
 | `brief` | Perspectives, research questions `RQ-NN`, scope, audience, deliverable, the decision the research serves | coordinator |
 | `plan` | Sub-questions per RQ, search strategy, source types and inclusion criteria, quality bar, budget limits, stopping rule, checkpoint profile, lease limit | coordinator |
 | `coverage` | Evidence per RQ after gathering: sources by tier, gaps, conflicts | coordinator |
 | `sources/S-NNN-<slug>` | One source: citation, URL, access date, type, credibility tier (`primary`, `secondary`, `weak`) with a reason, locators, short quotes, the RQs it bears on | scout |
 | `notes/RQ-NN` | Evidence notes for one RQ, each point citing `S-NNN` and a locator | scout |
 | `synthesis` | Evidence matrix, claims `C-NN` with support and confidence, conflicts, gaps, the report outline | writer |
-| `report` | The report; each draft and revision is a revision of this file; every claim cites `[S-NNN, locator]` | writer |
+| `report` | The report; each draft and revision is a revision of this file; every claim cites `[S-NNN, locator]`; Mermaid diagrams where a picture helps, each with a cited caption | writer |
 | `responses/RN` | The writer's disposition of every finding admitted to round N | writer |
 | `critiques/<lens>-<reviewer>` | One critic's findings and verdict for one lens, round by round in place | critic |
 | `amendments/NN-<slug>` | A change to the approved brief or plan, approved by you on its own | coordinator |
 
-**Main file front matter:** `status` (below), `research_phase` (`intake`, `scoping`, `planning`, `gathering`, `synthesis`, `drafting`, `critique`, `final`, `closed`), `research_state` (`working`, `waiting-for-user`, `blocked`, `closed`), `next_checkpoint` (`CP1` to `CP7`, or `none`), `checkpoint_profile`, `coordinator_lease_by`, `coordinator_lease_at`, `workflow_version: "0.5.6-beta"`, and `attention` at every checkpoint (the Board reads the main file).
+**Main file front matter:** `status` (below), `research_phase` (`intake`, `scoping`, `planning`, `gathering`, `synthesis`, `drafting`, `critique`, `final`, `closed`), `research_state` (`working`, `waiting-for-user`, `blocked`, `closed`), `next_checkpoint` (`CP1` to `CP7`, or `none`), `checkpoint_profile`, `coordinator_model` (the model of the session that last claimed the lease; each claim is logged with its model), `coordinator_lease_by`, `coordinator_lease_at`, `workflow_version: "0.5.6-beta"`, and `attention` at every checkpoint (the Board reads the main file).
 
 **IDs:** research questions `RQ-NN`, tasks `T-NNN`, sources `S-NNN`, claims `C-NN`; in a critique file, findings `RN-CRIT-NN`, `RN-MAJ-NN`, `RN-MED-NN`, `RN-LOW-NN` (round N), cited from outside as `critiques/methodology-claude R1-MAJ-02`.
 
-**Output stamps:** every file a specialist writes carries in its front matter `skill`, `task` (when dispatched), `complete` (`true` only when finished; a file written in one call carries `true` at once), and what it read (`report_revision` for a critique). A `notes/RQ-NN` file gathers several scout tasks, so it lists the finished ones in `tasks_complete`; a scout task is done only when its ID is there.
+**Output stamps:** every file a specialist writes carries in its front matter `skill`, `skill_model` (the model it ran as, set again with each revision, round or completed scout task; left out when unknown), `task` (when dispatched), `complete` (`true` only when finished; a file written in one call carries `true` at once), and what it read (`report_revision` for a critique). A `notes/RQ-NN` file gathers several scout tasks, so it lists the finished ones in `tasks_complete`; a scout task is done only when its ID is there.
 
 **Status:** `draft` until you approve the plan at CP2; `approved` while the research runs; `done` when you approve the final report at CP7; `parked` or `rejected` on your word.
 
@@ -273,15 +273,16 @@ flowchart TD
 The coordinator holds nothing that matters only in its session:
 
 - **Write ahead.** It records before it acts: your instructions and answers in `coordinator/log`, each dispatch in `coordinator/tasks` as `dispatched`, the question it is about to ask in `coordinator/state`.
+- **Rows that render.** The coordinator adds each row of `coordinator/tasks` and `coordinator/log` with `edit_document`, directly under the table's header, so the newest row is first. It never uses `append_to_document` for them: that tool puts a blank line before what it adds, and a blank line ends a Markdown table.
 - **The ledger.** `coordinator/tasks` has one row per task:
 
   | Task | Skill | Brief | Inputs | Expected outputs | Status | Dispatched (UTC) | Closed (UTC) |
   | --- | --- | --- | --- | --- | --- | --- | --- |
   | T-001 | joedocs-research-scout | RQ-01, sub-question 1 | `plan` r12 | `sources/`, `notes/RQ-01` | `dispatched` | ... | - |
 
-  Status is `dispatched`, then `done`, `lost` or `cancelled`. A re-dispatch is a new row naming the task it replaces.
+  Status is `dispatched`, then `done`, `lost` or `cancelled`, each a new row; the newest row for a task is its status. A re-dispatch is a new row naming the task it replaces.
 - **The lease.** When it starts working the coordinator sets `coordinator_lease_by` (host and a session tag) and `coordinator_lease_at`, renews them at each main-file write, and removes them whenever it stops to wait for you, so your answer can come from any session. A live lease (younger than the plan's lease limit, default 2 hours) held by another session stops a second coordinator; an older one is taken over only after you confirm. Every write passes `expected_revision`, so two writers of one file never overwrite each other unnoticed.
-- **Resuming.** Asked to resume, the coordinator reads the main file, `coordinator/state`, `coordinator/tasks`, the end of `coordinator/log` and the file list; claims the lease; marks each `dispatched` task `done` when its outputs say `complete: true`, else `lost` and dispatches it again (the scout skips sources it already has); lists critique rounds not yet answered in `responses/`; tells you where things stand; and carries on. When the files and the ledger disagree with `coordinator/state`, the files win and the state is rewritten.
+- **Resuming.** Asked to resume, the coordinator reads the main file, `coordinator/state`, `coordinator/tasks`, the newest rows of `coordinator/log` and the file list; claims the lease; marks each `dispatched` task `done` when its outputs say `complete: true`, else `lost` and dispatches it again (the scout skips sources it already has); lists critique rounds not yet answered in `responses/`; brings the Outputs table up to date with the file list; tells you where things stand; and carries on. When the files and the ledger disagree with `coordinator/state`, the files win and the state is rewritten.
 
 ### Dispatch
 
@@ -289,7 +290,7 @@ The coordinator invokes the scout, writer and critic through the Skill tool, one
 
 ### The critic on its own
 
-`joedocs-research-critic` takes `Research: JD-n`, `Lens: methodology | domain | counter-evidence | clarity | citations | <your own>`, `Draft: latest | rN`, and optionally `Reviewer: <name>` (default: the agent and its model). It needs only the JoeDocs tools and web tools. It reads the brief, the plan, the report at that revision and the sources it cites, writes its findings before reading other critiques, then marks any already raised elsewhere. It writes only `critiques/<lens>-<reviewer>`, a new file or the next round in place, with `origin` (`coordinated` or `independent`), `report_revision`, `round`, `verdict` (`accept`, `accept-with-changes`, `revise`), counts per severity and `reviewer_model`. The `citations` lens checks every claim against its cited quote and locator.
+`joedocs-research-critic` takes `Research: JD-n`, `Lens: methodology | domain | counter-evidence | clarity | citations | <your own>`, `Draft: latest | rN`, and optionally `Reviewer: <name>` (default: the agent and its model). It needs only the JoeDocs tools and web tools. It reads the brief, the plan, the report at that revision and the sources it cites, writes its findings before reading other critiques, then marks any already raised elsewhere. It writes only `critiques/<lens>-<reviewer>`, a new file or the next round in place, with `origin` (`coordinated` or `independent`), `report_revision`, `round`, `verdict` (`accept`, `accept-with-changes`, `revise`), counts per severity and `skill_model`. The `citations` lens checks every claim against its cited quote and locator, including what the report's diagrams show.
 
 An independent critique joins a round only when you say so; the coordinator lists unanswered critiques on every resume and at CP6, and shows a critique of an older report revision as such.
 
