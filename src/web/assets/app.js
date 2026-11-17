@@ -47,6 +47,34 @@
   fitNav();
   narrow.addEventListener("change", fitNav);
 
+  // The back-to-top button (layout.html) shows once the page has scrolled
+  // more than one window height. It is looked up each time, as the
+  // navigation is: Back and Forward swap in a new body.
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  let toTopQueued = false;
+  const fitToTop = () => {
+    toTopQueued = false;
+    const button = document.querySelector("[data-to-top]");
+    if (button instanceof HTMLElement) {
+      button.hidden = window.scrollY <= window.innerHeight;
+    }
+  };
+  const queueToTop = () => {
+    if (!toTopQueued) {
+      toTopQueued = true;
+      requestAnimationFrame(fitToTop);
+    }
+  };
+  addEventListener("scroll", queueToTop, { passive: true });
+  addEventListener("resize", queueToTop, { passive: true });
+  fitToTop();
+
+  // Back to the top, with focus on the content as the skip link gives it.
+  const toTop = () => {
+    scrollTo({ top: 0, behavior: reduceMotion.matches ? "auto" : "smooth" });
+    document.getElementById("main")?.focus({ preventScroll: true });
+  };
+
   const toggleTheme = () => {
     const current =
       document.documentElement.dataset.theme ||
@@ -74,6 +102,10 @@
     }
     if (target.closest("[data-theme-toggle]")) {
       toggleTheme();
+      return;
+    }
+    if (target.closest("[data-to-top]")) {
+      toTop();
       return;
     }
     const copy = target.closest("[data-copy]");
@@ -285,6 +317,7 @@
     // been fitted to the screen. Results alone leave the Menu as it is.
     if (region === document.body) {
       fitNav();
+      fitToTop();
     }
     drawDiagrams(region);
     setUpSorting(region);

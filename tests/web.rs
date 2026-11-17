@@ -4829,6 +4829,39 @@ async fn the_navigation_folds_behind_a_menu_control_that_works_without_scripts()
     server.stop().await
 }
 
+#[tokio::test]
+async fn every_signed_in_page_has_one_back_to_top_button() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    for path in [
+        "/admin/",
+        "/admin/board",
+        "/admin/documents",
+        "/admin/documents/JD-1",
+        "/admin/documents/JD-1?view=source",
+        "/admin/search?q=body",
+        "/admin/audit",
+    ] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}");
+        let buttons: Vec<Tag> = tags(&page.body)
+            .into_iter()
+            .filter(|t| t.name == "button" && t.get("data-to-top").is_some())
+            .collect();
+        assert_eq!(buttons.len(), 1, "{path}: one back-to-top button");
+        let button = &buttons[0];
+        assert_eq!(button.get("type"), Some("button"), "{path}");
+        assert_eq!(button.get("aria-label"), Some("Back to top"), "{path}");
+        // Hidden until the page has scrolled; app.js shows it.
+        assert!(button.get("hidden").is_some(), "{path}: hidden at first");
+        assert!(page.body.contains("&#128285;"), "{path}: the 🔝 glyph");
+    }
+    // The sign-in page has no layout, so no button.
+    let sign_in = server.get("/admin/login", None).await?;
+    assert!(!sign_in.body.contains("data-to-top"));
+    server.stop().await
+}
+
 // --- JD-47: the Board -------------------------------------------------------
 
 /// Front matter fields from a JSON object.
