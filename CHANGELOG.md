@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Live documents in the web interface.** A document's latest revision updates in place when it changes, whoever writes it (MCP, the admin API, a local `joedocs` command), keeping your place and announcing the new revision; it waits while a dialog, menu or selection is open. The server pushes the change on a new stream, `GET /admin/documents/{id}/stream`, which sends an event only for that document and shares the Board stream's 32 places (audited as `admin:documents.stream`, one row per document page opened). An older revision stays as it is.
+- **Folding Board groups.** Grouped by type or project, each Board row's title folds the row to one line with each status's count, kept in the address (`collapse=`), so live refreshes and copied links keep it; the Filters panel's open or shut state is kept the same way (`filters=closed`).
+- **Remembered Board and Documents views.** The Board and Documents remember their last filters and order in the browser, and the menu's links lead back to them; a **Reset filters** button on each page forgets the view.
+- **Folders in the Files panel.** A multi-file document's Files panel lists the main file and top-level files, then each folder, folding, with its file count; the shown file's folders start open, and your folds are kept while you move between the document's files. A line now sets each section of the side panel apart.
+- **Back to top.** A round 🔝 button at the bottom right returns a long page to the top.
+
+### Changed
+
+- **The side menu stays in view** as a page scrolls, on screens wider than 720 px.
+- **The Board's busy message** for the 33rd open stream is now "Too many open live pages; close one and reload", since document pages share the places.
+- **`just scratch-server`** (developers): a new store also gets a multi-file research document with files in nested folders, for the Files panel.
+
 ## [0.5.6-dev] - 2026-11-17
 
 **Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. JoeDocs does not use `chrono` itself; it comes in only through `rmcp`, the MCP SDK. No production release is made while a RustSec advisory is active, so 0.5.6 follows when `rmcp` drops `chrono` ([modelcontextprotocol/rust-sdk#1469](https://github.com/modelcontextprotocol/rust-sdk/issues/1469); tracked in the project's JoeDocs as JD-64). To try this pre-release, take the binaries from its GitHub release, or build it from its tag.
