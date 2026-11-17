@@ -150,7 +150,7 @@
         if (loginPage(res)) {
           signedOut();
         } else if (res.status === 503) {
-          live("offline", "Too many open boards; close one and reload");
+          live("offline", "Too many open live pages; close one and reload");
         } else {
           live("offline", "Disconnected, retrying");
           setTimeout(open, 5000);

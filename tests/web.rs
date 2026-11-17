@@ -2435,8 +2435,8 @@ async fn every_route_writes_one_audit_row_with_its_documented_tool() -> TestResu
             }
             ("POST", _) => server.post_form(&path, &cookie, Some(&csrf), &[]).await?,
             // A stream stays open: read its head, then close it.
-            (_, "/admin/board/stream") => {
-                let stream = server.open_stream("", &cookie, "").await?;
+            (_, "/admin/board/stream" | "/admin/documents/JD-1/stream") => {
+                let stream = server.open_stream_at(&path, &cookie, "").await?;
                 let status = stream.status;
                 drop(stream);
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -5657,8 +5657,20 @@ impl Server {
         cookie: &str,
         headers: &str,
     ) -> TestResult<EventStream> {
+        self.open_stream_at(&format!("/admin/board/stream?{query}"), cookie, headers)
+            .await
+    }
+
+    /// Opens the event stream at `target` (a path and query) with `cookie`
+    /// and extra header lines, and reads the reply head.
+    async fn open_stream_at(
+        &self,
+        target: &str,
+        cookie: &str,
+        headers: &str,
+    ) -> TestResult<EventStream> {
         let request = format!(
-            "GET /admin/board/stream?{query} HTTP/1.1\r\nHost: {}\r\nCookie: {cookie}\r\nAccept: text/event-stream\r\n{headers}\r\n",
+            "GET {target} HTTP/1.1\r\nHost: {}\r\nCookie: {cookie}\r\nAccept: text/event-stream\r\n{headers}\r\n",
             self.host()
         );
         let mut stream = TcpStream::connect(self.addr).await?;
@@ -5863,6 +5875,136 @@ async fn the_board_stream_ends_at_session_expiry_and_server_shutdown() -> TestRe
 }
 
 #[tokio::test]
+async fn a_document_stream_needs_a_session_the_same_site_and_a_live_document() -> TestResult<()> {
+    let server = start_full(|_| {}, stream_fixture).await?;
+    let before = server.audit()?.len();
+    let path = "/admin/documents/AL-7/stream?revision=1";
+    let anonymous = server.get(path, None).await?;
+    assert_eq!(anonymous.status, 303, "{}", anonymous.body);
+    let cookie = server.login().await?;
+    let cross = server
+        .send(
+            "GET",
+            path,
+            &format!("Cookie: {cookie}\r\nSec-Fetch-Site: cross-site\r\n"),
+            "",
+        )
+        .await?;
+    assert_eq!(cross.status, 403, "{}", cross.body);
+    let missing = server
+        .open_stream_at("/admin/documents/AL-99/stream", &cookie, "")
+        .await?;
+    assert_eq!(missing.status, 404, "{}", missing.head);
+    let archived = server
+        .open_stream_at("/admin/documents/AL-4/stream", &cookie, "")
+        .await?;
+    assert_eq!(archived.status, 409, "{}", archived.head);
+    let outcomes: Vec<String> = server.audit()?[before..]
+        .iter()
+        .filter(|(t, _, _)| t == "admin:documents.stream")
+        .map(|(_, _, o)| o.clone())
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["no_session", "forbidden", "not_found", "archived"]
+    );
+    drop((missing, archived));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn a_document_stream_signals_only_that_documents_new_revisions() -> TestResult<()> {
+    let server = start_full(|config| config.admin.board_refresh_ms = 500, stream_fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let same_site = "Sec-Fetch-Site: same-origin\r\n";
+    let wait = std::time::Duration::from_millis(1500);
+    // AL-7 is at revision 1.
+    let mut stream = server
+        .open_stream_at(
+            "/admin/documents/AL-7/stream?revision=1",
+            &cookie,
+            same_site,
+        )
+        .await?;
+    assert_eq!(stream.status, 200, "{}", stream.head);
+    assert_eq!(
+        head_value(&stream.head, "content-type"),
+        Some("text/event-stream")
+    );
+    assert_eq!(head_value(&stream.head, "x-accel-buffering"), Some("no"));
+    assert!(stream.wait_for("retry: 2000", wait).await?);
+    // A write to another document says nothing here.
+    let other = server
+        .post_form(
+            "/admin/documents/AL-8/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "done")],
+        )
+        .await?;
+    assert!(other.status < 400, "{}", other.body);
+    assert!(
+        !stream.wait_for("event:", wait).await?,
+        "another document's write: {}",
+        stream.seen
+    );
+    // A write to this one: its new revision, and nothing else.
+    let converted = server
+        .post_form("/admin/documents/AL-7/convert", &cookie, Some(&csrf), &[])
+        .await?;
+    assert!(converted.status < 400, "{}", converted.body);
+    assert!(
+        stream.wait_for("event: revision\ndata: 2\n", wait).await?,
+        "{}",
+        stream.seen
+    );
+    assert!(!stream.seen.contains("Filler"), "no document content");
+    // A page behind the document hears at once.
+    let mut behind = server
+        .open_stream_at(
+            "/admin/documents/AL-7/stream?revision=1",
+            &cookie,
+            same_site,
+        )
+        .await?;
+    assert!(
+        behind
+            .wait_for(
+                "event: revision\ndata: 2\n",
+                std::time::Duration::from_millis(500)
+            )
+            .await?,
+        "{}",
+        behind.seen
+    );
+    // The document archived: the stream says so and ends.
+    let gone = server
+        .post_form(
+            "/admin/documents/AL-7/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "done")],
+        )
+        .await?;
+    assert!(gone.status < 400, "{}", gone.body);
+    assert!(
+        stream.wait_for("event: gone", wait).await?,
+        "{}",
+        stream.seen
+    );
+    assert!(stream.ends_within(wait).await?);
+    let opened = server
+        .audit()?
+        .iter()
+        .filter(|(t, _, o)| t == "admin:documents.stream" && o == "ok")
+        .count();
+    assert_eq!(opened, 2);
+    drop((stream, behind));
+    server.stop().await
+}
+
+#[tokio::test]
 async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
     let server = start_full(|_| {}, stream_fixture).await?;
     let cookie = server.login().await?;
@@ -5875,7 +6017,9 @@ async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
     let refused = server.get("/admin/board/stream", Some(&cookie)).await?;
     assert_eq!(refused.status, 503, "{}", refused.body);
     assert!(
-        refused.body.contains("Too many open boards"),
+        refused
+            .body
+            .contains("Too many open live pages; close one and reload"),
         "{}",
         refused.body
     );
@@ -5884,6 +6028,19 @@ async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
         rows.last().map(|(t, _, o)| (t.as_str(), o.as_str())),
         Some(("admin:documents.board_stream", "busy"))
     );
+    // Document streams share the same places.
+    let document = server
+        .open_stream_at("/admin/documents/AL-7/stream?revision=1", &cookie, "")
+        .await?;
+    assert_eq!(document.status, 503, "{}", document.head);
+    assert_eq!(
+        server
+            .audit()?
+            .last()
+            .map(|(t, _, o)| (t.clone(), o.clone())),
+        Some(("admin:documents.stream".to_owned(), "busy".to_owned()))
+    );
+    drop(document);
     drop(open.pop());
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let again = server.open_stream("", &cookie, "").await?;

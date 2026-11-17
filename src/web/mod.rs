@@ -45,6 +45,7 @@
 //! | `GET /admin/documents/{id}/history` | `admin:documents.history` |
 //! | `GET /admin/documents/{id}/diff` | `admin:documents.diff` |
 //! | `GET /admin/documents/{id}/download` | `admin:documents.get` |
+//! | `GET /admin/documents/{id}/stream` | `admin:documents.stream` |
 //! | `GET /admin/search` | `admin:documents.search` |
 //! | `GET /admin/projects` | `admin:projects.list` |
 //! | `POST /admin/projects` | `admin:projects.add` |
@@ -221,6 +222,7 @@ pub(crate) enum Route {
     History(String),
     Diff(String),
     Download(String),
+    DocumentStream(String),
     Search,
     ProjectsList,
     ProjectsAdd,
@@ -298,6 +300,9 @@ impl Route {
             (_, ["documents", id, "download"]) if get && !id.is_empty() => {
                 Self::Download(percent_decode(id))
             }
+            (_, ["documents", id, "stream"]) if get && !id.is_empty() => {
+                Self::DocumentStream(percent_decode(id))
+            }
             ("/admin/search", _) if get => Self::Search,
             ("/admin/projects", _) if get => Self::ProjectsList,
             ("/admin/projects", _) if post => Self::ProjectsAdd,
@@ -359,6 +364,7 @@ impl Route {
             Self::Document(_) | Self::Download(_) | Self::BoardPreview(_) => "admin:documents.get",
             Self::History(_) => "admin:documents.history",
             Self::Diff(_) => "admin:documents.diff",
+            Self::DocumentStream(_) => "admin:documents.stream",
             Self::Search => "admin:documents.search",
             Self::ProjectsList => "admin:projects.list",
             Self::ProjectsAdd => "admin:projects.add",
@@ -651,8 +657,18 @@ async fn run(
 ) -> Response {
     let csp = state.csp.clone();
     // A stream stays open: it runs outside the blocking handlers.
-    if matches!(route, Route::BoardStream) && checked.is_ok() {
-        return secured(board_signal::stream(state, request).await, &csp);
+    if checked.is_ok() {
+        let follow = match &route {
+            Route::BoardStream => Some(board_signal::Follow::Board),
+            Route::DocumentStream(id) => Some(board_signal::Follow::Document(id.clone())),
+            _ => None,
+        };
+        if let Some(follow) = follow {
+            return secured(
+                board_signal::stream(state, request, route, follow).await,
+                &csp,
+            );
+        }
     }
     if matches!(route, Route::Backup) && checked.is_ok() {
         return secured(backup(state, request).await, &csp);
