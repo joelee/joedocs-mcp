@@ -257,49 +257,59 @@ pub(super) async fn stream(
         Follow::Board => None,
     };
     let operation = route.operation();
-    let opened = tokio::task::spawn_blocking(move || {
-        let Ok(store) = opening.shared.store().lock() else {
-            return Err(WebError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal",
-                "internal error",
-            ));
-        };
-        let (who, result) = if session::same_origin(&checking.headers, &opening.allowed_origins) {
-            match open_session(&store, &opening, &checking) {
-                Ok(session) => {
-                    // A document stream needs a live document: its revision
-                    // now, for a page already behind it.
-                    let current = document
-                        .as_deref()
-                        .map(|id| store.document_info(id).map(|info| info.revision))
-                        .transpose()
-                        .map_err(|e| WebError::from_store(&e));
-                    let place = current.and_then(|current| {
-                        let place = opening.board_signal.try_open().ok_or_else(|| {
-                            WebError::new(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "busy",
-                                "Too many open live pages; close one and reload.",
-                            )
-                        })?;
-                        Ok((place, current))
-                    });
-                    (Some(session.admin), place)
+    // A document stream listens before it reads the document's revision
+    // (JD-66 MED-04): a change published between the two is then in the
+    // receiver, and one before the read is in the revision. A refused
+    // request drops its receiver with the rest.
+    let following_document = matches!(follow, Follow::Document(_));
+    let signal = Arc::clone(&state.board_signal);
+    let subscribe = move || following_document.then(|| signal.subscribe(None).0);
+    let (early, opened) = subscribe_then_read(subscribe, || {
+        tokio::task::spawn_blocking(move || {
+            let Ok(store) = opening.shared.store().lock() else {
+                return Err(WebError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    "internal error",
+                ));
+            };
+            let (who, result) = if session::same_origin(&checking.headers, &opening.allowed_origins)
+            {
+                match open_session(&store, &opening, &checking) {
+                    Ok(session) => {
+                        // A document stream needs a live document: its revision
+                        // now, for a page already behind it.
+                        let current = document
+                            .as_deref()
+                            .map(|id| store.document_info(id).map(|info| info.revision))
+                            .transpose()
+                            .map_err(|e| WebError::from_store(&e));
+                        let place = current.and_then(|current| {
+                            let place = opening.board_signal.try_open().ok_or_else(|| {
+                                WebError::new(
+                                    StatusCode::SERVICE_UNAVAILABLE,
+                                    "busy",
+                                    "Too many open live pages; close one and reload.",
+                                )
+                            })?;
+                            Ok((place, current))
+                        });
+                        (Some(session.admin), place)
+                    }
+                    Err(refused) => (None, Err(refused)),
                 }
-                Err(refused) => (None, Err(refused)),
-            }
-        } else {
-            (
-                None,
-                Err(WebError::forbidden(
-                    "this stream is for this site's pages only",
-                )),
-            )
-        };
-        let outcome = result.as_ref().map_or_else(|e| e.code, |_| "ok");
-        write_audit(&store, who.as_ref(), operation, outcome);
-        result
+            } else {
+                (
+                    None,
+                    Err(WebError::forbidden(
+                        "this stream is for this site's pages only",
+                    )),
+                )
+            };
+            let outcome = result.as_ref().map_or_else(|e| e.code, |_| "ok");
+            write_audit(&store, who.as_ref(), operation, outcome);
+            result
+        })
     })
     .await;
     let (place, current) = match opened {
@@ -317,7 +327,7 @@ pub(super) async fn stream(
             tokio::spawn(feed(state, request, place, rx, behind, tx));
         }
         Follow::Document(id) => {
-            let (rx, _) = state.board_signal.subscribe(None);
+            let rx = early.unwrap_or_else(|| state.board_signal.subscribe(None).0);
             let current = current.unwrap_or(shown);
             tokio::spawn(document_feed(
                 state, request, place, rx, id, shown, current, tx,
@@ -350,6 +360,22 @@ async fn feed(
     let keep_alive = state.options.board.keep_alive;
     let session = || session_holds(&state, &request);
     run_feed(rx, behind, tx, &shutdown, keep_alive, session).await;
+}
+
+/// Runs `subscribe`, then starts and awaits `read`, in that order:
+/// whatever is published after the subscription is seen by its receiver,
+/// and whatever happened before the read is in its result, so nothing
+/// falls between. `read` is a function, so nothing it spawns can start
+/// before the subscription.
+async fn subscribe_then_read<S, F>(
+    subscribe: impl FnOnce() -> S,
+    read: impl FnOnce() -> F,
+) -> (S, F::Output)
+where
+    F: std::future::Future,
+{
+    let subscribed = subscribe();
+    (subscribed, read().await)
 }
 
 /// The stream's outgoing body.
@@ -628,6 +654,41 @@ mod tests {
             }
         }
         seen
+    }
+
+    /// JD-66 MED-04: a document stream subscribes, then reads the
+    /// document's revision. A change published in between (the watcher
+    /// announcing a write that lands just after the read) is still seen.
+    #[tokio::test]
+    async fn a_change_between_the_subscription_and_the_revision_read_is_seen() {
+        let (publish, _keep) = watch::channel(Signal::default());
+        let (rx, read) = subscribe_then_read(
+            || publish.subscribe(),
+            || async {
+                // The read: revision 1, then the write lands and is published.
+                publish.send_replace(Signal {
+                    generation: 1,
+                    seen_ms: 5,
+                });
+                1_u64
+            },
+        )
+        .await;
+        assert_eq!(read, 1);
+        assert_eq!(
+            rx.has_changed().ok(),
+            Some(true),
+            "the receiver sees the change, so the feed reads revision 2"
+        );
+        // The old order loses it: a receiver made after the publication
+        // counts it as seen.
+        let (publish, _keep) = watch::channel(Signal::default());
+        publish.send_replace(Signal {
+            generation: 1,
+            seen_ms: 5,
+        });
+        let late = publish.subscribe();
+        assert_eq!(late.has_changed().ok(), Some(false));
     }
 
     #[tokio::test]
