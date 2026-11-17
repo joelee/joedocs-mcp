@@ -26,7 +26,8 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 | `just coverage-html` | Browse the coverage report. |
 | `just doctest` | Run doc-tests (nextest skips them). |
 | `just doc` | Build API docs with warnings as errors. |
-| `just deny` | Advisories, licences, bans and sources. |
+| `just deny` | Licences, bans and sources. |
+| `just advisories` | RustSec advisories: its own CI check, not part of `just ci`; an active advisory blocks a production release (see Releasing). |
 | `just actionlint` | Lint the GitHub Actions workflows (shellcheck and pyflakes integrations off). |
 | `just pre-commit` | The checks the git hook runs before each commit. |
 | `just secrets` | Scan git history for secrets: gitleaks' built-in rules plus a `.gitleaks.toml` rule for JoeDocs API keys (checked by `tests/secrets.rs`). |
@@ -195,6 +196,8 @@ CI runs on GitHub Actions ([`.github/workflows/ci.yml`](../.github/workflows/ci.
 - `just ci` on Ubuntu and macOS, with full git history (for the gitleaks scan) and `NEXTEST_PROFILE=ci`; the JUnit report is uploaded as an artifact.
 - `just docker-test`, which builds the image and runs the deployment tests against it.
 
+The RustSec advisory check runs on its own, in [`.github/workflows/advisories.yml`](../.github/workflows/advisories.yml) (job `cargo deny advisories`, `just advisories`), on pushes to `main`, pull requests, daily and by hand. It is not one of the checks `main` requires, so an advisory does not block a merge; it shows red while one is active, and blocks a production release.
+
 The same workflow runs as a reusable workflow (`workflow_call`) from [`.github/workflows/release.yml`](../.github/workflows/release.yml) on every release tag, before anything is published (see Releasing).
 
 Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS`, `GITLEAKS_VERSION` and `ACTIONLINT_VERSION` variables, with gitleaks and actionlint checksums per platform). Keep the tool versions in step with what `just setup` installs locally. Dependabot proposes weekly updates for actions and crates; every proposal runs CI, including `cargo deny`.
@@ -203,7 +206,7 @@ Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS`, `GIT
 
 Versions number the command line, the configuration and the MCP tools; the Rust library in the crate is internal. A published version can never be replaced (only yanked), so check before publishing.
 
-Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml). It checks the tag, then runs the full CI gate on the tagged commit and, alongside it, builds the release binaries: Linux x86_64 and aarch64 (static, musl) and macOS Apple silicon. Each is checked (`--version`, and on Linux no shared libraries) and kept as a workflow artifact. The workflow then waits for approval in the `release` environment, publishes to crates.io with Trusted Publishing (no stored token), and asks the Homebrew tap to bump the formula. Last, it creates the GitHub release from the CHANGELOG section, with the three `joedocs-X.Y.Z-<target>.tar.gz` archives, their `SHA256SUMS`, and a build-provenance attestation for each archive. Release builds use no cache.
+Pushing a signed tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml): a `vX.Y.Z` tag makes a production release, a `vX.Y.Z-<pre>` tag (such as `v0.5.6-dev`) a GitHub pre-release (see Pre-releases). It checks the tag, then runs the full CI gate and the advisory check on the tagged commit and, alongside them, builds the release binaries: Linux x86_64 and aarch64 (static, musl) and macOS Apple silicon. Each is checked (`--version`, and on Linux no shared libraries) and kept as a workflow artifact. For a production release, the workflow then waits for approval in the `release` environment, publishes to crates.io with Trusted Publishing (no stored token), and asks the Homebrew tap to bump the formula. Last, it creates the GitHub release from the CHANGELOG section, with the three `joedocs-X.Y.Z-<target>.tar.gz` archives, their `SHA256SUMS`, and a build-provenance attestation for each archive. Release builds use no cache.
 
 ### One-time setup
 
@@ -214,7 +217,7 @@ Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/
 
 ### Each release
 
-No release while a RustSec advisory is active: `cargo deny check advisories` (part of `just ci`) must pass with `ignore = []` in `deny.toml`. If it reports an advisory, of any kind (`unmaintained` included), do not release, and do not ignore the advisory or narrow the check: file an issue, and wait for or make a fixed dependency (see `AGENTS.md`, Security). The release workflow enforces this, since it runs the full CI gate on the tag.
+No production release while a RustSec advisory is active: `just advisories` (`cargo deny check advisories`) must pass with `ignore = []` in `deny.toml`. If it reports an advisory, of any kind (`unmaintained` included), do not release, and do not ignore the advisory or narrow the check: file an issue, and wait for or make a fixed dependency (see `AGENTS.md`, Security). Meanwhile the work can go out as a pre-release (below). The release workflow enforces this: for a `vX.Y.Z` tag its advisory check fails before anything is published.
 
 1. On a release branch, move the `Unreleased` entries in `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, add the compare links at the bottom, and set `version` in `Cargo.toml`.
 2. Check what would be published and that it builds on its own:
@@ -257,11 +260,13 @@ No release while a RustSec advisory is active: `cargo deny check advisories` (pa
 
 ### Pre-releases
 
-While a release is held back, for example by an advisory, its work can be shared as a pre-release: the version `X.Y.Z-dev` in `Cargo.toml`, and a `## [X.Y.Z-dev] - YYYY-MM-DD` changelog section that says why it is not released. A pre-release lives on its release branch and is built from it (`cargo install --locked --path .`, or `--git` with `--branch`). It is never tagged or published: a `vX.Y.Z-dev` tag would start the release workflow. When the release goes ahead, set the version to `X.Y.Z` and rename and date the section.
+While a release is held back, for example by an advisory, its work can be shared as a pre-release: a version with a SemVer pre-release part in `Cargo.toml` (`X.Y.Z-dev`, `X.Y.Z-rc.1`), and a `## [X.Y.Z-dev] - YYYY-MM-DD` changelog section that says why it is not a release. A pre-release is not for production use, and goes to GitHub only, never crates.io or Homebrew.
+
+Merge it to `main` and tag it as in Each release (`git tag -s vX.Y.Z-dev -m "JoeDocs X.Y.Z-dev"`, then `git tag -v` and push). The release workflow runs the checks, CI and the binary builds, and its advisory check reports any active advisory without failing. After approval in the `release` environment it creates a GitHub release marked **Pre-release**, never Latest, with the three archives, `SHA256SUMS` and the attestations. Its notes are the changelog section, then an "Active RustSec advisories" list with a link to each advisory, and "Not for production use." When the release goes ahead, set the version to `X.Y.Z` and rename and date the section.
 
 ### Releasing by hand
 
-The same rule applies: never publish by hand while `cargo deny check advisories` fails. If the workflow cannot be used, publish from an up-to-date `main` with a crates.io token from `cargo login` (scope `publish-update`, limited to the `joedocs` crate, with an expiry date; never commit it):
+The same rule applies: no production release by hand while `cargo deny check advisories` fails. If the workflow cannot be used, publish from an up-to-date `main` with a crates.io token from `cargo login` (scope `publish-update`, limited to the `joedocs` crate, with an expiry date; never commit it):
 
 ```bash
 cargo publish --locked

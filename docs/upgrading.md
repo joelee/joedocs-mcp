@@ -102,7 +102,7 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ### 0.5.5 to 0.5.6
 
-0.5.6 is not released yet: `0.5.6-dev` is a pre-release, built from its branch and not published, until `rmcp` drops `chrono`, which RustSec advisory RUSTSEC-2026-0543 reports as unmaintained (see `CHANGELOG.md`). What follows applies to both.
+0.5.6 is not released yet: `0.5.6-dev` is a pre-release, on GitHub only (not crates.io or Homebrew) and not for production use, until `rmcp` drops `chrono`, which RustSec advisory RUSTSEC-2026-0543 reports as unmaintained (see `CHANGELOG.md`). What follows applies to both.
 
 - **Nothing changes for a server's data:** no migration; the database stays at version 8. No configuration key, MCP tool or admin API route changed.
 - **The Board** also shows 🏗️ for plans whose `implementation_status` is `waiting-for-user` or `fixing`.

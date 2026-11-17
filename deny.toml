@@ -6,11 +6,13 @@
 all-features = true
 
 [advisories]
-# RustSec advisories fail the build; yanked crates too.
+# RustSec advisories fail `just advisories` (its own CI check, not part of
+# `just ci`); yanked crates too.
 yanked = "deny"
-# Advisories are never ignored, and nothing is released while one is active
-# (any RUSTSEC advisory, `unmaintained` included): file an issue, and wait for
-# or make a fixed dependency. See AGENTS.md, Security.
+# Advisories are never ignored, and no production release is made while one
+# is active (any RUSTSEC advisory, `unmaintained` included): file an issue,
+# and wait for or make a fixed dependency. A pre-release goes to GitHub only
+# and lists the advisory. See AGENTS.md, Security.
 ignore = []
 
 [licenses]
