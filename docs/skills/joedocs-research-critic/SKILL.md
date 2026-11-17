@@ -199,11 +199,11 @@ below, and this front matter:
 
 ```yaml
 skill: joedocs-research-critic
+skill_model: claude-opus-5-5    # the model you run as; leave out when unknown
 origin: independent             # coordinated when dispatched with a task
 task: T-007                     # only when dispatched
 lens: methodology
 reviewer: claude-opus-5-5
-reviewer_model: <model id>
 report_revision: 41
 round: 1
 verdict: accept-with-changes    # accept | accept-with-changes | revise
@@ -216,11 +216,14 @@ complete: true
 ```
 
 The file is written in one call, so it carries `complete: true` at once.
+`skill_model` is the model ID you run as, from your system prompt; leave the
+key out when you cannot tell.
 
 **A later round** (your file exists, same lens and reviewer): read it, then one
 `update_document` with `file`, `expected_revision`, the whole body with a new
 `## Round N` section added and the summary at the top rewritten for round N,
-front matter `round`, `report_revision`, `verdict`, the counts, and `task`
+front matter `round`, `report_revision`, `verdict`, the counts,
+`skill_model`, and `task`
 and `origin: coordinated` when the coordinator dispatched this round (an
 independent round sets `origin: independent`), and `summary: "Critique
 <lens> RN: <verdict>"`. In the new round, give every earlier finding a disposition from

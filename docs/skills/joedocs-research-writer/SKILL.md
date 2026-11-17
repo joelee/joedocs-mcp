@@ -116,11 +116,15 @@ more gathering), with `expected_revision` and
 
 ```yaml
 skill: joedocs-research-writer
+skill_model: claude-opus-5-5   # the model you run as; leave out when unknown
 task: T-020
 brief_revision: 12
 plan_revision: 14
 complete: true
 ```
+
+`skill_model` is the model ID you run as, from your system prompt; leave the
+key out when you cannot tell. Set it again with every revision you write.
 
 Body:
 
@@ -166,6 +170,7 @@ matter:
 
 ```yaml
 skill: joedocs-research-writer
+skill_model: claude-opus-5-5
 task: T-021
 draft: 1
 synthesis_revision: 30
@@ -202,11 +207,12 @@ where an interrupted one stopped:
 1. **Revise the report.** If `report`'s `round_revised` is already `N`, the
    revision is done: go to 2. Otherwise weigh every admitted finding on its
    evidence, revise the report (one `update_document` with `file: "report"`,
-   front matter `round_revised: N`, `task`, `draft` plus one, `complete:
-   true`, `summary: "Writer T-NNN: round N revision"`), and note the new
-   report revision.
+   front matter `round_revised: N`, `task`, `skill_model`, `draft` plus
+   one, `complete: true`, `summary: "Writer T-NNN: round N revision"`), and
+   note the new report revision.
 2. **Write `responses/RN`**, in one call (`new_document_file`), with front
-   matter `{"skill": "joedocs-research-writer", "task": "T-NNN", "round": N,
+   matter `{"skill": "joedocs-research-writer", "skill_model": "<model id>",
+   "task": "T-NNN", "round": N,
    "critiques": ["critiques/methodology-claude-opus-5-5 R1", ...],
    "report_revision_before": <rev>, "report_revision_after": <rev>,
    "complete": true}` and a table:

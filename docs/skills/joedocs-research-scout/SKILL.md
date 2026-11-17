@@ -130,6 +130,7 @@ title>"`, and front matter:
 
 ```yaml
 skill: joedocs-research-scout
+skill_model: claude-opus-5-5         # the model you run as; leave out when unknown
 task: T-007
 source: S-012
 url: https://example.org/report      # normalised; JD-n for a JoeDocs document
@@ -142,6 +143,9 @@ tier: primary                        # primary | secondary | weak
 rqs: [RQ-01]
 complete: true
 ```
+
+`skill_model` is the model ID you run as, from your system prompt; leave the
+key out when you cannot tell.
 
 Body:
 
@@ -187,7 +191,7 @@ writes its own section:
 
 1. If `notes/RQ-NN` does not exist, `new_document_file` with
    `file: "notes/RQ-NN"`, front matter
-   `{"skill": "joedocs-research-scout", "rq": "RQ-NN", "tasks_complete": []}`,
+   `{"skill": "joedocs-research-scout", "skill_model": "<model id>", "rq": "RQ-NN", "tasks_complete": []}`,
    and a heading `# Notes - RQ-NN - <question>`.
 2. `append_to_document` with `file: "notes/RQ-NN"` and this task's section:
 
@@ -205,8 +209,10 @@ writes its own section:
    Every point cites `[S-NNN, locator]`, including sources recorded by an
    earlier task.
 3. **Last**, mark the task complete: `change_document_front_matter` with
-   `file: "notes/RQ-NN"` and `tasks_complete` set to the existing list plus
-   `T-007` (the list replaces the old one, so send all of it).
+   `file: "notes/RQ-NN"`, `tasks_complete` set to the existing list plus
+   `T-007` (the list replaces the old one, so send all of it), and
+   `skill_model` set to your model, so the file names the last task's
+   model.
 
 A task is complete when, and only when, its ID is in its notes file's
 `tasks_complete`. If you stop early (a limit, an error), leave it out and say
