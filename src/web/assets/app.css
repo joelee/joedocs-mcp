@@ -43,6 +43,8 @@
   --radius-lg: 10px;
   --shadow: 0 1px 2px light-dark(rgb(0 0 0 / 0.06), rgb(0 0 0 / 0.4));
   --sidebar: 13rem;
+  /* The top bar's height on wide screens: the side menu sticks below it. */
+  --topbar-h: 3.5rem;
 }
 
 :root[data-theme="light"] { color-scheme: light; }
@@ -107,6 +109,7 @@ main:focus { outline: none; }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 5;
+  min-height: var(--topbar-h);
 }
 .brand { font-weight: 700; color: var(--text); text-decoration: none; margin-right: var(--space-4); }
 .topbar-search { flex: 1; max-width: 32rem; }
@@ -115,6 +118,14 @@ main:focus { outline: none; }
 .topbar [data-theme-toggle] { margin-left: auto; }
 
 .sidenav { grid-area: nav; border-right: 1px solid var(--border); padding: var(--space-4) var(--space-2); }
+/* The menu stays in view as the page scrolls: it sticks below the top bar
+   and scrolls on its own when it is taller than the window. The column's
+   border still runs the page's full height. */
+.nav-menu {
+  position: sticky; top: calc(var(--topbar-h) + var(--space-4));
+  max-height: calc(100vh - var(--topbar-h) - var(--space-8));
+  overflow-y: auto;
+}
 .sidenav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .sidenav a {
   display: block; padding: var(--space-2) var(--space-3);
@@ -148,6 +159,7 @@ main { grid-area: main; padding: var(--space-6); min-width: 0; max-width: 78rem;
   .topbar-search { order: 3; flex-basis: 100%; max-width: none; }
   .session-menu .menu { min-width: 0; width: min(16rem, calc(100vw - 2rem)); }
   .sidenav { border-right: 0; border-bottom: 1px solid var(--border); padding: var(--space-2); }
+  .nav-menu { position: static; max-height: none; overflow-y: visible; }
   .nav-toggle {
     display: flex; align-items: center; gap: var(--space-2); min-height: 44px;
     padding: 0 var(--space-2); cursor: pointer; font-weight: 600; list-style: none;
