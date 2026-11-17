@@ -275,6 +275,9 @@ button:disabled, button[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 .stack { display: grid; gap: var(--space-2); }
 .filters { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end; margin-bottom: var(--space-4); }
 .filters > div { display: grid; gap: var(--space-1); }
+/* Reset filters forgets a remembered view (JD-65). */
+.filters-reset { align-self: end; }
+.board-filters .filters-reset { margin-top: var(--space-2); }
 /* Filters apply as they change (htmx), so with scripts on the button is
    hidden from view; it stays in the form so Enter still submits it. */
 .js .filters-apply {

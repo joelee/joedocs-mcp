@@ -29,7 +29,7 @@
       <summary class="nav-toggle">Menu</summary>
       <ul>
         {% for item in chrome.nav %}
-        <li><a href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+        <li><a href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}{% if let Some(view) = item.remember %} data-remember="{{ view }}"{% endif %}>{{ item.label }}</a></li>
         {% endfor %}
       </ul>
     </details>

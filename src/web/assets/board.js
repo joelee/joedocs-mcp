@@ -669,6 +669,37 @@
       items[(at + step + items.length) % items.length].focus();
     }
   });
+  // The Filters panel opened or shut: `filters=closed` in the form keeps
+  // it in the address, as folds are, with no new grid. `toggle` does not
+  // bubble, so it is caught on the way down.
+  document.addEventListener(
+    "toggle",
+    (event) => {
+      const panel = event.target;
+      if (!(panel instanceof HTMLDetailsElement) || !panel.matches("[data-board-filters-panel]") || !form) {
+        return;
+      }
+      const held = form.querySelector("input[data-filters-closed]");
+      // Already as the form says (a browser fires `toggle` for a panel
+      // drawn open): nothing changed, so the address and the remembered
+      // view stay as they are.
+      if (panel.open === !held) {
+        return;
+      }
+      if (panel.open) {
+        held.remove();
+      } else {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "filters";
+        input.value = "closed";
+        input.dataset.filtersClosed = "";
+        form.append(input);
+      }
+      keepAddress();
+    },
+    true,
+  );
   // A menu closed by Escape or a click elsewhere: its button says so.
   document.addEventListener("toggle", (event) => {
     if (event.newState !== "closed") {
@@ -776,8 +807,13 @@
     }
   });
 
-  const applyFilters = () => {
+  // The form is the view: its address, and app.js remembers it from there.
+  const keepAddress = () => {
     history.replaceState(null, "", `/admin/board?${new URLSearchParams(new FormData(form))}`);
+    document.dispatchEvent(new CustomEvent("joedocs:view-changed", { detail: { view: "board" } }));
+  };
+  const applyFilters = () => {
+    keepAddress();
     summarize();
     hidePreview();
     refresh(true);

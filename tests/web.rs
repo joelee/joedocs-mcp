@@ -4922,6 +4922,61 @@ async fn the_files_panel_folds_each_directory_and_opens_the_shown_files() -> Tes
 }
 
 #[tokio::test]
+async fn the_board_and_documents_remember_their_view_and_offer_a_reset() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    // The menu's Board and Documents links are marked for the script,
+    // which points them at the remembered view; the other links are not.
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    let marked: Vec<(String, String)> = tags(&home.body)
+        .into_iter()
+        .filter(|t| t.name == "a" && t.get("data-remember").is_some())
+        .map(|t| {
+            (
+                t.get("href").unwrap_or_default().to_owned(),
+                t.get("data-remember").unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        marked,
+        [
+            ("/admin/board".to_owned(), "board".to_owned()),
+            ("/admin/documents".to_owned(), "documents".to_owned()),
+        ]
+    );
+    // Each page has a visible Reset filters button for its own view, and
+    // the Board's menu item resets the same way.
+    for (path, view) in [("/admin/board", "board"), ("/admin/documents", "documents")] {
+        let page = server.get(path, Some(&cookie)).await?;
+        let resets: Vec<Tag> = tags(&page.body)
+            .into_iter()
+            .filter(|t| t.get("data-reset-view") == Some(view))
+            .collect();
+        let button = resets
+            .iter()
+            .find(|t| t.name == "button")
+            .ok_or("no Reset filters button")?;
+        assert_eq!(button.get("type"), Some("button"), "{path}");
+        assert!(
+            page.body.contains(&format!(
+                "data-reset-view=\"{view}\">Reset filters</button>"
+            )),
+            "{path}"
+        );
+        if view == "board" {
+            assert!(
+                resets
+                    .iter()
+                    .any(|t| t.name == "a" && t.get("href") == Some("/admin/board")),
+                "the Board actions item resets too"
+            );
+        }
+    }
+    server.stop().await
+}
+
+#[tokio::test]
 async fn every_signed_in_page_has_one_back_to_top_button() -> TestResult<()> {
     let server = start_full(|_| {}, fixture).await?;
     let cookie = server.login().await?;
@@ -5331,6 +5386,24 @@ async fn a_board_group_folds_to_one_line_from_the_address() -> TestResult<()> {
             .contains("<input type=\"hidden\" name=\"collapse\" value=\"notes\" data-collapse>"),
         "the form holds the fold"
     );
+    // The Filters panel is open by default; `filters=closed` keeps it shut,
+    // with the key in the form so a filter change keeps it too.
+    let panel = |body: &str| -> Option<Tag> {
+        tags(body)
+            .into_iter()
+            .find(|t| t.name == "details" && t.get("data-board-filters-panel").is_some())
+    };
+    let shut = get("filters=closed").await?;
+    let tag = panel(&shut.body).ok_or("no Filters panel")?;
+    assert!(tag.get("open").is_none(), "closed from the address");
+    assert!(
+        shut.body.contains(
+            "<input type=\"hidden\" name=\"filters\" value=\"closed\" data-filters-closed>"
+        )
+    );
+    let tag = panel(&open.body).ok_or("no Filters panel")?;
+    assert!(tag.get("open").is_some(), "open by default");
+    assert!(!open.body.contains("data-filters-closed"));
     // Ungrouped, nothing folds.
     let ungrouped = get("group=none&collapse=all").await?;
     assert!(

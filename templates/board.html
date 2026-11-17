@@ -13,7 +13,7 @@
   </div>
 </div>
 
-<details class="board-filters" open>
+<details class="board-filters"{% if !view.filters_closed %} open{% endif %} data-board-filters-panel>
   <summary><span class="board-filters-title">Filters</span> <span class="board-filters-summary" data-board-summary></span></summary>
   <form method="get" action="/admin/board" data-board-filters>
     <fieldset>
@@ -54,6 +54,8 @@
         </select>
       </label>
     </fieldset>
+    <div class="filters-reset"><button type="button" class="secondary" data-reset-view="board">Reset filters</button></div>
+    {% if view.filters_closed %}<input type="hidden" name="filters" value="closed" data-filters-closed>{% endif %}
     {% for key in view.collapsed %}<input type="hidden" name="collapse" value="{{ key }}" data-collapse>{% endfor %}
     {% if debug %}<input type="hidden" name="debug" value="1">{% endif %}
   </form>
@@ -74,7 +76,7 @@
 </div>
 <div class="board-menu" id="board-actions-menu" popover role="menu" aria-label="Board actions" data-board-actions-menu>
   <button type="button" role="menuitem" data-board-act="copy-link">Copy link to this board (with its filters)</button>
-  <a role="menuitem" href="/admin/board">Reset the filters</a>
+  <a role="menuitem" href="/admin/board" data-reset-view="board">Reset the filters</a>
 </div>
 <div class="board-preview" id="board-preview" popover="manual" data-board-preview></div>
 </div>

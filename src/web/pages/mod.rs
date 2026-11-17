@@ -83,6 +83,16 @@ impl Section {
         }
     }
 
+    /// The view a page remembers in the browser, when it does: the
+    /// script points the menu link at it (JD-65 D-01, D-02).
+    fn remembers(self) -> Option<&'static str> {
+        match self {
+            Self::Board => Some("board"),
+            Self::Documents => Some("documents"),
+            _ => None,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
@@ -105,6 +115,8 @@ pub(crate) struct NavItem {
     pub(crate) href: &'static str,
     pub(crate) label: &'static str,
     pub(crate) current: bool,
+    /// The remembered view the link leads back to (`data-remember`).
+    pub(crate) remember: Option<&'static str>,
 }
 
 /// What the layout around every signed-in page shows: the session menu,
@@ -131,6 +143,7 @@ impl<'a> Chrome<'a> {
                     href: s.href(),
                     label: s.label(),
                     current: *s == section,
+                    remember: s.remembers(),
                 })
                 .collect(),
         }

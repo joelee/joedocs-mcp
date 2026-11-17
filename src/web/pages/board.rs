@@ -77,6 +77,8 @@ struct View {
     dir: &'static str,
     /// The keys of the rows folded to one line (`collapse`, any number).
     collapsed: Vec<String>,
+    /// Whether the Filters panel is shut (`filters=closed`).
+    filters_closed: bool,
 }
 
 impl View {
@@ -89,6 +91,7 @@ impl View {
         };
         Self {
             attention_only: request.query("attention") == Some("1"),
+            filters_closed: request.query("filters") == Some("closed"),
             group: pick("group", &["type", "project", "none"]),
             sort: pick("sort", &["updated", "created", "id"]),
             dir: pick("dir", &["desc", "asc"]),
@@ -156,7 +159,8 @@ struct Card {
 /// `GET /admin/board`: `project`, `type` and `status` (any number each;
 /// none means every project, every type, and every status that is not
 /// closed), `attention=1`, `group`, `sort`, `dir`, `collapse` (the keys of
-/// rows folded to one line, any number); `fragment=1` for the grid alone.
+/// rows folded to one line, any number), `filters=closed` (the Filters
+/// panel shut); `fragment=1` for the grid alone.
 pub(crate) fn page(
     store: &Store,
     state: &WebState,
