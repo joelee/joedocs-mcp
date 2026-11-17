@@ -18,7 +18,7 @@ allowed-tools: >-
   mcp__joedocs__diff_document, mcp__joedocs__new_document,
   mcp__joedocs__new_document_file, mcp__joedocs__write_document_files,
   mcp__joedocs__update_document, mcp__joedocs__edit_document,
-  mcp__joedocs__append_to_document, mcp__joedocs__change_document_front_matter
+  mcp__joedocs__change_document_front_matter
 ---
 
 # JoeDocs Research Coordinator
@@ -74,6 +74,10 @@ The tool names below assume the JoeDocs server is registered as `joedocs`
 4. **The files win.** When `coordinator/state` disagrees with the ledger and
    the specialists' files, trust the files, and rewrite the state.
 5. **Hold the lease while you work; release it when you wait** (The lease).
+6. **Rows go in at the top.** Add every row of `coordinator/tasks` and
+   `coordinator/log` with `edit_document`, under the table's header, newest
+   first (Adding a row). Never use `append_to_document` on them: it puts a
+   blank line before what it adds, and a blank line ends a Markdown table.
 
 ## Boundaries
 
@@ -139,6 +143,7 @@ research_phase: intake       # intake | scoping | planning | gathering | synthes
 research_state: working      # working | waiting-for-user | blocked | closed
 next_checkpoint: CP1         # CP1 ... CP7 | none
 checkpoint_profile: standard # strict | standard | light
+coordinator_model: claude-opus-5-5              # the model of the session that last claimed the lease
 coordinator_lease_by: laptop-20261116T221000Z   # only while you work
 coordinator_lease_at: "2026-11-16T22:10:00Z"    # only while you work
 attention: "CP1: approve the brief"             # only while the user is needed
@@ -162,7 +167,8 @@ the research runs, `done` at CP7, `parked` or `rejected` on the user's word.
 3. **Create the document.** `new_document` with `type: "research"`,
    `status: "draft"`, `multifile: true`, the title, the main file's body (the
    template below, with the request word for word), the front matter above
-   (`research_phase: intake`, `next_checkpoint: CP1`, your lease), and
+   (`research_phase: intake`, `next_checkpoint: CP1`, your lease and
+   `coordinator_model`), and
    `summary: "Start research: <topic>"`. Then one `write_document_files`
    creating `coordinator/state`, `coordinator/tasks` and `coordinator/log`
    from the templates, `summary: "Add the coordinator files"`.
@@ -174,15 +180,18 @@ The lease says which session is working on the research now.
 
 - **Claim** it when you start working (a new research, a resume, an answer to
   act on): set `coordinator_lease_by` to `<hostname>-<UTC time
-  compact>` (from `hostname` and `date -u +%Y%m%dT%H%M%SZ`) and
-  `coordinator_lease_at` to the time, in one `change_document_front_matter`
-  on the main file with `expected_revision`.
+  compact>` (from `hostname` and `date -u +%Y%m%dT%H%M%SZ`),
+  `coordinator_lease_at` to the time, and `coordinator_model` to the model
+  ID you run as (from your system prompt; leave it as it is when you cannot
+  tell), in one `change_document_front_matter` on the main file with
+  `expected_revision`. Log the claim with the session tag and the model, so
+  `coordinator/log` keeps every session's model.
 - **Renew** it with every main-file write while you work (set
   `coordinator_lease_at` again).
 - **Release** it (remove both keys) whenever you stop: at a checkpoint, when
   blocked, when the user parks or stops the research, and at the end of your
   turn's work. A waiting research has no lease, so any session can take the
-  user's answer.
+  user's answer. `coordinator_model` stays: it names the last coordinator.
 - **Another session's lease.** If, when you claim, the keys are set by
   another session: a lease younger than the plan's lease limit (default 2
   hours) is live: stop, tell the user which session holds it, and do
@@ -192,8 +201,9 @@ The lease says which session is working on the research now.
 
 ## Resuming
 
-1. Read the main file, `coordinator/state`, `coordinator/tasks`, the last
-   entries of `coordinator/log`, and `list_document_files`.
+1. Read the main file, `coordinator/state`, `coordinator/tasks` (the newest
+   row for a task is its status), the newest rows of `coordinator/log` (at
+   the top), and `list_document_files`.
 2. Claim the lease (The lease).
 3. **Reconcile the ledger.** For each task the ledger shows `dispatched`:
    - **done** when its output is complete: for a scout task, its ID is in
@@ -201,15 +211,18 @@ The lease says which session is working on the research now.
      file it writes has `task: <ID>` and `complete: true` (`synthesis`,
      `report`, or `responses/RN`); for a critic task, its critique file has
      `task: <ID>`, the expected `round` and `complete: true`;
-   - **lost** otherwise: append a row marking it `lost`, then dispatch it
+   - **lost** otherwise: add a row marking it `lost`, then dispatch it
      again as a new task naming the one it replaces (the scout skips sources
      already recorded; the writer resumes a round from `round_revised`).
 4. **Reconcile critiques** (Independent critiques).
-5. Rewrite `coordinator/state` from what you found, and tell the user where
+5. **Bring the Outputs table up to date** from `list_document_files`: a row
+   whose files or revision differ from what the file list shows (The
+   Outputs table).
+6. Rewrite `coordinator/state` from what you found, and tell the user where
    the research stands: the phase, the last checkpoint passed, what was lost
    and re-dispatched, critiques waiting, and the next step or the question
    waiting for them (from `coordinator/state`, word for word).
-6. Continue from there.
+7. Continue from there.
 
 ## Checkpoints
 
@@ -230,7 +243,8 @@ When the user answers:
 2. **Approve:** one `change_document_front_matter` on the approved file with
    `file`, `set: {"status": "approved", "approved_by": "<the user's name>"}`;
    note the revision it returns (the pinned revision); add the checkpoint
-   row to the main file (edit_document) and a log entry, both with that
+   row to the main file and update the file's Outputs row (one
+   `edit_document` with both edits), and a log entry, all with that
    revision; remove `attention`, set `research_state: working`, and go on.
 3. **Changes:** log what the user asked; revise your own file (`brief`,
    `plan`, `coverage`), or dispatch the writer again with the changes as its
@@ -333,11 +347,12 @@ file's `status: approved` and `checkpoint_profile`, and start gathering.
 
 `research_phase: gathering`. For each sub-question in the plan, one at a time:
 
-1. Append a ledger row (`dispatched`), then invoke `joedocs-research-scout`
+1. Add a ledger row (`dispatched`), then invoke `joedocs-research-scout`
    with the Skill tool and its hand-off brief (Dispatching).
 2. Read the hand-back, check the output (Resuming, step 3), close the row
-   (`done`, or `lost` and dispatch again once), and update
-   `coordinator/state` (budget used).
+   (`done`, or `lost` and dispatch again once), update the Sources and
+   Notes rows of the Outputs table, and update `coordinator/state` (budget
+   used).
 3. Stop at the stopping rule or a limit; at a limit with questions still
    open, ask the user (more budget, or proceed).
 
@@ -390,9 +405,9 @@ closed.
 
 For every specialist task:
 
-1. **Ledger first.** Append to `coordinator/tasks` a row: next `T-NNN`, the
-   skill, a one-line brief, inputs with revisions, expected outputs,
-   `dispatched`, the time (`date -u +%Y-%m-%dT%H:%M:%SZ`).
+1. **Ledger first.** Add to `coordinator/tasks` a row (Adding a row): next
+   `T-NNN`, the skill, a one-line brief, inputs with revisions, expected
+   outputs, `dispatched`, the time (`date -u +%Y-%m-%dT%H:%M:%SZ`).
 2. **Invoke** the skill with the Skill tool (`joedocs-research-scout`,
    `joedocs-research-writer` or `joedocs-research-critic`), passing the
    hand-off brief as its arguments. Each runs in a forked subagent that does
@@ -406,8 +421,9 @@ For every specialist task:
    (critic) Lens: <lens> / Draft: r<report revision> / Reviewer: <name>
    ```
 3. **Check** the hand-back against the files (Resuming, step 3), then close
-   the row: append its `done` (or `lost`) with the time. Raise anything the
-   hand-back asks you to tell the user.
+   the row: add its `done` (or `lost`) row with the time, and update the
+   Outputs row of each file the task wrote (The Outputs table). Raise
+   anything the hand-back asks you to tell the user.
 
 ## Independent critiques
 
@@ -453,11 +469,48 @@ question in `coordinator/state`).
 
 <the user's request, word for word>
 
+## Outputs
+
+| Output | Files | What it holds | Revision |
+|---|---|---|---|
+| Brief | - | - | - |
+| Plan | - | - | - |
+| Coverage | - | - | - |
+| Synthesis | - | - | - |
+| Report | - | - | - |
+| Critiques | - | - | - |
+| Responses | - | - | - |
+| Amendments | - | - | - |
+| Sources | - | - | - |
+| Notes | - | - | - |
+| Coordinator | [[coordinator/state]], [[coordinator/tasks]], [[coordinator/log]] | Where the research stands; the task ledger and the log, newest first | - |
+
 ## Checkpoints
 
 | Checkpoint | File | Pinned revision | Decision | Date (UTC) |
 |---|---|---|---|---|
 ```
+
+**The Outputs table** lists the research's outputs for the user, with
+links. Keep its eleven rows in this order. When an output exists, its row
+gets:
+
+- **Files:** a wiki link per file, by its path as `list_document_files`
+  lists it: `[[brief]]`, `[[plan]]`, `[[coverage]]`, `[[synthesis]]`,
+  `[[report]]`; one link per `critiques/<lens>-<reviewer>`, per
+  `responses/RN`, per `amendments/NN-<slug>` and per `notes/RQ-NN`. Sources
+  get no links: their count and range (`60 sources, S-001 to S-060`).
+- **What it holds:** one sentence on what the output says now, in the
+  audience's terms (for the brief, its research questions in short; for the
+  report, the headline answer and its draft number; for critiques, each
+  lens's latest verdict).
+- **Revision:** the file's revision when you wrote the row, and `approved`
+  when the user approved it at a checkpoint (`r21, approved`). For a row of
+  several files, the newest.
+
+Update a row with one `edit_document` on the main file (the old row for the
+new row): when you write the output, when a task that wrote it closes, when
+the user approves it, and when resuming finds it behind the file list.
 
 **`coordinator/state`** (rewritten whole with `update_document` and `file`):
 
@@ -477,7 +530,7 @@ question in `coordinator/state`).
 | Updated (UTC) | 2026-11-16T22:30:00Z |
 ```
 
-**`coordinator/tasks`** (rows appended, never rewritten):
+**`coordinator/tasks`** (rows added newest first, never rewritten):
 
 ```markdown
 # Coordinator tasks
@@ -486,11 +539,11 @@ question in `coordinator/state`).
 |---|---|---|---|---|---|---|---|
 ```
 
-A row's status changes by appending a new row for the same task (`done`,
+A row's status changes by adding a new row for the same task (`done`,
 `lost`, `cancelled`) with the close time; a re-dispatch is a new task naming
 the one it replaces.
 
-**`coordinator/log`** (appended, never rewritten):
+**`coordinator/log`** (rows added newest first, never rewritten):
 
 ```markdown
 # Coordinator log
@@ -500,6 +553,21 @@ the one it replaces.
 ```
 
 The user's words go into Detail as a quote.
+
+**Adding a row** to `coordinator/tasks` or `coordinator/log`: one
+`edit_document` with `file`, `expected_revision`, and one edit whose `old`
+is the table's header and separator lines and whose `new` is the same two
+lines followed by the new row. For the log:
+
+```json
+{"old": "| Time (UTC) | Session | Event | Detail |\n|---|---|---|---|",
+ "new": "| Time (UTC) | Session | Event | Detail |\n|---|---|---|---|\n| 2026-11-16T22:48:00Z | laptop-20261116T221000Z | dispatch | T-001 scout RQ-01.1 |"}
+```
+
+The newest row is always first, and the two lines are the same in every
+research, so you never need the last row to add one. Keep a row on one line:
+no line breaks, and `\|` for a `|` inside a cell. Never use
+`append_to_document` here: its blank line ends the table.
 
 ## The attention key
 
