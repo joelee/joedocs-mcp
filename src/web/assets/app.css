@@ -533,6 +533,19 @@ main:has(.board-page) { max-width: none; }
 .board-column-head { display: flex; gap: var(--space-2); align-items: center; padding: 0 var(--space-2); }
 .board-count { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .board-row-title { margin: 0; padding-top: var(--space-2); font-size: var(--text-sm); text-transform: capitalize; color: var(--muted); position: sticky; left: 0; z-index: 2; background: var(--bg); overflow-wrap: anywhere; }
+/* A grouped row's title is the toggle that folds it to one line. The mark
+   is decoration: the empty alternative text keeps it out of the name. */
+.board-fold {
+  display: flex; gap: var(--space-1); align-items: baseline; width: 100%;
+  padding: 0; border: 0; background: none; color: inherit; cursor: pointer;
+  font: inherit; text-align: left; text-transform: inherit; overflow-wrap: anywhere;
+}
+.board-fold::before { content: "\25BE"; content: "\25BE" / ""; flex: none; }
+.board-fold[aria-expanded="false"]::before { content: "\25B8"; content: "\25B8" / ""; }
+.board-fold:hover { color: var(--text); }
+.board-row-folded .board-row-title { padding-top: var(--space-1); }
+.board-row-folded .board-cell { min-height: 0; padding: var(--space-1) var(--space-2); }
+.board-folded-count { font-size: var(--text-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
 .board-cell { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); background: var(--surface-2); border-radius: var(--radius-lg); min-height: 2.75rem; }
 /* Each cell takes its status colour, as the status badges do. */
 .board-cell-review { background: var(--warn-soft); }

@@ -5257,6 +5257,94 @@ async fn the_board_shows_open_documents_by_status_and_type() -> TestResult<()> {
     server.stop().await
 }
 
+/// The Board row with `key`, from its `<section` to its `</section>`.
+fn board_row<'a>(body: &'a str, key: &str) -> &'a str {
+    let marker = format!("data-row-key=\"{key}\"");
+    body.find(&marker)
+        .and_then(|at| {
+            let start = body[..at].rfind("<section")?;
+            let end = body[at..].find("</section>")? + at;
+            Some(&body[start..end])
+        })
+        .unwrap_or("")
+}
+
+#[tokio::test]
+async fn a_board_group_folds_to_one_line_from_the_address() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    let open = get("group=type").await?;
+    let notes_open = board_row(&open.body, "notes");
+    assert!(
+        notes_open.contains("data-fold=\"notes\" aria-expanded=\"true\""),
+        "{notes_open}"
+    );
+    let notes_cards = board_cards(notes_open).len();
+    assert!(notes_cards > 1, "the fixture has several notes");
+    for query in [
+        "group=type&collapse=notes",
+        "group=type&collapse=notes&fragment=1",
+        "group=type&collapse=notes&collapse=nowhere",
+    ] {
+        let page = get(query).await?;
+        assert_eq!(page.status, 200, "{query}");
+        let notes = board_row(&page.body, "notes");
+        assert!(
+            notes.starts_with("<section class=\"board-row board-row-folded\""),
+            "{query}: {notes}"
+        );
+        assert!(
+            notes.contains("data-fold=\"notes\" aria-expanded=\"false\""),
+            "{query}: {notes}"
+        );
+        assert!(
+            board_cards(notes).is_empty(),
+            "{query}: no cards when folded"
+        );
+        // Each status's count instead, adding up to the cards it hides.
+        let counts: usize = notes
+            .split("<span class=\"board-folded-count\">")
+            .skip(1)
+            .filter_map(|part| part.split('<').next()?.parse::<usize>().ok())
+            .sum();
+        assert_eq!(counts, notes_cards, "{query}: {notes}");
+        // Other rows keep their cards, unfolded.
+        let plans = board_row(&page.body, "plans");
+        assert!(
+            plans.contains("data-fold=\"plans\" aria-expanded=\"true\""),
+            "{query}"
+        );
+        assert!(!board_cards(plans).is_empty(), "{query}");
+    }
+    // The page's form carries the folds, so a change keeps them.
+    let page = get("group=type&collapse=notes").await?;
+    assert!(
+        page.body
+            .contains("<input type=\"hidden\" name=\"collapse\" value=\"notes\" data-collapse>"),
+        "the form holds the fold"
+    );
+    // Ungrouped, nothing folds.
+    let ungrouped = get("group=none&collapse=all").await?;
+    assert!(
+        !ungrouped.body.contains("data-fold="),
+        "no toggle ungrouped"
+    );
+    assert_ne!(
+        board_cards(&ungrouped.body).len(),
+        0,
+        "cards show ungrouped"
+    );
+    server.stop().await
+}
+
 #[tokio::test]
 async fn the_board_filters_groups_and_sorts_from_the_address() -> TestResult<()> {
     let server = start_full(|_| {}, board_fixture).await?;

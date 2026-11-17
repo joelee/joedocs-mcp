@@ -54,6 +54,7 @@
         </select>
       </label>
     </fieldset>
+    {% for key in view.collapsed %}<input type="hidden" name="collapse" value="{{ key }}" data-collapse>{% endfor %}
     {% if debug %}<input type="hidden" name="debug" value="1">{% endif %}
   </form>
 </details>
