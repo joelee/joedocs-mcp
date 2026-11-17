@@ -8,8 +8,9 @@ all-features = true
 [advisories]
 # RustSec advisories fail the build; yanked crates too.
 yanked = "deny"
-# Ignore an advisory only with a reason and a review date, e.g.
-# { id = "RUSTSEC-0000-0000", reason = "not reachable from our code; review 2027-01" }
+# Advisories are never ignored, and nothing is released while one is active
+# (any RUSTSEC advisory, `unmaintained` included): file an issue, and wait for
+# or make a fixed dependency. See AGENTS.md, Security.
 ignore = []
 
 [licenses]

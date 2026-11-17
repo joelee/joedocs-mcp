@@ -214,6 +214,8 @@ Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/
 
 ### Each release
 
+No release while a RustSec advisory is active: `cargo deny check advisories` (part of `just ci`) must pass with `ignore = []` in `deny.toml`. If it reports an advisory, of any kind (`unmaintained` included), do not release, and do not ignore the advisory or narrow the check: file an issue, and wait for or make a fixed dependency (see `AGENTS.md`, Security). The release workflow enforces this, since it runs the full CI gate on the tag.
+
 1. On a release branch, move the `Unreleased` entries in `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, add the compare links at the bottom, and set `version` in `Cargo.toml`.
 2. Check what would be published and that it builds on its own:
 
@@ -253,9 +255,13 @@ Pushing a signed `vX.Y.Z` tag runs [`.github/workflows/release.yml`](../.github/
   - If the Homebrew dispatch failed, the tap's daily check bumps the formula by itself; to bump it now, run `gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z`.
   - Fix anything else forward with a new patch version.
 
+### Pre-releases
+
+While a release is held back, for example by an advisory, its work can be shared as a pre-release: the version `X.Y.Z-dev` in `Cargo.toml`, and a `## [X.Y.Z-dev] - YYYY-MM-DD` changelog section that says why it is not released. A pre-release lives on its release branch and is built from it (`cargo install --locked --path .`, or `--git` with `--branch`). It is never tagged or published: a `vX.Y.Z-dev` tag would start the release workflow. When the release goes ahead, set the version to `X.Y.Z` and rename and date the section.
+
 ### Releasing by hand
 
-If the workflow cannot be used, publish from an up-to-date `main` with a crates.io token from `cargo login` (scope `publish-update`, limited to the `joedocs` crate, with an expiry date; never commit it):
+The same rule applies: never publish by hand while `cargo deny check advisories` fails. If the workflow cannot be used, publish from an up-to-date `main` with a crates.io token from `cargo login` (scope `publish-update`, limited to the `joedocs` crate, with an expiry date; never commit it):
 
 ```bash
 cargo publish --locked

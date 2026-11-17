@@ -68,6 +68,7 @@ The MSRV is declared in `Cargo.toml` as `rust-version`. Do not use APIs newer th
 - `.env` is git-ignored. `.env.example` lists every supported secret variable with safe placeholder values and is kept in sync.
 - Secrets are not part of the `config.toml` schema and cannot be set through config env overrides. Hold them in `secrecy::SecretString` (or equivalent) so they cannot leak via `Debug` or logs.
 - Never commit tokens, passwords, API keys, private keys, or secret-bearing connection strings.
+- **No release with an active RUSTSEC advisory.** Never release (a `vX.Y.Z` tag, a crates.io publish, a GitHub release, or a release by hand) while `cargo deny check advisories` reports an active RustSec advisory against the dependency tree, of any kind, `unmaintained` included. Never ignore an advisory in `deny.toml`, or narrow the check, to make a release: file an issue, and wait for or make a fixed dependency. Meanwhile the work can go out only as an `X.Y.Z-dev` pre-release on its branch, which is never tagged or published.
 
 ## Configuration
 
