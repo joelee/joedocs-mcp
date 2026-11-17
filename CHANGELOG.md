@@ -4,7 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-## [0.5.6] - 2026-11-16
+## [0.5.6-dev] - 2026-11-17
+
+**Pre-release, not tagged or published to crates.io.** `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. JoeDocs does not use `chrono` itself; it comes in only through `rmcp`, the MCP SDK. No release is made while a RustSec advisory is active, so 0.5.6 follows when `rmcp` drops `chrono` ([modelcontextprotocol/rust-sdk#1469](https://github.com/modelcontextprotocol/rust-sdk/issues/1469); tracked in the project's JoeDocs as JD-64). Build this pre-release from its branch to try it.
 
 Agent skills that keep work in step with you: plans take amendments after a build, so review fixes no longer need new plans, and a research workflow (beta) runs deep research through checkpoints you approve, resumable from any session. The Board marks plans waiting for you or being fixed. For developers, the Board showcase drive. The server, MCP tools, configuration and database are unchanged.
 
@@ -299,8 +301,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6...HEAD
-[0.5.6]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...v0.5.6
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...HEAD
+[0.5.6-dev]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...feature/jd-62-research-workflow-skills-beta-and-0-5-6-release
 [0.5.5]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/joelee/joedocs-mcp/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...v0.5.3

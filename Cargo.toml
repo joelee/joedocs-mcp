@@ -1,6 +1,6 @@
 [package]
 name = "joedocs"
-version = "0.5.6"
+version = "0.5.6-dev"
 edition = "2024"
 # MSRV: application profile (see AGENTS.md). Bump together with
 # rust-toolchain.toml.
