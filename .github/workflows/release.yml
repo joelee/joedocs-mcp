@@ -1,22 +1,30 @@
-# Publishes a release when a signed vX.Y.Z tag is pushed (see the release
-# steps in docs/developer-guide.md):
+# Publishes a release when a signed tag is pushed (see the release steps in
+# docs/developer-guide.md). A tag vX.Y.Z is a production release; a tag
+# vX.Y.Z-<pre> (a SemVer pre-release, such as v0.5.6-dev) is a pre-release.
 #
 # 1. verify: the tag matches Cargo.toml, CHANGELOG.md has its section, the
 #    tagged commit is on main, and GitHub reports the tag signature verified.
+#    It says whether the version is a pre-release.
 # 2. ci: the full CI gate (ci.yml) on the tagged commit.
 # 3. binaries (alongside ci): builds the release binaries, Linux x86_64 and
 #    aarch64 (static, musl) and macOS Apple silicon, checks each, and keeps
 #    them as workflow artifacts. Nothing is published here.
-# 4. publish: waits for approval in the `release` environment, publishes to
-#    crates.io with Trusted Publishing (no stored token), then asks the
-#    Homebrew tap to bump the formula.
-# 5. github-release: creates the GitHub release from the CHANGELOG section,
+# 4. advisories (alongside ci): `cargo deny check advisories`. An active
+#    RustSec advisory fails a production release here, so nothing is
+#    published; a pre-release goes on and lists the advisories in its notes.
+# 5. Production: publish waits for approval in the `release` environment,
+#    publishes to crates.io with Trusted Publishing (no stored token), then
+#    asks the Homebrew tap to bump the formula.
+#    Pre-release: approve-prerelease waits for approval in the same
+#    environment. Nothing goes to crates.io or Homebrew.
+# 6. github-release: creates the GitHub release from the CHANGELOG section,
 #    with the binaries, their SHA256SUMS and a build-provenance attestation
-#    for each.
+#    for each. A pre-release is marked Pre-release (never Latest), and its
+#    notes add the active advisories and "Not for production use."
 #
 # Run it by hand (workflow_dispatch) for a dry run: verify (without the tag
-# checks), ci, binaries and `cargo publish --dry-run`. A dry run never
-# publishes, releases, dispatches or attests.
+# checks), ci, binaries, advisories and `cargo publish --dry-run`. A dry run
+# never publishes, releases, dispatches or attests.
 name: Release
 
 on:
@@ -42,6 +50,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,7 +86,13 @@ jobs:
             [ "$verified" = true ] \
               || fail "GitHub does not report a verified signature on $TAG; sign it with git tag -s and add the key to your GitHub account"
           fi
+          # A SemVer pre-release part (X.Y.Z-<pre>) makes a GitHub pre-release.
+          case "$version" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   ci:
     name: CI
@@ -150,6 +165,53 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  # An active RustSec advisory blocks a production release (AGENTS.md,
+  # Security); a pre-release reports it and goes on.
+  advisories:
+    name: RustSec advisories
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      clear: ${{ steps.check.outputs.clear }}
+      ids: ${{ steps.check.outputs.ids }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: cargo deny check advisories
+        id: check
+        env:
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          report="$RUNNER_TEMP/advisories.txt"
+          if cargo deny check advisories > "$report" 2>&1; then clear=true; else clear=false; fi
+          cat "$report"
+          ids="$( { grep -o 'RUSTSEC-[0-9]\{4\}-[0-9]\{4\}' "$report" || true; } | sort -u | paste -sd ' ' -)"
+          echo "clear=$clear" >> "$GITHUB_OUTPUT"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          {
+            echo "### RustSec advisories"
+            echo
+            if [ "$clear" = true ]; then echo "None active."; else echo "Active: ${ids:-none named}"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$clear" = true ] && exit 0
+          # A failure that names no advisory means the check itself did not run
+          # (for example the advisory database could not be fetched).
+          [ -n "$ids" ] || fail "cargo deny check advisories failed without naming an advisory; see the report above"
+          [ "$PRERELEASE" = true ] \
+            || fail "active RustSec advisories ($ids): no production release until they are clear (AGENTS.md, Security)"
+          echo "::warning::pre-release with active RustSec advisories: $ids; it goes to GitHub only and lists them"
+
   dry-run:
     name: Dry-run publish
     if: github.event_name == 'workflow_dispatch'
@@ -166,10 +228,14 @@ jobs:
       - name: cargo publish --dry-run
         run: cargo publish --dry-run --locked
 
+  # Production releases only, and only with no active advisory.
   publish:
     name: Publish to crates.io
-    if: github.event_name == 'push'
-    needs: [verify, ci, binaries]
+    if: >-
+      github.event_name == 'push' &&
+      needs.verify.outputs.prerelease == 'false' &&
+      needs.advisories.outputs.clear == 'true'
+    needs: [verify, ci, binaries, advisories]
     runs-on: ubuntu-24.04
     # Waits for a reviewer; crates.io accepts Trusted Publishing only from
     # this workflow and environment.
@@ -227,11 +293,31 @@ jobs:
             -f "client_payload[formula]=joedocs" \
             -f "client_payload[version]=$VERSION"
 
+  # A pre-release goes to GitHub only (never crates.io or Homebrew), after
+  # approval in the same environment as a production release.
+  approve-prerelease:
+    name: Approve the pre-release
+    if: github.event_name == 'push' && needs.verify.outputs.prerelease == 'true'
+    needs: [verify, ci, binaries, advisories]
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - name: Approved
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          IDS: ${{ needs.advisories.outputs.ids }}
+        run: |
+          echo "Pre-release $VERSION approved for GitHub only; active RustSec advisories: ${IDS:-none}"
+
   github-release:
     name: GitHub release
-    # Runs once the crate is published, even if the Homebrew dispatch failed.
-    if: always() && needs.publish.outputs.published == 'true'
-    needs: [verify, publish, binaries]
+    # A production release runs once the crate is published, even if the
+    # Homebrew dispatch failed; a pre-release once it is approved.
+    if: >-
+      always() &&
+      (needs.publish.outputs.published == 'true' ||
+       needs.approve-prerelease.result == 'success')
+    needs: [verify, binaries, advisories, publish, approve-prerelease]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -266,10 +352,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          IDS: ${{ needs.advisories.outputs.ids }}
         run: |
+          notes="$RUNNER_TEMP/notes.md"
           awk -v heading="## [$VERSION]" \
             'index($0, heading) == 1 { found = 1; next } /^## \[/ { found = 0 } found' \
-            CHANGELOG.md > "$RUNNER_TEMP/notes.md"
-          gh release create "$TAG" --verify-tag --title "JoeDocs $VERSION" \
-            --notes-file "$RUNNER_TEMP/notes.md" \
+            CHANGELOG.md > "$notes"
+          flags=()
+          if [ "$PRERELEASE" = true ]; then
+            {
+              if [ -n "$IDS" ]; then
+                echo
+                echo "### Active RustSec advisories"
+                echo
+                for id in $IDS; do
+                  echo "- [$id](https://rustsec.org/advisories/$id)"
+                done
+              fi
+              echo
+              echo "Not for production use."
+            } >> "$notes"
+            flags=(--prerelease --latest=false)
+          fi
+          gh release create "$TAG" --verify-tag --title "JoeDocs $VERSION" "${flags[@]}" \
+            --notes-file "$notes" \
             dist/joedocs-*.tar.gz dist/SHA256SUMS
