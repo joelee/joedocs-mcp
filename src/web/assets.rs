@@ -33,6 +33,11 @@ const FILES: &[Asset] = &[
         bytes: include_bytes!("assets/board.js"),
     },
     Asset {
+        name: "document.js",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: include_bytes!("assets/document.js"),
+    },
+    Asset {
         name: "htmx.min.js",
         content_type: "text/javascript; charset=utf-8",
         bytes: include_bytes!("assets/vendor/htmx.min.js"),
@@ -94,6 +99,8 @@ pub struct Urls {
     pub pele: &'static str,
     /// `board.js`, loaded only by the Board.
     pub board: &'static str,
+    /// `document.js`, loaded only by a document's latest revision.
+    pub document: &'static str,
     /// `favicon.ico`: 16, 32 and 48 pixels, drawn from `favicon.svg`.
     pub icon: &'static str,
     /// `favicon.svg`, for browsers that draw it at any size.
@@ -111,6 +118,7 @@ pub fn urls() -> Urls {
         htmx: url("htmx.min.js"),
         pele: url("pele.global.js"),
         board: url("board.js"),
+        document: url("document.js"),
         icon: url("favicon.ico"),
         icon_svg: url("favicon.svg"),
         touch_icon: url("apple-touch-icon.png"),

@@ -43,6 +43,8 @@
   --radius-lg: 10px;
   --shadow: 0 1px 2px light-dark(rgb(0 0 0 / 0.06), rgb(0 0 0 / 0.4));
   --sidebar: 13rem;
+  /* The top bar's height on wide screens: the side menu sticks below it. */
+  --topbar-h: 3.5rem;
 }
 
 :root[data-theme="light"] { color-scheme: light; }
@@ -107,6 +109,7 @@ main:focus { outline: none; }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 5;
+  min-height: var(--topbar-h);
 }
 .brand { font-weight: 700; color: var(--text); text-decoration: none; margin-right: var(--space-4); }
 .topbar-search { flex: 1; max-width: 32rem; }
@@ -115,6 +118,14 @@ main:focus { outline: none; }
 .topbar [data-theme-toggle] { margin-left: auto; }
 
 .sidenav { grid-area: nav; border-right: 1px solid var(--border); padding: var(--space-4) var(--space-2); }
+/* The menu stays in view as the page scrolls: it sticks below the top bar
+   and scrolls on its own when it is taller than the window. The column's
+   border still runs the page's full height. */
+.nav-menu {
+  position: sticky; top: calc(var(--topbar-h) + var(--space-4));
+  max-height: calc(100vh - var(--topbar-h) - var(--space-8));
+  overflow-y: auto;
+}
 .sidenav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .sidenav a {
   display: block; padding: var(--space-2) var(--space-3);
@@ -148,6 +159,7 @@ main { grid-area: main; padding: var(--space-6); min-width: 0; max-width: 78rem;
   .topbar-search { order: 3; flex-basis: 100%; max-width: none; }
   .session-menu .menu { min-width: 0; width: min(16rem, calc(100vw - 2rem)); }
   .sidenav { border-right: 0; border-bottom: 1px solid var(--border); padding: var(--space-2); }
+  .nav-menu { position: static; max-height: none; overflow-y: visible; }
   .nav-toggle {
     display: flex; align-items: center; gap: var(--space-2); min-height: 44px;
     padding: 0 var(--space-2); cursor: pointer; font-weight: 600; list-style: none;
@@ -161,6 +173,20 @@ main { grid-area: main; padding: var(--space-6); min-width: 0; max-width: 78rem;
   .sidenav a { padding: var(--space-2); min-height: 44px; display: flex; align-items: center; }
   main { padding: var(--space-4); }
 }
+
+/* The back-to-top button: round, at the bottom right, above the page but
+   below the top bar, dialogs and popovers. */
+.to-top {
+  position: fixed; right: var(--space-4); bottom: var(--space-4); z-index: 4;
+  display: grid; place-items: center;
+  width: 3rem; height: 3rem; padding: 0; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  box-shadow: 0 6px 16px -6px light-dark(rgb(0 0 0 / 0.25), rgb(0 0 0 / 0.7));
+  font-size: 1.4rem; line-height: 1; cursor: pointer;
+}
+.to-top:hover { background: var(--surface-2); }
+.to-top[hidden] { display: none; }
+@media print { .to-top { display: none; } }
 
 /* --- Page parts ------------------------------------------------------- */
 
@@ -249,6 +275,9 @@ button:disabled, button[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 .stack { display: grid; gap: var(--space-2); }
 .filters { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end; margin-bottom: var(--space-4); }
 .filters > div { display: grid; gap: var(--space-1); }
+/* Reset filters forgets a remembered view (JD-65). */
+.filters-reset { align-self: end; }
+.board-filters .filters-reset { margin-top: var(--space-2); }
 /* Filters apply as they change (htmx), so with scripts on the button is
    hidden from view; it stays in the form so Enter still submits it. */
 .js .filters-apply {
@@ -357,10 +386,27 @@ code.nowrap, .nowrap { white-space: nowrap; }
 @media (max-width: 1000px) { .doc-layout { grid-template-columns: minmax(0, 1fr); } }
 .doc-body { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-6); min-width: 0; }
 .doc-side section { margin-bottom: var(--space-6); }
+/* A line above each section after the first (Files, On this page,
+   Download, Revisions) sets the panel's parts apart. */
+.doc-side section + section { border-top: 1px solid var(--border); padding-top: var(--space-4); margin-top: calc(-1 * var(--space-2)); }
 .doc-side h2 { font-size: 1rem; color: var(--muted); }
 .side-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: var(--text-sm); }
 .side-list a { display: block; padding: var(--space-1) var(--space-2); border-radius: var(--radius); text-decoration: none; }
 .side-list a[aria-current="page"] { background: var(--accent-soft); font-weight: 600; }
+/* The Files panel's directories fold; their files sit indented below. */
+.file-dir > summary {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-1) var(--space-2); border-radius: var(--radius);
+  cursor: pointer; font-weight: 600; overflow-wrap: anywhere; list-style: none;
+}
+.file-dir > summary::-webkit-details-marker { display: none; }
+/* The fold mark is decoration: the empty alternative text keeps it out of
+   the directory's name. */
+.file-dir > summary::before { content: "\25B8"; content: "\25B8" / ""; color: var(--muted); transition: transform 0.15s ease; }
+.file-dir[open] > summary::before { transform: rotate(90deg); }
+.file-dir > summary:hover { background: var(--surface-2); }
+.file-dir > .side-list { margin-left: var(--space-3); padding-left: var(--space-1); border-left: 1px solid var(--border); }
+.file-count { margin-left: auto; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 .toc-3 { padding-left: var(--space-3); }
 .toc-4, .toc-5, .toc-6 { padding-left: var(--space-6); }
 .revisions { max-height: 16rem; overflow-y: auto; }
@@ -490,6 +536,19 @@ main:has(.board-page) { max-width: none; }
 .board-column-head { display: flex; gap: var(--space-2); align-items: center; padding: 0 var(--space-2); }
 .board-count { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .board-row-title { margin: 0; padding-top: var(--space-2); font-size: var(--text-sm); text-transform: capitalize; color: var(--muted); position: sticky; left: 0; z-index: 2; background: var(--bg); overflow-wrap: anywhere; }
+/* A grouped row's title is the toggle that folds it to one line. The mark
+   is decoration: the empty alternative text keeps it out of the name. */
+.board-fold {
+  display: flex; gap: var(--space-1); align-items: baseline; width: 100%;
+  padding: 0; border: 0; background: none; color: inherit; cursor: pointer;
+  font: inherit; text-align: left; text-transform: inherit; overflow-wrap: anywhere;
+}
+.board-fold::before { content: "\25BE"; content: "\25BE" / ""; flex: none; }
+.board-fold[aria-expanded="false"]::before { content: "\25B8"; content: "\25B8" / ""; }
+.board-fold:hover { color: var(--text); }
+.board-row-folded .board-row-title { padding-top: var(--space-1); }
+.board-row-folded .board-cell { min-height: 0; padding: var(--space-1) var(--space-2); }
+.board-folded-count { font-size: var(--text-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
 .board-cell { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); background: var(--surface-2); border-radius: var(--radius-lg); min-height: 2.75rem; }
 /* Each cell takes its status colour, as the status badges do. */
 .board-cell-review { background: var(--warn-soft); }

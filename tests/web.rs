@@ -2435,8 +2435,8 @@ async fn every_route_writes_one_audit_row_with_its_documented_tool() -> TestResu
             }
             ("POST", _) => server.post_form(&path, &cookie, Some(&csrf), &[]).await?,
             // A stream stays open: read its head, then close it.
-            (_, "/admin/board/stream") => {
-                let stream = server.open_stream("", &cookie, "").await?;
+            (_, "/admin/board/stream" | "/admin/documents/JD-1/stream") => {
+                let stream = server.open_stream_at(&path, &cookie, "").await?;
                 let status = stream.status;
                 drop(stream);
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -4829,6 +4829,186 @@ async fn the_navigation_folds_behind_a_menu_control_that_works_without_scripts()
     server.stop().await
 }
 
+/// The STEP-08 vault plus files in two more directories of the backlog
+/// JD-3: `sources/S-001-one`, `sources/S-002-two` and
+/// `critiques/methodology`, beside `items/one`.
+fn files_tree_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewFile};
+    fixture(store)?;
+    for file in [
+        "sources/S-001-one",
+        "sources/S-002-two",
+        "critiques/methodology",
+    ] {
+        store.create_file(
+            &Actor::new("laptop-key", "claude-code"),
+            &NewFile {
+                document_id: "JD-3".into(),
+                file: file.into(),
+                content: format!("{file} body.\n"),
+                front_matter: joedocs::document::front_matter::Fields::new(),
+                expected_revision: None,
+                summary: None,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_files_panel_folds_each_directory_and_opens_the_shown_files() -> TestResult<()> {
+    let server = start_full(|_| {}, files_tree_fixture).await?;
+    let cookie = server.login().await?;
+    let page = server
+        .get(
+            "/admin/documents/JD-3?file=sources/S-002-two",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    let panel = page
+        .body
+        .split("data-files=\"JD-3\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</section>").next())
+        .ok_or("no Files panel")?;
+    let dirs: Vec<(String, bool)> = tags(panel)
+        .into_iter()
+        .filter(|t| t.name == "details")
+        .map(|t| {
+            (
+                t.get("data-dir").unwrap_or_default().to_owned(),
+                t.get("open").is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        dirs,
+        [
+            ("critiques".to_owned(), false),
+            ("items".to_owned(), false),
+            ("sources".to_owned(), true),
+        ],
+        "{panel}"
+    );
+    // The main file first, then each directory with its count; files are
+    // named within their directory.
+    let at = positions(
+        panel,
+        &[
+            "Backlog (main file)</a>",
+            "<summary>critiques <span class=\"file-count\">1",
+            ">methodology</a>",
+            "<summary>items <span class=\"file-count\">1",
+            ">one</a>",
+            "<summary>sources <span class=\"file-count\">2",
+            ">S-001-one</a>",
+            "href=\"/admin/documents/JD-3?file=sources%2FS-002-two\" aria-current=\"page\">S-002-two</a>",
+        ],
+    )?;
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{panel}");
+    assert_eq!(panel.matches("aria-current").count(), 1, "{panel}");
+    // The main file shown: every directory starts closed.
+    let main = server.get("/admin/documents/JD-3", Some(&cookie)).await?;
+    let panel = main
+        .body
+        .split("data-files=\"JD-3\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</section>").next())
+        .ok_or("no Files panel")?;
+    assert_eq!(panel.matches("<details").count(), 3, "{panel}");
+    assert!(!panel.contains(" open"), "{panel}");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_and_documents_remember_their_view_and_offer_a_reset() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    // The menu's Board and Documents links are marked for the script,
+    // which points them at the remembered view; the other links are not.
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    let marked: Vec<(String, String)> = tags(&home.body)
+        .into_iter()
+        .filter(|t| t.name == "a" && t.get("data-remember").is_some())
+        .map(|t| {
+            (
+                t.get("href").unwrap_or_default().to_owned(),
+                t.get("data-remember").unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        marked,
+        [
+            ("/admin/board".to_owned(), "board".to_owned()),
+            ("/admin/documents".to_owned(), "documents".to_owned()),
+        ]
+    );
+    // Each page has a visible Reset filters button for its own view, and
+    // the Board's menu item resets the same way.
+    for (path, view) in [("/admin/board", "board"), ("/admin/documents", "documents")] {
+        let page = server.get(path, Some(&cookie)).await?;
+        let resets: Vec<Tag> = tags(&page.body)
+            .into_iter()
+            .filter(|t| t.get("data-reset-view") == Some(view))
+            .collect();
+        let button = resets
+            .iter()
+            .find(|t| t.name == "button")
+            .ok_or("no Reset filters button")?;
+        assert_eq!(button.get("type"), Some("button"), "{path}");
+        assert!(
+            page.body.contains(&format!(
+                "data-reset-view=\"{view}\">Reset filters</button>"
+            )),
+            "{path}"
+        );
+        if view == "board" {
+            assert!(
+                resets
+                    .iter()
+                    .any(|t| t.name == "a" && t.get("href") == Some("/admin/board")),
+                "the Board actions item resets too"
+            );
+        }
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn every_signed_in_page_has_one_back_to_top_button() -> TestResult<()> {
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    for path in [
+        "/admin/",
+        "/admin/board",
+        "/admin/documents",
+        "/admin/documents/JD-1",
+        "/admin/documents/JD-1?view=source",
+        "/admin/search?q=body",
+        "/admin/audit",
+    ] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}");
+        let buttons: Vec<Tag> = tags(&page.body)
+            .into_iter()
+            .filter(|t| t.name == "button" && t.get("data-to-top").is_some())
+            .collect();
+        assert_eq!(buttons.len(), 1, "{path}: one back-to-top button");
+        let button = &buttons[0];
+        assert_eq!(button.get("type"), Some("button"), "{path}");
+        assert_eq!(button.get("aria-label"), Some("Back to top"), "{path}");
+        // Hidden until the page has scrolled; app.js shows it.
+        assert!(button.get("hidden").is_some(), "{path}: hidden at first");
+        assert!(page.body.contains("&#128285;"), "{path}: the 🔝 glyph");
+    }
+    // The sign-in page has no layout, so no button.
+    let sign_in = server.get("/admin/login", None).await?;
+    assert!(!sign_in.body.contains("data-to-top"));
+    server.stop().await
+}
+
 // --- JD-47: the Board -------------------------------------------------------
 
 /// Front matter fields from a JSON object.
@@ -5132,6 +5312,112 @@ async fn the_board_shows_open_documents_by_status_and_type() -> TestResult<()> {
     server.stop().await
 }
 
+/// The Board row with `key`, from its `<section` to its `</section>`.
+fn board_row<'a>(body: &'a str, key: &str) -> &'a str {
+    let marker = format!("data-row-key=\"{key}\"");
+    body.find(&marker)
+        .and_then(|at| {
+            let start = body[..at].rfind("<section")?;
+            let end = body[at..].find("</section>")? + at;
+            Some(&body[start..end])
+        })
+        .unwrap_or("")
+}
+
+#[tokio::test]
+async fn a_board_group_folds_to_one_line_from_the_address() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    let open = get("group=type").await?;
+    let notes_open = board_row(&open.body, "notes");
+    assert!(
+        notes_open.contains("data-fold=\"notes\" aria-expanded=\"true\""),
+        "{notes_open}"
+    );
+    let notes_cards = board_cards(notes_open).len();
+    assert!(notes_cards > 1, "the fixture has several notes");
+    for query in [
+        "group=type&collapse=notes",
+        "group=type&collapse=notes&fragment=1",
+        "group=type&collapse=notes&collapse=nowhere",
+    ] {
+        let page = get(query).await?;
+        assert_eq!(page.status, 200, "{query}");
+        let notes = board_row(&page.body, "notes");
+        assert!(
+            notes.starts_with("<section class=\"board-row board-row-folded\""),
+            "{query}: {notes}"
+        );
+        assert!(
+            notes.contains("data-fold=\"notes\" aria-expanded=\"false\""),
+            "{query}: {notes}"
+        );
+        assert!(
+            board_cards(notes).is_empty(),
+            "{query}: no cards when folded"
+        );
+        // Each status's count instead, adding up to the cards it hides.
+        let counts: usize = notes
+            .split("<span class=\"board-folded-count\">")
+            .skip(1)
+            .filter_map(|part| part.split('<').next()?.parse::<usize>().ok())
+            .sum();
+        assert_eq!(counts, notes_cards, "{query}: {notes}");
+        // Other rows keep their cards, unfolded.
+        let plans = board_row(&page.body, "plans");
+        assert!(
+            plans.contains("data-fold=\"plans\" aria-expanded=\"true\""),
+            "{query}"
+        );
+        assert!(!board_cards(plans).is_empty(), "{query}");
+    }
+    // The page's form carries the folds, so a change keeps them.
+    let page = get("group=type&collapse=notes").await?;
+    assert!(
+        page.body
+            .contains("<input type=\"hidden\" name=\"collapse\" value=\"notes\" data-collapse>"),
+        "the form holds the fold"
+    );
+    // The Filters panel is open by default; `filters=closed` keeps it shut,
+    // with the key in the form so a filter change keeps it too.
+    let panel = |body: &str| -> Option<Tag> {
+        tags(body)
+            .into_iter()
+            .find(|t| t.name == "details" && t.get("data-board-filters-panel").is_some())
+    };
+    let shut = get("filters=closed").await?;
+    let tag = panel(&shut.body).ok_or("no Filters panel")?;
+    assert!(tag.get("open").is_none(), "closed from the address");
+    assert!(
+        shut.body.contains(
+            "<input type=\"hidden\" name=\"filters\" value=\"closed\" data-filters-closed>"
+        )
+    );
+    let tag = panel(&open.body).ok_or("no Filters panel")?;
+    assert!(tag.get("open").is_some(), "open by default");
+    assert!(!open.body.contains("data-filters-closed"));
+    // Ungrouped, nothing folds.
+    let ungrouped = get("group=none&collapse=all").await?;
+    assert!(
+        !ungrouped.body.contains("data-fold="),
+        "no toggle ungrouped"
+    );
+    assert_ne!(
+        board_cards(&ungrouped.body).len(),
+        0,
+        "cards show ungrouped"
+    );
+    server.stop().await
+}
+
 #[tokio::test]
 async fn the_board_filters_groups_and_sorts_from_the_address() -> TestResult<()> {
     let server = start_full(|_| {}, board_fixture).await?;
@@ -5371,8 +5657,20 @@ impl Server {
         cookie: &str,
         headers: &str,
     ) -> TestResult<EventStream> {
+        self.open_stream_at(&format!("/admin/board/stream?{query}"), cookie, headers)
+            .await
+    }
+
+    /// Opens the event stream at `target` (a path and query) with `cookie`
+    /// and extra header lines, and reads the reply head.
+    async fn open_stream_at(
+        &self,
+        target: &str,
+        cookie: &str,
+        headers: &str,
+    ) -> TestResult<EventStream> {
         let request = format!(
-            "GET /admin/board/stream?{query} HTTP/1.1\r\nHost: {}\r\nCookie: {cookie}\r\nAccept: text/event-stream\r\n{headers}\r\n",
+            "GET {target} HTTP/1.1\r\nHost: {}\r\nCookie: {cookie}\r\nAccept: text/event-stream\r\n{headers}\r\n",
             self.host()
         );
         let mut stream = TcpStream::connect(self.addr).await?;
@@ -5577,6 +5875,136 @@ async fn the_board_stream_ends_at_session_expiry_and_server_shutdown() -> TestRe
 }
 
 #[tokio::test]
+async fn a_document_stream_needs_a_session_the_same_site_and_a_live_document() -> TestResult<()> {
+    let server = start_full(|_| {}, stream_fixture).await?;
+    let before = server.audit()?.len();
+    let path = "/admin/documents/AL-7/stream?revision=1";
+    let anonymous = server.get(path, None).await?;
+    assert_eq!(anonymous.status, 303, "{}", anonymous.body);
+    let cookie = server.login().await?;
+    let cross = server
+        .send(
+            "GET",
+            path,
+            &format!("Cookie: {cookie}\r\nSec-Fetch-Site: cross-site\r\n"),
+            "",
+        )
+        .await?;
+    assert_eq!(cross.status, 403, "{}", cross.body);
+    let missing = server
+        .open_stream_at("/admin/documents/AL-99/stream", &cookie, "")
+        .await?;
+    assert_eq!(missing.status, 404, "{}", missing.head);
+    let archived = server
+        .open_stream_at("/admin/documents/AL-4/stream", &cookie, "")
+        .await?;
+    assert_eq!(archived.status, 409, "{}", archived.head);
+    let outcomes: Vec<String> = server.audit()?[before..]
+        .iter()
+        .filter(|(t, _, _)| t == "admin:documents.stream")
+        .map(|(_, _, o)| o.clone())
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["no_session", "forbidden", "not_found", "archived"]
+    );
+    drop((missing, archived));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn a_document_stream_signals_only_that_documents_new_revisions() -> TestResult<()> {
+    let server = start_full(|config| config.admin.board_refresh_ms = 500, stream_fixture).await?;
+    let cookie = server.login().await?;
+    let csrf = server.csrf(&cookie).await?;
+    let same_site = "Sec-Fetch-Site: same-origin\r\n";
+    let wait = std::time::Duration::from_millis(1500);
+    // AL-7 is at revision 1.
+    let mut stream = server
+        .open_stream_at(
+            "/admin/documents/AL-7/stream?revision=1",
+            &cookie,
+            same_site,
+        )
+        .await?;
+    assert_eq!(stream.status, 200, "{}", stream.head);
+    assert_eq!(
+        head_value(&stream.head, "content-type"),
+        Some("text/event-stream")
+    );
+    assert_eq!(head_value(&stream.head, "x-accel-buffering"), Some("no"));
+    assert!(stream.wait_for("retry: 2000", wait).await?);
+    // A write to another document says nothing here.
+    let other = server
+        .post_form(
+            "/admin/documents/AL-8/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "done")],
+        )
+        .await?;
+    assert!(other.status < 400, "{}", other.body);
+    assert!(
+        !stream.wait_for("event:", wait).await?,
+        "another document's write: {}",
+        stream.seen
+    );
+    // A write to this one: its new revision, and nothing else.
+    let converted = server
+        .post_form("/admin/documents/AL-7/convert", &cookie, Some(&csrf), &[])
+        .await?;
+    assert!(converted.status < 400, "{}", converted.body);
+    assert!(
+        stream.wait_for("event: revision\ndata: 2\n", wait).await?,
+        "{}",
+        stream.seen
+    );
+    assert!(!stream.seen.contains("Filler"), "no document content");
+    // A page behind the document hears at once.
+    let mut behind = server
+        .open_stream_at(
+            "/admin/documents/AL-7/stream?revision=1",
+            &cookie,
+            same_site,
+        )
+        .await?;
+    assert!(
+        behind
+            .wait_for(
+                "event: revision\ndata: 2\n",
+                std::time::Duration::from_millis(500)
+            )
+            .await?,
+        "{}",
+        behind.seen
+    );
+    // The document archived: the stream says so and ends.
+    let gone = server
+        .post_form(
+            "/admin/documents/AL-7/archive",
+            &cookie,
+            Some(&csrf),
+            &[("reason", "done")],
+        )
+        .await?;
+    assert!(gone.status < 400, "{}", gone.body);
+    assert!(
+        stream.wait_for("event: gone", wait).await?,
+        "{}",
+        stream.seen
+    );
+    assert!(stream.ends_within(wait).await?);
+    let opened = server
+        .audit()?
+        .iter()
+        .filter(|(t, _, o)| t == "admin:documents.stream" && o == "ok")
+        .count();
+    assert_eq!(opened, 2);
+    drop((stream, behind));
+    server.stop().await
+}
+
+#[tokio::test]
 async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
     let server = start_full(|_| {}, stream_fixture).await?;
     let cookie = server.login().await?;
@@ -5589,7 +6017,9 @@ async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
     let refused = server.get("/admin/board/stream", Some(&cookie)).await?;
     assert_eq!(refused.status, 503, "{}", refused.body);
     assert!(
-        refused.body.contains("Too many open boards"),
+        refused
+            .body
+            .contains("Too many open live pages; close one and reload"),
         "{}",
         refused.body
     );
@@ -5598,12 +6028,94 @@ async fn the_board_refuses_more_than_32_open_streams() -> TestResult<()> {
         rows.last().map(|(t, _, o)| (t.as_str(), o.as_str())),
         Some(("admin:documents.board_stream", "busy"))
     );
+    // Document streams share the same places.
+    let document = server
+        .open_stream_at("/admin/documents/AL-7/stream?revision=1", &cookie, "")
+        .await?;
+    assert_eq!(document.status, 503, "{}", document.head);
+    assert_eq!(
+        server
+            .audit()?
+            .last()
+            .map(|(t, _, o)| (t.clone(), o.clone())),
+        Some(("admin:documents.stream".to_owned(), "busy".to_owned()))
+    );
+    drop(document);
     drop(open.pop());
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let again = server.open_stream("", &cookie, "").await?;
     assert_eq!(again.status, 200, "a closed stream frees its place");
     drop(again);
     drop(open);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_latest_revision_of_a_document_is_live_and_an_older_one_is_not() -> TestResult<()> {
+    let server = start_full(|_| {}, files_tree_fixture).await?;
+    let cookie = server.login().await?;
+    // The script, a cached asset served under its hash.
+    let page = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let at = page
+        .body
+        .find("/document.js\"")
+        .ok_or("document.js not linked")?;
+    let start = page.body[..at]
+        .rfind("/admin/assets/")
+        .ok_or("no asset path")?;
+    let path = &page.body[start..at + "/document.js".len()];
+    assert!(page.body[..start].ends_with("<script src=\""), "{path}");
+    let script = server.get(path, None).await?;
+    assert_eq!(script.status, 200, "{path}");
+    assert_eq!(
+        script.header("cache-control"),
+        Some("public, max-age=31536000, immutable")
+    );
+    // The latest revision, rendered, as source and as a file, carries the
+    // stream and the revision it shows (the document's, for a file too).
+    for (target, revision) in [
+        ("/admin/documents/JD-1", 2),
+        ("/admin/documents/JD-1?view=source", 2),
+        ("/admin/documents/JD-3?file=sources/S-001-one", 5),
+    ] {
+        let page = server.get(target, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{target}");
+        let live = tags(&page.body)
+            .into_iter()
+            .find(|t| t.get("data-doc-page").is_some())
+            .ok_or("no page wrapper")?;
+        let id = if target.contains("JD-3") {
+            "JD-3"
+        } else {
+            "JD-1"
+        };
+        assert_eq!(
+            live.get("data-live"),
+            Some(format!("/admin/documents/{id}/stream").as_str()),
+            "{target}"
+        );
+        assert_eq!(
+            live.get("data-revision"),
+            Some(revision.to_string().as_str()),
+            "{target}"
+        );
+    }
+    // An older revision stays as it was: no stream, no script.
+    let old = server
+        .get("/admin/documents/JD-1?version=1", Some(&cookie))
+        .await?;
+    assert_eq!(old.status, 200);
+    assert!(old.body.contains("data-doc-page"));
+    assert!(
+        !old.body.contains("data-live"),
+        "an old revision is not live"
+    );
+    assert!(!old.body.contains("document.js"));
+    // Other pages do not load it.
+    for other in ["/admin/", "/admin/board", "/admin/documents"] {
+        let page = server.get(other, Some(&cookie)).await?;
+        assert!(!page.body.contains("document.js"), "{other}");
+    }
     server.stop().await
 }
 

@@ -116,6 +116,10 @@
       parts.push("needing attention");
     }
     parts.push(`group: ${chosen("group")}`, `${chosen("sort")}, ${chosen("dir")}`);
+    const folded = [...form.querySelectorAll("input[data-collapse]")].map((input) => input.value);
+    if (folded.length) {
+      parts.push(`folded: ${folded.join(", ")}`);
+    }
     out.textContent = `- ${parts.join(" · ")}`;
   };
 
@@ -146,7 +150,7 @@
         if (loginPage(res)) {
           signedOut();
         } else if (res.status === 503) {
-          live("offline", "Too many open boards; close one and reload");
+          live("offline", "Too many open live pages; close one and reload");
         } else {
           live("offline", "Disconnected, retrying");
           setTimeout(open, 5000);
@@ -399,6 +403,7 @@
     const focusedCard = active?.closest(".bcard");
     const focusedId = focusedCard ? focusedCard.dataset.id : null;
     const onMenu = Boolean(active?.matches("[data-card-menu]"));
+    const focusedFold = active?.closest("[data-fold]")?.dataset.fold ?? null;
 
     const update = () => {
       for (const [card, before, renewed] of plan) {
@@ -430,6 +435,11 @@
           board.setAttribute("tabindex", "-1");
           board.focus({ preventScroll: true });
         }
+      }
+      // A row's fold toggle is replaced with the grid: focus goes to the
+      // new one.
+      if (focusedFold !== null && (!document.activeElement || document.activeElement === document.body)) {
+        board.querySelector(`[data-fold="${CSS.escape(focusedFold)}"]`)?.focus({ preventScroll: true });
       }
       stats.cards = board.querySelectorAll(".bcard").length;
       if (eventAt && !instant) {
@@ -659,6 +669,37 @@
       items[(at + step + items.length) % items.length].focus();
     }
   });
+  // The Filters panel opened or shut: `filters=closed` in the form keeps
+  // it in the address, as folds are, with no new grid. `toggle` does not
+  // bubble, so it is caught on the way down.
+  document.addEventListener(
+    "toggle",
+    (event) => {
+      const panel = event.target;
+      if (!(panel instanceof HTMLDetailsElement) || !panel.matches("[data-board-filters-panel]") || !form) {
+        return;
+      }
+      const held = form.querySelector("input[data-filters-closed]");
+      // Already as the form says (a browser fires `toggle` for a panel
+      // drawn open): nothing changed, so the address and the remembered
+      // view stay as they are.
+      if (panel.open === !held) {
+        return;
+      }
+      if (panel.open) {
+        held.remove();
+      } else {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "filters";
+        input.value = "closed";
+        input.dataset.filtersClosed = "";
+        form.append(input);
+      }
+      keepAddress();
+    },
+    true,
+  );
   // A menu closed by Escape or a click elsewhere: its button says so.
   document.addEventListener("toggle", (event) => {
     if (event.newState !== "closed") {
@@ -706,6 +747,26 @@
       }
       return;
     }
+    // A row title folds its row to one line, or shows it again: the fold
+    // is a `collapse` key in the form, so the address, Copy link and live
+    // refreshes keep it.
+    const fold = target.closest("[data-fold]");
+    if (fold && form) {
+      const key = fold.dataset.fold;
+      const held = [...form.querySelectorAll("input[data-collapse]")].find((input) => input.value === key);
+      if (held) {
+        held.remove();
+      } else {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "collapse";
+        input.value = key;
+        input.dataset.collapse = "";
+        form.append(input);
+      }
+      applyFilters();
+      return;
+    }
     const boardOpener = target.closest("[data-board-actions]");
     if (boardOpener) {
       openMenu(boardMenu(), boardOpener);
@@ -746,13 +807,26 @@
     }
   });
 
-  const applyFilters = () => {
+  // The form is the view: its address, and app.js remembers it from there.
+  const keepAddress = () => {
     history.replaceState(null, "", `/admin/board?${new URLSearchParams(new FormData(form))}`);
+    document.dispatchEvent(new CustomEvent("joedocs:view-changed", { detail: { view: "board" } }));
+  };
+  const applyFilters = () => {
+    keepAddress();
     summarize();
     hidePreview();
     refresh(true);
   };
-  form?.addEventListener("change", applyFilters);
+  form?.addEventListener("change", (event) => {
+    // Folds name the rows of one grouping: another grouping starts unfolded.
+    if (event.target instanceof HTMLSelectElement && event.target.name === "group") {
+      for (const input of form.querySelectorAll("input[data-collapse]")) {
+        input.remove();
+      }
+    }
+    applyFilters();
+  });
   form?.addEventListener("submit", (event) => {
     event.preventDefault();
     applyFilters();

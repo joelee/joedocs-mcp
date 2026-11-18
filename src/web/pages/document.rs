@@ -81,7 +81,8 @@ struct DocumentPage<'a> {
     tags: Vec<String>,
     aliases: Vec<String>,
     properties: Vec<Property>,
-    files: Vec<Link>,
+    /// The Files panel, as a tree flattened for the template.
+    files: Vec<FileItem>,
     revisions: Vec<Link>,
     older: bool,
     headings: Vec<Heading>,
@@ -96,6 +97,9 @@ struct DocumentPage<'a> {
     notice: Option<String>,
     /// What the Actions menu offers.
     menu: Menu,
+    /// The stream of the document's revisions, on its latest revision
+    /// only: the page then updates itself (`document.js`).
+    live: Option<String>,
 }
 
 /// The Actions menu of the page shown.
@@ -254,24 +258,16 @@ pub(crate) fn view(
         tags: strings(fields.get("tags")),
         aliases: strings(fields.get("aliases")),
         properties: properties(&fields, &resolver, file.is_some()),
-        files: file_links(&document.id, &files, file, pinned),
-        revisions: (latest.saturating_sub(PICKER_REVISIONS) + 1..=latest)
-            .rev()
-            .map(|v| Link {
-                href: href(&document.id, file, (v != latest).then_some(v), source),
-                label: if v == latest {
-                    format!("{v} (latest)")
-                } else {
-                    v.to_string()
-                },
-                current: v == shown_version,
-            })
-            .collect(),
+        files: file_tree(&document.id, &files, file, pinned),
+        revisions: revision_links(&document.id, file, source, latest, shown_version),
         older: latest > PICKER_REVISIONS,
         headings: rendered.headings,
         rendered_href: href(&document.id, file, pinned, false),
         source_href: href(&document.id, file, pinned, true),
         latest_href: href(&document.id, file, None, source),
+        live: pinned
+            .is_none()
+            .then(|| format!("/admin/documents/{}/stream", document.id)),
         notice: notice(request, document, file),
         menu: Menu {
             archive: pinned.is_none() && file.is_none(),
@@ -551,28 +547,120 @@ pub(crate) fn restore_file(
     )))
 }
 
-/// The files of a multi-file document, main file first.
-fn file_links(
+/// The newest revisions for the picker, newest first, the one shown
+/// marked.
+fn revision_links(
+    id: &str,
+    file: Option<&str>,
+    source: bool,
+    latest: u64,
+    shown: u64,
+) -> Vec<Link> {
+    (latest.saturating_sub(PICKER_REVISIONS) + 1..=latest)
+        .rev()
+        .map(|v| Link {
+            href: href(id, file, (v != latest).then_some(v), source),
+            label: if v == latest {
+                format!("{v} (latest)")
+            } else {
+                v.to_string()
+            },
+            current: v == shown,
+        })
+        .collect()
+}
+
+/// A directory of the Files panel: its name, its path in the document,
+/// how many files it holds (its subdirectories' included), and whether it
+/// starts open (it holds the file shown).
+pub(crate) struct FileDir {
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) count: usize,
+    pub(crate) open: bool,
+}
+
+/// One entry of the Files panel in the order the template writes it:
+/// a directory opens, its files and subdirectories follow, then it closes.
+pub(crate) enum FileItem {
+    Open(FileDir),
+    File(Link),
+    Close,
+}
+
+/// The files of a directory and its subdirectories, by name.
+#[derive(Default)]
+struct FileNode {
+    files: Vec<Link>,
+    dirs: std::collections::BTreeMap<String, FileNode>,
+}
+
+impl FileNode {
+    fn count(&self) -> usize {
+        self.files.len() + self.dirs.values().map(Self::count).sum::<usize>()
+    }
+
+    /// Writes this node's files, then each subdirectory, into `out`.
+    fn flatten(self, prefix: &str, shown: Option<&str>, out: &mut Vec<FileItem>) {
+        out.extend(self.files.into_iter().map(FileItem::File));
+        for (name, dir) in self.dirs {
+            let path = format!("{prefix}{name}");
+            let inner = format!("{path}/");
+            out.push(FileItem::Open(FileDir {
+                count: dir.count(),
+                open: shown.is_some_and(|s| s.starts_with(&inner)),
+                name,
+                path,
+            }));
+            dir.flatten(&inner, shown, out);
+            out.push(FileItem::Close);
+        }
+    }
+}
+
+/// The files of a multi-file document as a tree: the main file and the
+/// files at the top level first, then each directory with its files and
+/// subdirectories, in name order (D-06). A file is labelled by its name in
+/// its directory.
+fn file_tree(
     id: &str,
     files: &[FileInfo],
     shown: Option<&str>,
     version: Option<u64>,
-) -> Vec<Link> {
-    files
-        .iter()
-        .map(|f| {
-            let file = (!f.main).then_some(f.file.as_str());
-            Link {
-                href: href(id, file, version, false),
-                label: if f.main {
-                    format!("{} (main file)", f.file)
-                } else {
-                    f.file.clone()
-                },
-                current: file == shown,
-            }
-        })
-        .collect()
+) -> Vec<FileItem> {
+    let mut root = FileNode::default();
+    let mut main = Vec::new();
+    for f in files {
+        let file = (!f.main).then_some(f.file.as_str());
+        let link = |label: String| Link {
+            href: href(id, file, version, false),
+            label,
+            current: file == shown,
+        };
+        if f.main {
+            main.push(link(format!("{} (main file)", f.file)));
+            continue;
+        }
+        let mut parts: Vec<&str> = f.file.split('/').collect();
+        let name = parts.pop().unwrap_or_default().to_owned();
+        let mut node = &mut root;
+        for part in parts {
+            node = node.dirs.entry(part.to_owned()).or_default();
+        }
+        node.files.push(link(name));
+    }
+    sort_files(&mut root);
+    let mut out: Vec<FileItem> = main.into_iter().map(FileItem::File).collect();
+    root.flatten("", shown, &mut out);
+    out
+}
+
+/// Sorts every directory's files by name.
+fn sort_files(node: &mut FileNode) {
+    node.files.sort_by(|a, b| a.label.cmp(&b.label));
+    for dir in node.dirs.values_mut() {
+        sort_files(dir);
+    }
 }
 
 /// A front matter value as a list of strings (for tags and aliases).
@@ -641,7 +729,102 @@ fn prop_value(value: &Value, resolver: &dyn Resolver) -> PropValue {
 
 #[cfg(test)]
 mod tests {
-    use super::download_name;
+    use super::{FileItem, download_name, file_tree};
+    use crate::store::FileInfo;
+
+    fn info(file: &str, main: bool) -> FileInfo {
+        FileInfo {
+            file: file.to_owned(),
+            main,
+            revision: 1,
+            updated: String::new(),
+        }
+    }
+
+    /// The tree as lines: `+dir (count) open|closed`, `-` to close it, and
+    /// `label` (with `*` when current) for a file.
+    fn outline(items: &[FileItem]) -> Vec<String> {
+        items
+            .iter()
+            .map(|item| match item {
+                FileItem::Open(dir) => format!(
+                    "+{} ({}) {}",
+                    dir.path,
+                    dir.count,
+                    if dir.open { "open" } else { "closed" }
+                ),
+                FileItem::Close => "-".to_owned(),
+                FileItem::File(link) => {
+                    format!("{}{}", link.label, if link.current { "*" } else { "" })
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn files_are_grouped_by_directory_after_the_main_and_top_level_files() {
+        let files = [
+            info("Research", true),
+            info("brief", false),
+            info("coordinator/log", false),
+            info("coordinator/state", false),
+            info("plan", false),
+            info("sources/S-001-one", false),
+            info("sources/deep/S-003-three", false),
+            info("sources/S-002-two", false),
+        ];
+        let tree = file_tree("JD-7", &files, Some("sources/deep/S-003-three"), None);
+        assert_eq!(
+            outline(&tree),
+            [
+                "Research (main file)",
+                "brief",
+                "plan",
+                "+coordinator (2) closed",
+                "log",
+                "state",
+                "-",
+                "+sources (3) open",
+                "S-001-one",
+                "S-002-two",
+                "+sources/deep (1) open",
+                "S-003-three*",
+                "-",
+                "-",
+            ]
+        );
+        let FileItem::File(link) = &tree[10 + 1] else {
+            panic!("a file");
+        };
+        assert_eq!(
+            link.href,
+            "/admin/documents/JD-7?file=sources%2Fdeep%2FS-003-three"
+        );
+    }
+
+    #[test]
+    fn the_main_file_shown_leaves_every_directory_closed() {
+        let files = [
+            info("Backlog", true),
+            info("items/one", false),
+            info("items", false),
+        ];
+        let tree = file_tree("JD-3", &files, None, Some(4));
+        assert_eq!(
+            outline(&tree),
+            [
+                "Backlog (main file)*",
+                "items",
+                "+items (1) closed",
+                "one",
+                "-"
+            ]
+        );
+        let FileItem::File(main) = &tree[0] else {
+            panic!("a file");
+        };
+        assert_eq!(main.href, "/admin/documents/JD-3?version=4");
+    }
 
     #[test]
     fn download_names_are_plain_ascii() {

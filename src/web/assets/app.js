@@ -12,8 +12,10 @@
   // Whether buttons open dialogs by themselves (invoker commands).
   const NATIVE_COMMANDS = "command" in HTMLButtonElement.prototype;
 
-  // localStorage holds the theme choice and nothing else. It can be
-  // unavailable (private windows, blocked storage); the page works anyway.
+  // localStorage holds the theme choice and the remembered Board and
+  // Documents views; sessionStorage holds the Files panel's folds (below).
+  // Either can be unavailable (private windows, blocked storage); the page
+  // works anyway, and nothing is remembered.
   const storedTheme = () => {
     try {
       return localStorage.getItem(THEME_KEY);
@@ -47,6 +49,146 @@
   fitNav();
   narrow.addEventListener("change", fitNav);
 
+  // The back-to-top button (layout.html) shows once the page has scrolled
+  // more than one window height. It is looked up each time, as the
+  // navigation is: Back and Forward swap in a new body.
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  let toTopQueued = false;
+  const fitToTop = () => {
+    toTopQueued = false;
+    const button = document.querySelector("[data-to-top]");
+    if (button instanceof HTMLElement) {
+      button.hidden = window.scrollY <= window.innerHeight;
+    }
+  };
+  const queueToTop = () => {
+    if (!toTopQueued) {
+      toTopQueued = true;
+      requestAnimationFrame(fitToTop);
+    }
+  };
+  addEventListener("scroll", queueToTop, { passive: true });
+  addEventListener("resize", queueToTop, { passive: true });
+  fitToTop();
+
+  // Back to the top, with focus on the content as the skip link gives it.
+  const toTop = () => {
+    scrollTo({ top: 0, behavior: reduceMotion.matches ? "auto" : "smooth" });
+    document.getElementById("main")?.focus({ preventScroll: true });
+  };
+
+  // The Files panel of a multi-file document: each directory folds. What
+  // was opened or closed is kept for the tab (sessionStorage), per
+  // document, as `{ "<dir path>": true | false }`; a directory holding the
+  // file shown is always open. Unavailable storage changes nothing.
+  const filesKey = (panel) => `joedocs-files-${panel.dataset.files}`;
+  const readFolds = (panel) => {
+    try {
+      const folds = JSON.parse(sessionStorage.getItem(filesKey(panel)) || "{}");
+      return folds && typeof folds === "object" ? folds : {};
+    } catch {
+      return {};
+    }
+  };
+  const setUpFiles = (root) => {
+    for (const panel of root.querySelectorAll("[data-files]")) {
+      const folds = readFolds(panel);
+      for (const dir of panel.querySelectorAll("details[data-dir]")) {
+        const open = folds[dir.dataset.dir];
+        if (typeof open === "boolean" && !dir.hasAttribute("data-holds-current")) {
+          dir.open = open;
+        }
+      }
+    }
+  };
+  // `toggle` does not bubble, so it is caught on the way down.
+  document.addEventListener(
+    "toggle",
+    (event) => {
+      const dir = event.target instanceof HTMLDetailsElement ? event.target : null;
+      const panel = dir?.dataset.dir !== undefined ? dir.closest("[data-files]") : null;
+      if (!panel) {
+        return;
+      }
+      const folds = readFolds(panel);
+      folds[dir.dataset.dir] = dir.open;
+      try {
+        sessionStorage.setItem(filesKey(panel), JSON.stringify(folds));
+      } catch {
+        // Kept for this page only.
+      }
+    },
+    true,
+  );
+
+  // Remembered views: the Board and Documents keep their last filters and
+  // order as a query string in localStorage (`joedocs-<view>-view`), and
+  // the menu links marked `data-remember` lead back to it. An address with
+  // a query shows what it says; a bare one shows the defaults. "Reset
+  // filters" forgets the view.
+  const VIEWS = {
+    board: {
+      path: "/admin/board",
+      keys: ["project", "type", "status", "attention", "group", "sort", "dir", "collapse", "filters"],
+    },
+    documents: { path: "/admin/documents", keys: ["project", "type", "status", "sort", "dir", "limit"] },
+  };
+  const viewKey = (view) => `joedocs-${view}-view`;
+  const storedView = (view) => {
+    try {
+      return localStorage.getItem(viewKey(view)) || "";
+    } catch {
+      return "";
+    }
+  };
+  // The view's own keys of `params`, without empty values.
+  const viewQuery = (view, params) => {
+    const out = new URLSearchParams();
+    for (const [key, value] of params) {
+      if (VIEWS[view].keys.includes(key) && value !== "") {
+        out.append(key, value);
+      }
+    }
+    return out.toString();
+  };
+  const rememberLinks = () => {
+    for (const link of document.querySelectorAll("a[data-remember]")) {
+      const view = VIEWS[link.dataset.remember];
+      if (view) {
+        const query = storedView(link.dataset.remember);
+        link.href = query ? `${view.path}?${query}` : view.path;
+      }
+    }
+  };
+  const saveView = (view, query) => {
+    try {
+      if (query) {
+        localStorage.setItem(viewKey(view), query);
+      } else {
+        localStorage.removeItem(viewKey(view));
+      }
+    } catch {
+      // Not remembered.
+    }
+    rememberLinks();
+  };
+  // A page opened with a view in its address remembers it.
+  for (const [view, { path }] of Object.entries(VIEWS)) {
+    const query = location.pathname === path ? viewQuery(view, new URLSearchParams(location.search)) : "";
+    if (query) {
+      saveView(view, query);
+    }
+  }
+  rememberLinks();
+  // The Board's script says when its view changed (it has put it in the
+  // address by then).
+  document.addEventListener("joedocs:view-changed", (event) => {
+    const view = event.detail?.view;
+    if (VIEWS[view]) {
+      saveView(view, viewQuery(view, new URLSearchParams(location.search)));
+    }
+  });
+
   const toggleTheme = () => {
     const current =
       document.documentElement.dataset.theme ||
@@ -74,6 +216,19 @@
     }
     if (target.closest("[data-theme-toggle]")) {
       toggleTheme();
+      return;
+    }
+    if (target.closest("[data-to-top]")) {
+      toTop();
+      return;
+    }
+    const reset = target.closest("[data-reset-view]");
+    if (reset && VIEWS[reset.dataset.resetView]) {
+      saveView(reset.dataset.resetView, "");
+      // A link goes to the bare page by itself.
+      if (!(reset instanceof HTMLAnchorElement)) {
+        location.assign(VIEWS[reset.dataset.resetView].path);
+      }
       return;
     }
     const copy = target.closest("[data-copy]");
@@ -247,6 +402,17 @@
 
   drawDiagrams(document);
   setUpSorting(document);
+  setUpFiles(document);
+
+  // A live document page (document.js) swapped in its latest revision.
+  document.addEventListener("joedocs:swapped", (event) => {
+    const region = event.target instanceof Element ? event.target : null;
+    if (region) {
+      drawDiagrams(region);
+      setUpSorting(region);
+      setUpFiles(region);
+    }
+  });
 
   // After htmx swaps a region in, move focus there so keyboard and
   // screen-reader users land on the new content, and announce it. htmx 4
@@ -285,9 +451,25 @@
     // been fitted to the screen. Results alone leave the Menu as it is.
     if (region === document.body) {
       fitNav();
+      fitToTop();
+      rememberLinks();
+    }
+    // New Documents results: the form (with the sort its results carry)
+    // holds the view; `limit` only comes from the address.
+    if (region.id === "results" && location.pathname === VIEWS.documents.path) {
+      const form = document.getElementById("documents-filters");
+      if (form instanceof HTMLFormElement) {
+        const params = new URLSearchParams(new FormData(form));
+        const limit = new URLSearchParams(location.search).get("limit");
+        if (limit) {
+          params.set("limit", limit);
+        }
+        saveView("documents", viewQuery("documents", params));
+      }
     }
     drawDiagrams(region);
     setUpSorting(region);
+    setUpFiles(region);
     // Results can say what changed (the Documents order); otherwise the
     // region's own label is announced.
     const said = region.querySelector(":scope > [data-announcement]");

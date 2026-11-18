@@ -10,6 +10,11 @@
 //! page fetches the grid again. The stream sends a comment line every
 //! keep-alive interval, checks the session then, and ends when the session
 //! has lapsed, when the server shuts down, or when the browser goes away.
+//!
+//! `GET /admin/documents/{id}/stream` (JD-65 D-07) rides the same watcher
+//! and the same places: on each published change it reads the document's
+//! revision from the index, and sends an event only when that document
+//! moved, so the page fetches itself again only for its own changes.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -23,7 +28,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Route, WebError, WebRequest, WebState, open_session, session, write_audit};
 
-/// Most Board streams open at once on one server (D-06).
+/// Most streams open at once on one server (D-06): Board and document
+/// streams share them.
 pub(crate) const MAX_BOARD_STREAMS: usize = 32;
 
 /// How often the watcher reads the change marker.
@@ -220,65 +226,114 @@ fn event(signal: Signal) -> Bytes {
     ))
 }
 
-/// `GET /admin/board/stream?marker=<the grid's data-marker>`.
-pub(super) async fn stream(state: Arc<WebState>, request: WebRequest) -> Response {
+/// What a stream follows.
+pub(super) enum Follow {
+    /// Every change: the Board fetches its grid again.
+    Board,
+    /// One live document's revisions, for its page.
+    Document(String),
+}
+
+/// `GET /admin/board/stream?marker=<the grid's data-marker>`, or
+/// `GET /admin/documents/{id}/stream?revision=<the page's revision>`.
+pub(super) async fn stream(
+    state: Arc<WebState>,
+    request: WebRequest,
+    route: Route,
+    follow: Follow,
+) -> Response {
     let marker = request
         .query("marker")
         .filter(|m| !m.is_empty())
         .map(str::to_owned);
+    let shown = request
+        .query("revision")
+        .and_then(|r| r.parse::<u64>().ok())
+        .unwrap_or(0);
     let opening = Arc::clone(&state);
     let checking = request.clone();
-    let opened = tokio::task::spawn_blocking(move || {
-        let Ok(store) = opening.shared.store().lock() else {
-            return Err(WebError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal",
-                "internal error",
-            ));
-        };
-        let (who, result) = if session::same_origin(&checking.headers, &opening.allowed_origins) {
-            match open_session(&store, &opening, &checking) {
-                Ok(session) => {
-                    let place = opening.board_signal.try_open().ok_or_else(|| {
-                        WebError::new(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "busy",
-                            "Too many open boards; close one and reload.",
-                        )
-                    });
-                    (Some(session.admin), place)
+    let document = match &follow {
+        Follow::Document(id) => Some(id.clone()),
+        Follow::Board => None,
+    };
+    let operation = route.operation();
+    // A document stream listens before it reads the document's revision
+    // (JD-66 MED-04): a change published between the two is then in the
+    // receiver, and one before the read is in the revision. A refused
+    // request drops its receiver with the rest.
+    let following_document = matches!(follow, Follow::Document(_));
+    let signal = Arc::clone(&state.board_signal);
+    let subscribe = move || following_document.then(|| signal.subscribe(None).0);
+    let (early, opened) = subscribe_then_read(subscribe, || {
+        tokio::task::spawn_blocking(move || {
+            let Ok(store) = opening.shared.store().lock() else {
+                return Err(WebError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    "internal error",
+                ));
+            };
+            let (who, result) = if session::same_origin(&checking.headers, &opening.allowed_origins)
+            {
+                match open_session(&store, &opening, &checking) {
+                    Ok(session) => {
+                        // A document stream needs a live document: its revision
+                        // now, for a page already behind it.
+                        let current = document
+                            .as_deref()
+                            .map(|id| store.document_info(id).map(|info| info.revision))
+                            .transpose()
+                            .map_err(|e| WebError::from_store(&e));
+                        let place = current.and_then(|current| {
+                            let place = opening.board_signal.try_open().ok_or_else(|| {
+                                WebError::new(
+                                    StatusCode::SERVICE_UNAVAILABLE,
+                                    "busy",
+                                    "Too many open live pages; close one and reload.",
+                                )
+                            })?;
+                            Ok((place, current))
+                        });
+                        (Some(session.admin), place)
+                    }
+                    Err(refused) => (None, Err(refused)),
                 }
-                Err(refused) => (None, Err(refused)),
-            }
-        } else {
-            (
-                None,
-                Err(WebError::forbidden(
-                    "the Board stream is for this site's pages only",
-                )),
-            )
-        };
-        let outcome = result.as_ref().map_or_else(|e| e.code, |_| "ok");
-        write_audit(
-            &store,
-            who.as_ref(),
-            Route::BoardStream.operation(),
-            outcome,
-        );
-        result
+            } else {
+                (
+                    None,
+                    Err(WebError::forbidden(
+                        "this stream is for this site's pages only",
+                    )),
+                )
+            };
+            let outcome = result.as_ref().map_or_else(|e| e.code, |_| "ok");
+            write_audit(&store, who.as_ref(), operation, outcome);
+            result
+        })
     })
     .await;
-    let place = match opened {
-        Ok(Ok(place)) => place,
+    let (place, current) = match opened {
+        Ok(Ok(opened)) => opened,
         Ok(Err(refused)) => return refused.into_response(),
         Err(error) => {
-            tracing::error!(%error, "Board stream task failed");
+            tracing::error!(%error, "stream task failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let (rx, behind) = state.board_signal.subscribe(marker);
     let (tx, body): (Outgoing, _) = mpsc::channel(8);
-    tokio::spawn(feed(state, request, place, rx, behind, tx));
+    match follow {
+        Follow::Board => {
+            let (rx, behind) = state.board_signal.subscribe(marker);
+            tokio::spawn(feed(state, request, place, rx, behind, tx));
+        }
+        Follow::Document(id) => {
+            let rx = early.unwrap_or_else(|| state.board_signal.subscribe(None).0);
+            let current = current.unwrap_or(shown);
+            tokio::spawn(document_feed(
+                state, request, place, rx, id, shown, current, tx,
+            ));
+        }
+    }
     let mut response =
         Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(body)).into_response();
     let headers = response.headers_mut();
@@ -307,15 +362,98 @@ async fn feed(
     run_feed(rx, behind, tx, &shutdown, keep_alive, session).await;
 }
 
+/// Runs `subscribe`, then starts and awaits `read`, in that order:
+/// whatever is published after the subscription is seen by its receiver,
+/// and whatever happened before the read is in its result, so nothing
+/// falls between. `read` is a function, so nothing it spawns can start
+/// before the subscription.
+async fn subscribe_then_read<S, F>(
+    subscribe: impl FnOnce() -> S,
+    read: impl FnOnce() -> F,
+) -> (S, F::Output)
+where
+    F: std::future::Future,
+{
+    let subscribed = subscribe();
+    (subscribed, read().await)
+}
+
 /// The stream's outgoing body.
 type Outgoing = mpsc::Sender<Result<Bytes, std::convert::Infallible>>;
+
+/// What a published change becomes on one stream.
+enum Turn {
+    /// An event to send.
+    Send(Bytes),
+    /// Nothing for this stream.
+    Skip,
+    /// A last event, then the stream ends.
+    End(Bytes),
+}
+
+fn revision_event(revision: u64) -> Bytes {
+    Bytes::from(format!("event: revision\ndata: {revision}\n\n"))
+}
+
+/// A document stream's events until it should end: its revision at once
+/// when the page (`shown`) is behind `current`, then one per published
+/// change that moved the document, and `event: gone` when it is archived
+/// or removed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the feed's parts, as `feed` takes them, plus the document"
+)]
+async fn document_feed(
+    state: Arc<WebState>,
+    request: WebRequest,
+    place: OpenStream,
+    rx: watch::Receiver<Signal>,
+    id: String,
+    shown: u64,
+    current: u64,
+    tx: Outgoing,
+) {
+    let _place = place;
+    let shutdown = state.board_signal.shutdown.clone();
+    let keep_alive = state.options.board.keep_alive;
+    let session = || session_holds(&state, &request);
+    let catch_up = (current > shown).then(|| revision_event(current));
+    let last = Arc::new(std::sync::atomic::AtomicU64::new(current.max(shown)));
+    let turn = |_: Signal| {
+        let (state, id, last) = (Arc::clone(&state), id.clone(), Arc::clone(&last));
+        async move {
+            let read = tokio::task::spawn_blocking(move || {
+                state
+                    .shared
+                    .store()
+                    .lock()
+                    .map(|store| store.document_info(&id).map(|info| info.revision))
+                    .ok()
+            })
+            .await
+            .ok()
+            .flatten();
+            match read {
+                Some(Ok(revision)) if revision > last.load(Ordering::Acquire) => {
+                    last.store(revision, Ordering::Release);
+                    Turn::Send(revision_event(revision))
+                }
+                Some(Err(crate::store::Error::NotFound(_) | crate::store::Error::Archived(_))) => {
+                    Turn::End(Bytes::from_static(b"event: gone\ndata: -\n\n"))
+                }
+                _ => Turn::Skip,
+            }
+        }
+    };
+    run_feed_with(rx, catch_up, tx, &shutdown, keep_alive, session, turn).await;
+}
 
 /// One stream's event loop, apart from the server so tests can drive it:
 /// the retry line, a catch-up event when the page is `behind`, then an
 /// event per published signal and a comment line every `keep_alive`, when
 /// `session` (checked then) still holds.
 async fn run_feed<S, F>(
-    mut rx: watch::Receiver<Signal>,
+    rx: watch::Receiver<Signal>,
     behind: bool,
     tx: Outgoing,
     shutdown: &CancellationToken,
@@ -325,20 +463,43 @@ async fn run_feed<S, F>(
     S: Fn() -> F,
     F: std::future::Future<Output = bool>,
 {
+    let catch_up = behind.then(|| {
+        event(Signal {
+            generation: rx.borrow().generation,
+            seen_ms: wall_ms(),
+        })
+    });
+    let turn = |signal: Signal| std::future::ready(Turn::Send(event(signal)));
+    run_feed_with(rx, catch_up, tx, shutdown, keep_alive, session, turn).await;
+}
+
+/// The event loop of any stream: the retry line, `catch_up` when there is
+/// one, then what `turn` makes of each published signal, and a comment
+/// line every `keep_alive`, when `session` (checked then) still holds.
+async fn run_feed_with<S, F, T, G>(
+    mut rx: watch::Receiver<Signal>,
+    catch_up: Option<Bytes>,
+    tx: Outgoing,
+    shutdown: &CancellationToken,
+    keep_alive: Duration,
+    session: S,
+    mut turn: T,
+) where
+    S: Fn() -> F,
+    F: std::future::Future<Output = bool>,
+    T: FnMut(Signal) -> G,
+    G: std::future::Future<Output = Turn>,
+{
     // Every send gives way to shutdown and to the client going away: a
     // stream never waits to deliver one more event before it ends.
     let send = |bytes: Bytes| deliver(&tx, shutdown, bytes);
     if !send(Bytes::from_static(b"retry: 2000\n\n")).await {
         return;
     }
-    if behind {
-        let now = Signal {
-            generation: rx.borrow().generation,
-            seen_ms: wall_ms(),
-        };
-        if !send(event(now)).await {
-            return;
-        }
+    if let Some(bytes) = catch_up
+        && !send(bytes).await
+    {
+        return;
     }
     // No `mark_unchanged` here: a receiver starts with the current value
     // seen, so whatever the watcher publishes after the stream subscribed,
@@ -349,7 +510,17 @@ async fn run_feed<S, F>(
     loop {
         let bytes = tokio::select! {
             changed = rx.changed() => match changed {
-                Ok(()) => event(*rx.borrow_and_update()),
+                Ok(()) => {
+                    let signal = *rx.borrow_and_update();
+                    match turn(signal).await {
+                        Turn::Send(bytes) => bytes,
+                        Turn::Skip => continue,
+                        Turn::End(bytes) => {
+                            send(bytes).await;
+                            break;
+                        }
+                    }
+                }
                 Err(_) => break,
             },
             _ = beat.tick() => {
@@ -483,6 +654,41 @@ mod tests {
             }
         }
         seen
+    }
+
+    /// JD-66 MED-04: a document stream subscribes, then reads the
+    /// document's revision. A change published in between (the watcher
+    /// announcing a write that lands just after the read) is still seen.
+    #[tokio::test]
+    async fn a_change_between_the_subscription_and_the_revision_read_is_seen() {
+        let (publish, _keep) = watch::channel(Signal::default());
+        let (rx, read) = subscribe_then_read(
+            || publish.subscribe(),
+            || async {
+                // The read: revision 1, then the write lands and is published.
+                publish.send_replace(Signal {
+                    generation: 1,
+                    seen_ms: 5,
+                });
+                1_u64
+            },
+        )
+        .await;
+        assert_eq!(read, 1);
+        assert_eq!(
+            rx.has_changed().ok(),
+            Some(true),
+            "the receiver sees the change, so the feed reads revision 2"
+        );
+        // The old order loses it: a receiver made after the publication
+        // counts it as seen.
+        let (publish, _keep) = watch::channel(Signal::default());
+        publish.send_replace(Signal {
+            generation: 1,
+            seen_ms: 5,
+        });
+        let late = publish.subscribe();
+        assert_eq!(late.has_changed().ok(), Some(false));
     }
 
     #[tokio::test]

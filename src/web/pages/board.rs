@@ -75,6 +75,10 @@ struct View {
     sort: &'static str,
     /// `desc` or `asc`.
     dir: &'static str,
+    /// The keys of the rows folded to one line (`collapse`, any number).
+    collapsed: Vec<String>,
+    /// Whether the Filters panel is shut (`filters=closed`).
+    filters_closed: bool,
 }
 
 impl View {
@@ -87,9 +91,20 @@ impl View {
         };
         Self {
             attention_only: request.query("attention") == Some("1"),
+            filters_closed: request.query("filters") == Some("closed"),
             group: pick("group", &["type", "project", "none"]),
             sort: pick("sort", &["updated", "created", "id"]),
             dir: pick("dir", &["desc", "asc"]),
+            collapsed: request
+                .query_all("collapse")
+                .into_iter()
+                .filter(|key| !key.is_empty())
+                .fold(Vec::new(), |mut keys, key| {
+                    if !keys.iter().any(|k| k == key) {
+                        keys.push(key.to_owned());
+                    }
+                    keys
+                }),
         }
     }
 }
@@ -114,6 +129,8 @@ struct Column {
 struct Row {
     key: String,
     label: String,
+    /// Folded to one line: each status's count, without its cards.
+    folded: bool,
     cells: Vec<Cell>,
 }
 
@@ -141,8 +158,9 @@ struct Card {
 
 /// `GET /admin/board`: `project`, `type` and `status` (any number each;
 /// none means every project, every type, and every status that is not
-/// closed), `attention=1`, `group`, `sort`, `dir`; `fragment=1` for the
-/// grid alone.
+/// closed), `attention=1`, `group`, `sort`, `dir`, `collapse` (the keys of
+/// rows folded to one line, any number), `filters=closed` (the Filters
+/// panel shut); `fragment=1` for the grid alone.
 pub(crate) fn page(
     store: &Store,
     state: &WebState,
@@ -421,6 +439,8 @@ fn grid(
         .into_iter()
         .filter(|(key, _)| cards.iter().any(|c| &c.row == key))
         .map(|(key, label)| Row {
+            // Only a titled row has a toggle, so only it can fold.
+            folded: view.group != "none" && view.collapsed.contains(&key),
             key,
             label,
             cells: statuses
