@@ -102,9 +102,10 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ### 0.5.5 to 0.5.6
 
-0.5.6 is not released yet: `0.5.6-dev` is a pre-release, on GitHub only (not crates.io or Homebrew) and not for production use, until `rmcp` drops `chrono`, which RustSec advisory RUSTSEC-2026-0543 reports as unmaintained (see `CHANGELOG.md`). What follows applies to both.
+0.5.6 is not released yet: `0.5.6-dev` and `0.5.6-rc.1` are pre-releases, on GitHub only (not crates.io or Homebrew) and not for production use, until `rmcp` drops `chrono`, which RustSec advisory RUSTSEC-2026-0543 reports as unmaintained (see `CHANGELOG.md`). Install one from the binaries of its GitHub release. What follows applies to all of them; `0.5.6-rc.1` adds the web interface changes.
 
-- **Nothing changes for a server's data:** no migration; the database stays at version 8. No configuration key, MCP tool or admin API route changed.
+- **Nothing changes for a server's data:** no migration; the database stays at version 8, so going back to 0.5.5 needs only the older binary. No configuration key, MCP tool or admin API route changed. The bundled SQLite is now 3.54.1, which reads the same database files.
+- **A second stream through a reverse proxy (0.5.6-rc.1):** a document's latest revision keeps a stream open at `/admin/documents/{id}/stream`, sent like the Board's (`X-Accel-Buffering: no`, a comment line every 15 seconds), so the proxy rule for `/admin/board/stream` in 0.5.5 applies to it too. Board and document pages share the 32 open streams.
 - **The Board** also shows 🏗️ for plans whose `implementation_status` is `waiting-for-user` or `fixing`.
 - **Agent skills:** if you installed the skills from `docs/skills/`, copy them again. New plans are multi-file documents (the plan, `builder/steps.md`, `builder/log.md`, and amendments); plans written before stay single-file and keep working as before. The four research skills (`joedocs-research-coordinator`, `-scout`, `-writer`, `-critic`) are new and beta; install them only if you want to try the research workflow.
 
