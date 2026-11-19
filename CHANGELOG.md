@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.6-rc.1] - 2026-11-18
+
+**Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-dev, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. JoeDocs does not use `chrono` itself; it comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474), for [#1469](https://github.com/modelcontextprotocol/rust-sdk/issues/1469); tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, or build it from its tag.
+
+A web interface that keeps up with you: a document's page updates itself when the document changes, the Board's groups fold, the Board and Documents remember their filters, the Files panel folds by folder, and the side menu stays in view. The configuration, MCP tools, admin API and database are unchanged.
+
 ### Added
 
 - **Live documents in the web interface.** A document's latest revision updates in place when it changes, whoever writes it (MCP, the admin API, a local `joedocs` command), keeping your place and announcing the new revision; it waits while a dialog, menu or selection is open, retries a refresh that fails, shows when the document was archived or you were signed out (even while the tab was hidden), and reloads once for the page's first Mermaid diagram. The server pushes the change on a new stream, `GET /admin/documents/{id}/stream`, which sends an event only for that document and shares the Board stream's 32 places (audited as `admin:documents.stream`, one row per document page opened). An older revision stays as it is.
@@ -17,6 +23,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **The side menu stays in view** as a page scrolls, on screens wider than 720 px.
 - **The Board's busy message** for the 33rd open stream is now "Too many open live pages; close one and reload", since document pages share the places.
 - **`just scratch-server`** (developers): a new store also gets a multi-file research document with files in nested folders, for the Files panel.
+- **Dependencies:** the bundled SQLite is now 3.54.1 (`rusqlite` 0.42), and `rmcp` is 3.10. Databases are unchanged.
 
 ## [0.5.6-dev] - 2026-11-17
 
@@ -316,8 +323,9 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...HEAD
-[0.5.6-dev]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...feature/jd-62-research-workflow-skills-beta-and-0-5-6-release
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.1...HEAD
+[0.5.6-rc.1]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-dev...v0.5.6-rc.1
+[0.5.6-dev]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...v0.5.6-dev
 [0.5.5]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/joelee/joedocs-mcp/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.2...v0.5.3
