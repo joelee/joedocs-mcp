@@ -33,6 +33,11 @@ const FILES: &[Asset] = &[
         bytes: include_bytes!("assets/board.js"),
     },
     Asset {
+        name: "filters.js",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: include_bytes!("assets/filters.js"),
+    },
+    Asset {
         name: "document.js",
         content_type: "text/javascript; charset=utf-8",
         bytes: include_bytes!("assets/document.js"),
@@ -99,6 +104,8 @@ pub struct Urls {
     pub pele: &'static str,
     /// `board.js`, loaded only by the Board.
     pub board: &'static str,
+    /// `filters.js`, the filter parts (JD-71), loaded by the Board.
+    pub filters: &'static str,
     /// `document.js`, loaded only by a document's latest revision.
     pub document: &'static str,
     /// `favicon.ico`: 16, 32 and 48 pixels, drawn from `favicon.svg`.
@@ -118,6 +125,7 @@ pub fn urls() -> Urls {
         htmx: url("htmx.min.js"),
         pele: url("pele.global.js"),
         board: url("board.js"),
+        filters: url("filters.js"),
         document: url("document.js"),
         icon: url("favicon.ico"),
         icon_svg: url("favicon.svg"),

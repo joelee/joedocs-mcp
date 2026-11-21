@@ -3,7 +3,7 @@
 <div class="picker" data-filter-picker="{{ key }}">
   <div class="picker-box">
     <span class="picker-chips" data-picker-chips></span>
-    <button type="button" class="picker-trigger" aria-expanded="false" aria-controls="bf-{{ key }}-picker" data-picker-open data-all-label="{{ all_label }}">{% if named %}Add or remove {{ noun }}{% else %}{{ all_label }}{% endif %}<span class="caret" aria-hidden="true"></span></button>
+    <button type="button" class="picker-trigger" aria-expanded="false" aria-controls="bf-{{ key }}-picker" data-picker-open data-all-label="{{ all_label }}" data-some-label="Add or remove {{ noun }}">{% if named %}Add or remove {{ noun }}{% else %}{{ all_label }}{% endif %}<span class="caret" aria-hidden="true"></span></button>
   </div>
   <div class="picker-pop" id="bf-{{ key }}-picker" popover role="dialog" aria-label="Choose {{ noun }}" data-picker-pop>
     <div class="picker-head">
@@ -22,7 +22,7 @@
   </div>
 </div>
 {% endmacro %}
-{% block scripts %}<script src="{{ assets.board|safe }}" defer></script>{% endblock %}
+{% block scripts %}<script src="{{ assets.filters|safe }}" defer></script><script src="{{ assets.board|safe }}" defer></script>{% endblock %}
 {% block content %}
 <div class="board-page">
 <div class="page-head board-head-bar">
@@ -42,7 +42,7 @@
     <div class="fbar-chips" role="group" aria-label="Active filters" data-filter-chips></div>
     <button type="button" class="link" data-filter-clear{% if panel.active == 0 %} hidden{% endif %}>Clear all</button>
     <div class="fbar-view">
-      <fieldset class="fview">
+      <fieldset class="fview" data-filter-default="type">
         <legend class="visually-hidden">Group by</legend>
         <span class="fview-cap" aria-hidden="true">Group</span>
         <span class="seg">
@@ -51,13 +51,13 @@
       </fieldset>
       <span class="fview">
         <label class="fview-cap" for="bf-sort">Sort</label>
-        <select name="sort" id="bf-sort">
+        <select name="sort" id="bf-sort" data-filter-default="updated">
           <option value="updated"{% if view.sort == "updated" %} selected{% endif %}>Last updated</option>
           <option value="created"{% if view.sort == "created" %} selected{% endif %}>Created</option>
           <option value="id"{% if view.sort == "id" %} selected{% endif %}>Document ID</option>
         </select>
       </span>
-      <fieldset class="fview">
+      <fieldset class="fview" data-filter-default="desc">
         <legend class="visually-hidden">Order</legend>
         <span class="seg">
           <label for="bf-dir-desc" title="Descending"><input type="radio" name="dir" value="desc"{% if view.dir == "desc" %} checked{% endif %} id="bf-dir-desc"><span aria-hidden="true">&darr; Desc</span><span class="visually-hidden">Descending</span></label><label for="bf-dir-asc" title="Ascending"><input type="radio" name="dir" value="asc"{% if view.dir == "asc" %} checked{% endif %} id="bf-dir-asc"><span aria-hidden="true">&uarr; Asc</span><span class="visually-hidden">Ascending</span></label>
@@ -80,7 +80,7 @@
         </div>{% endif %}
       </div>
     </div>
-    <div class="frow" role="group" aria-labelledby="bf-status-label" data-filter-group="status" data-filter-label="Statuses" data-filter-default="{{ panel.status_default }}">
+    <div class="frow" role="group" aria-labelledby="bf-status-label" data-filter-group="status" data-filter-label="Statuses" data-filter-default="{{ panel.status_default }}" data-filter-default-label="open">
       <span class="flabel" id="bf-status-label">Statuses</span>
       <div class="fbody">{% if panel.statuses.picker %}{% call picker("status", "statuses", panel.statuses.choices, true, "Open statuses", panel.status_default) %}{% endcall %}{% else %}
         <div class="pills" data-filter-pills>

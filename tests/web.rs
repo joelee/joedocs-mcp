@@ -6364,7 +6364,28 @@ async fn only_the_board_loads_its_script_which_is_a_cached_asset() -> TestResult
     for other in ["/admin/", "/admin/documents", "/admin/audit"] {
         let page = server.get(other, Some(&cookie)).await?;
         assert!(!page.body.contains("board.js"), "{other} does not load it");
+        assert!(
+            !page.body.contains("filters.js"),
+            "{other} does not load it"
+        );
     }
+    // The filter parts (JD-71) are their own cached script, loaded before
+    // the Board's.
+    let parts = board
+        .body
+        .find("/filters.js\"")
+        .ok_or("filters.js not linked")?;
+    assert!(parts < at, "filters.js before board.js");
+    let start = board.body[..parts]
+        .rfind("/admin/assets/")
+        .ok_or("no asset path")?;
+    let path = &board.body[start..parts + "/filters.js".len()];
+    let script = server.get(path, None).await?;
+    assert_eq!(script.status, 200, "{path}");
+    assert!(
+        script.body.contains("data-filter-form"),
+        "the parts' script"
+    );
     // The page carries what the script needs: settings, the status
     // indicator, Pause, both menus and the preview container.
     for part in [
