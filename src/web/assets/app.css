@@ -29,6 +29,8 @@
      (JD-71): darker than a pill in the light theme, lighter in the dark. */
   --pill-all: light-dark(#e4e5e1, #2e3138);
   --pill-all-on: light-dark(#d3d6e2, #3a4152);
+  /* A pill's edge, at least 3:1 against the panel (WCAG 1.4.11). */
+  --pill-edge: light-dark(#878b92, #6b7079);
 
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -523,6 +525,8 @@ main:has(.board-page) { max-width: none; }
 .board-filters { margin-bottom: var(--space-4); }
 /* `hidden` wins over the parts' own display rules. */
 .board-filters [hidden] { display: none !important; }
+/* Text buttons are targets too: at least 24px high (WCAG 2.5.8). */
+.board-filters button.link { min-height: 1.5rem; }
 .fbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); }
 .board-filters:has(.fpanel:not([hidden])) .fbar { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .fbar-toggle { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: none; border-color: transparent; color: var(--text); font-weight: 600; min-height: 2rem; }
@@ -530,7 +534,10 @@ main:has(.board-page) { max-width: none; }
 .fbar-toggle svg { transition: transform 0.15s; flex: none; }
 .fbar-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
 .fbar-count { display: inline-grid; place-items: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.35rem; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 0.75rem; font-weight: 700; }
-.fbar-chips { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; min-width: 0; flex: 1; }
+/* The chips take the room left, but never less than 18rem: below that
+   the View controls wrap to a line of their own instead. */
+.fbar-chips { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; min-width: 0; flex: 1 1 18rem; }
+.fbar-chips:empty { flex-basis: 0; }
 .fbar-view { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-left: auto; }
 .fview { display: inline-flex; align-items: center; gap: var(--space-2); border: 0; padding: 0; margin: 0; min-width: 0; }
 .fview-cap { color: var(--muted); font-size: var(--text-sm); font-weight: 400; }
@@ -553,7 +560,7 @@ main:has(.board-page) { max-width: none; }
    segmented control. Each is a native control underneath. ------------- */
 
 .pills { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; min-width: 0; }
-.pill { position: relative; display: inline-flex; align-items: center; gap: 0.3em; min-height: 2rem; padding: 0 0.8em; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 0.95rem; font-weight: 400; cursor: pointer; user-select: none; white-space: nowrap; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+.pill { position: relative; display: inline-flex; align-items: center; gap: 0.3em; min-height: 2rem; padding: 0 0.8em; border: 1px solid var(--pill-edge); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 0.95rem; font-weight: 400; cursor: pointer; user-select: none; white-space: nowrap; transition: background 0.12s, color 0.12s, border-color 0.12s; }
 .pill input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
 .pill:hover { border-color: var(--accent); color: var(--text); }
 .pill:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -567,7 +574,7 @@ main:has(.board-page) { max-width: none; }
 .pill.st-parked:has(input:checked) { border-style: dashed; }
 /* All behaves differently (it clears the group's choice), so it looks
    different: its own background, a solid edge when pressed. */
-button.pill-all { background: var(--pill-all); color: var(--text); border-color: var(--border); font-weight: 600; }
+button.pill-all { background: var(--pill-all); color: var(--text); border-color: var(--pill-edge); font-weight: 600; }
 button.pill-all:hover { border-color: var(--accent); }
 button.pill-all[aria-pressed="true"] { background: var(--pill-all-on); border-color: var(--accent); }
 .pills-tools { display: inline-flex; gap: var(--space-1); margin-left: var(--space-1); padding-left: var(--space-2); border-left: 1px solid var(--border); }
