@@ -1,4 +1,27 @@
 {% extends "layout.html" %}
+{% macro picker(key, noun, choices, named, all_label, default) %}
+<div class="picker" data-filter-picker="{{ key }}">
+  <div class="picker-box">
+    <span class="picker-chips" data-picker-chips></span>
+    <button type="button" class="picker-trigger" aria-expanded="false" aria-controls="bf-{{ key }}-picker" data-picker-open data-all-label="{{ all_label }}">{% if named %}Add or remove {{ noun }}{% else %}{{ all_label }}{% endif %}<span class="caret" aria-hidden="true"></span></button>
+  </div>
+  <div class="picker-pop" id="bf-{{ key }}-picker" popover role="dialog" aria-label="Choose {{ noun }}" data-picker-pop>
+    <div class="picker-head">
+      <input type="search" id="bf-{{ key }}-search" aria-label="Search {{ choices.len() }} {{ noun }}" placeholder="Search {{ choices.len() }} {{ noun }}" autocomplete="off" data-picker-search>
+      <div class="picker-actions">
+        <button type="button" class="link" data-picker-all>Select all</button>
+        <button type="button" class="link" data-picker-clear>{% if default.is_empty() %}Clear{% else %}Default{% endif %}</button>
+        <span class="picker-count" data-picker-count></span>
+      </div>
+    </div>
+    <ul class="picker-list" data-picker-list>
+      {% for choice in choices %}<li data-picker-item data-search="{{ choice.search }}"><label class="picker-row" for="bf-{{ key }}-{{ choice.value }}"><input type="checkbox" name="{{ key }}" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="bf-{{ key }}-{{ choice.value }}"> <span class="picker-name">{{ choice.label }}</span>{% if !choice.meta.is_empty() %} <span class="picker-meta">{{ choice.meta }}</span>{% endif %}</label><button type="button" class="link picker-only" data-picker-only="{{ choice.value }}" aria-label="Only {{ choice.label }}">Only</button></li>{% endfor %}
+    </ul>
+    <p class="picker-empty" data-picker-empty hidden>No match.</p>
+    <div class="picker-foot"><button type="button" data-picker-done>Done</button></div>
+  </div>
+</div>
+{% endmacro %}
 {% block scripts %}<script src="{{ assets.board|safe }}" defer></script>{% endblock %}
 {% block content %}
 <div class="board-page">
@@ -13,53 +36,71 @@
   </div>
 </div>
 
-<details class="board-filters"{% if !view.filters_closed %} open{% endif %} data-board-filters-panel>
-  <summary><span class="board-filters-title">Filters</span> <span class="board-filters-summary" data-board-summary></span></summary>
-  <form method="get" action="/admin/board" data-board-filters>
-    <fieldset>
-      <legend>Projects</legend>
-      {% for choice in projects %}<label class="check"><input type="checkbox" name="project" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
-    </fieldset>
-    <fieldset>
-      <legend>Types</legend>
-      {% for choice in types %}<label class="check"><input type="checkbox" name="type" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
-    </fieldset>
-    <fieldset>
-      <legend>Statuses</legend>
-      {% for choice in statuses %}<label class="check"><input type="checkbox" name="status" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}> {{ choice.label }}</label>{% endfor %}
-    </fieldset>
-    <fieldset>
-      <legend>Show</legend>
-      <label class="check"><input type="checkbox" name="attention" value="1"{% if view.attention_only %} checked{% endif %}> Only needing attention</label>
-    </fieldset>
-    <fieldset class="board-filters-selects">
-      <label>Group by
-        <select name="group">
-          <option value="none"{% if view.group == "none" %} selected{% endif %}>None</option>
-          <option value="type"{% if view.group == "type" %} selected{% endif %}>Type</option>
-          <option value="project"{% if view.group == "project" %} selected{% endif %}>Project</option>
-        </select>
-      </label>
-      <label>Sort by
-        <select name="sort">
+<form method="get" action="/admin/board" class="board-filters" data-board-filters data-filter-form>
+  <div class="fbar" data-filter-bar>
+    <button type="button" class="fbar-toggle" aria-expanded="{% if view.filters_closed %}false{% else %}true{% endif %}" aria-controls="board-filter-panel" data-filter-toggle><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"/></svg> <span class="fbar-title">Filters</span> <span class="fbar-count" data-filter-count{% if panel.active == 0 %} hidden{% endif %}>{{ panel.active }}</span></button>
+    <div class="fbar-chips" role="group" aria-label="Active filters" data-filter-chips></div>
+    <button type="button" class="link" data-filter-clear{% if panel.active == 0 %} hidden{% endif %}>Clear all</button>
+    <div class="fbar-view">
+      <fieldset class="fview">
+        <legend class="visually-hidden">Group by</legend>
+        <span class="fview-cap" aria-hidden="true">Group</span>
+        <span class="seg">
+          <label for="bf-group-none"><input type="radio" name="group" value="none"{% if view.group == "none" %} checked{% endif %} id="bf-group-none">None</label><label for="bf-group-type"><input type="radio" name="group" value="type"{% if view.group == "type" %} checked{% endif %} id="bf-group-type">Type</label><label for="bf-group-project"><input type="radio" name="group" value="project"{% if view.group == "project" %} checked{% endif %} id="bf-group-project">Project</label>
+        </span>
+      </fieldset>
+      <span class="fview">
+        <label class="fview-cap" for="bf-sort">Sort</label>
+        <select name="sort" id="bf-sort">
           <option value="updated"{% if view.sort == "updated" %} selected{% endif %}>Last updated</option>
           <option value="created"{% if view.sort == "created" %} selected{% endif %}>Created</option>
           <option value="id"{% if view.sort == "id" %} selected{% endif %}>Document ID</option>
         </select>
-      </label>
-      <label>Order
-        <select name="dir">
-          <option value="desc"{% if view.dir == "desc" %} selected{% endif %}>Descending</option>
-          <option value="asc"{% if view.dir == "asc" %} selected{% endif %}>Ascending</option>
-        </select>
-      </label>
-    </fieldset>
-    <div class="filters-reset"><button type="button" class="secondary" data-reset-view="board">Reset filters</button></div>
-    {% if view.filters_closed %}<input type="hidden" name="filters" value="closed" data-filters-closed>{% endif %}
-    {% for key in view.collapsed %}<input type="hidden" name="collapse" value="{{ key }}" data-collapse>{% endfor %}
-    {% if debug %}<input type="hidden" name="debug" value="1">{% endif %}
-  </form>
-</details>
+      </span>
+      <fieldset class="fview">
+        <legend class="visually-hidden">Order</legend>
+        <span class="seg">
+          <label for="bf-dir-desc" title="Descending"><input type="radio" name="dir" value="desc"{% if view.dir == "desc" %} checked{% endif %} id="bf-dir-desc"><span aria-hidden="true">&darr; Desc</span><span class="visually-hidden">Descending</span></label><label for="bf-dir-asc" title="Ascending"><input type="radio" name="dir" value="asc"{% if view.dir == "asc" %} checked{% endif %} id="bf-dir-asc"><span aria-hidden="true">&uarr; Asc</span><span class="visually-hidden">Ascending</span></label>
+        </span>
+      </fieldset>
+      <button type="button" class="secondary fbar-reset" data-reset-view="board">Reset filters</button>
+    </div>
+  </div>
+  <div class="fpanel" id="board-filter-panel" data-filter-panel{% if view.filters_closed %} hidden{% endif %}>
+    <div class="frow" role="group" aria-labelledby="bf-project-label" data-filter-group="project" data-filter-label="Projects" data-filter-default="">
+      <span class="flabel" id="bf-project-label">Projects</span>
+      <div class="fbody">{% call picker("project", "projects", panel.projects.choices, panel.projects.named, "All projects", "") %}{% endcall %}</div>
+    </div>
+    <div class="frow" role="group" aria-labelledby="bf-type-label" data-filter-group="type" data-filter-label="Types" data-filter-default="">
+      <span class="flabel" id="bf-type-label">Types</span>
+      <div class="fbody">{% if panel.types.picker %}{% call picker("type", "types", panel.types.choices, panel.types.named, "All types", "") %}{% endcall %}{% else %}
+        <div class="pills" data-filter-pills>
+          <button type="button" class="pill pill-all" aria-pressed="{{ !panel.types.named }}" data-pills-all>All</button>
+          {% for choice in panel.types.choices %}<label class="pill" for="bf-type-{{ choice.value }}"><input type="checkbox" name="type" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="bf-type-{{ choice.value }}">{{ choice.label }}</label>{% endfor %}
+        </div>{% endif %}
+      </div>
+    </div>
+    <div class="frow" role="group" aria-labelledby="bf-status-label" data-filter-group="status" data-filter-label="Statuses" data-filter-default="{{ panel.status_default }}">
+      <span class="flabel" id="bf-status-label">Statuses</span>
+      <div class="fbody">{% if panel.statuses.picker %}{% call picker("status", "statuses", panel.statuses.choices, true, "Open statuses", panel.status_default) %}{% endcall %}{% else %}
+        <div class="pills" data-filter-pills>
+          {% for choice in panel.statuses.choices %}<label class="pill st-{{ choice.value }}" for="bf-status-{{ choice.value }}"><input type="checkbox" name="status" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="bf-status-{{ choice.value }}">{{ choice.label }}</label>{% endfor %}
+          <span class="pills-tools"><button type="button" class="link" data-pills-default>Open only</button> <button type="button" class="link" data-pills-every>All</button></span>
+        </div>{% endif %}
+      </div>
+    </div>
+    <div class="frow" role="group" aria-labelledby="bf-show-label">
+      <span class="flabel" id="bf-show-label">Show</span>
+      <div class="fbody">
+        <label class="switch" for="bf-attention"><input type="checkbox" role="switch" name="attention" value="1"{% if view.attention_only %} checked{% endif %} id="bf-attention"> Only needing attention</label>
+        <span class="switch-count" data-attention-count hidden></span>
+      </div>
+    </div>
+  </div>
+  {% if view.filters_closed %}<input type="hidden" name="filters" value="closed" data-filters-closed>{% endif %}
+  {% for key in view.collapsed %}<input type="hidden" name="collapse" value="{{ key }}" data-collapse>{% endfor %}
+  {% if debug %}<input type="hidden" name="debug" value="1">{% endif %}
+</form>
 
 {% if debug %}<pre class="board-debug" data-board-debug aria-hidden="true"></pre>{% endif %}
 

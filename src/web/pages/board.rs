@@ -14,6 +14,7 @@ use super::super::assets::{self, Urls};
 use super::super::{Session, WebError, WebRequest, WebState, render};
 use super::{Chrome, Section};
 use crate::db::Sort;
+use crate::store::ProjectRow;
 use crate::store::{
     DocumentInfo, ListRequest, MAX_LIST_LIMIT, MAX_SEARCH_LIMIT, SearchRequest, Store,
 };
@@ -47,9 +48,7 @@ struct BoardPage<'a> {
     title: &'a str,
     assets: Urls,
     chrome: Chrome<'a>,
-    projects: Vec<Choice>,
-    types: Vec<Choice>,
-    statuses: Vec<Choice>,
+    panel: Panel,
     view: View,
     refresh_ms: u32,
     preview_ms: u32,
@@ -58,11 +57,41 @@ struct BoardPage<'a> {
     grid: BoardGrid,
 }
 
-/// A checkbox in the filter band.
+/// The most values a type or status group shows as pills; a longer list
+/// is a picker (JD-71 D-08).
+const PILLS_MAX: usize = 12;
+
+/// The filter panel's choices (JD-71).
+struct Panel {
+    projects: Group,
+    types: Group,
+    statuses: Group,
+    /// The statuses lit by default (the open ones), comma-separated.
+    status_default: String,
+    /// How many filters differ from their defaults.
+    active: usize,
+}
+
+/// One group of the filter panel: projects, types or statuses.
+struct Group {
+    choices: Vec<Choice>,
+    /// A picker rather than pills (projects always; types and statuses
+    /// beyond [`PILLS_MAX`] values).
+    picker: bool,
+    /// Whether any value is ticked: projects and types tick only what the
+    /// address names (none ticked means all).
+    named: bool,
+}
+
+/// A checkbox in the filter panel.
 struct Choice {
     value: String,
     label: String,
     checked: bool,
+    /// Muted text after the label in a picker: a project's name and key.
+    meta: String,
+    /// What the picker's search matches, lower case.
+    search: String,
 }
 
 /// How the grid is grouped and sorted, and whether only lit cards show.
@@ -206,35 +235,37 @@ pub(crate) fn page(
     if request.query("fragment") == Some("1") {
         return Ok(render(StatusCode::OK, &grid));
     }
-    let choices = |all: &[String], picked: &[String], label: &dyn Fn(&str) -> String| {
-        all.iter()
-            .map(|v| Choice {
-                value: v.clone(),
-                label: label(v),
-                checked: picked.contains(v),
-            })
-            .collect()
-    };
-    let titles: HashMap<&str, &str> = all_projects
+    let status_default: Vec<String> = settings
+        .statuses
         .iter()
-        .map(|p| (p.name.as_str(), p.title.as_str()))
+        .filter(|s| !board.closed_statuses.iter().any(|c| c == *s))
+        .cloned()
         .collect();
+    let panel = Panel {
+        projects: group(
+            &all_projects,
+            &project_names,
+            &named("project", &project_names),
+            true,
+        ),
+        types: group(
+            &all_projects,
+            &settings.types,
+            &named("type", &settings.types),
+            false,
+        ),
+        statuses: group(&all_projects, &settings.statuses, &statuses, false),
+        active: usize::from(!named("project", &project_names).is_empty())
+            + usize::from(!named("type", &settings.types).is_empty())
+            + usize::from(statuses != status_default)
+            + usize::from(view.attention_only),
+        status_default: status_default.join(","),
+    };
     let page = BoardPage {
         title: "Board",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Board, ""),
-        projects: choices(&project_names, &named("project", &project_names), &|name| {
-            titles
-                .get(name)
-                .filter(|t| !t.is_empty())
-                .map_or_else(|| name.to_owned(), |t| (*t).to_owned())
-        }),
-        types: choices(
-            &settings.types,
-            &named("type", &settings.types),
-            &str::to_owned,
-        ),
-        statuses: choices(&settings.statuses, &statuses, &str::to_owned),
+        panel,
         view,
         refresh_ms: board.refresh_ms,
         preview_ms: board.preview_ms,
@@ -242,6 +273,41 @@ pub(crate) fn page(
         grid,
     };
     Ok(render(StatusCode::OK, &page))
+}
+
+/// A group of the filter panel: a checkbox per value of `all`, ticked when
+/// in `picked`. Projects show their titles, with the name and key in a
+/// picker; values of a group longer than [`PILLS_MAX`] are a picker too.
+fn group(projects: &[ProjectRow], all: &[String], picked: &[String], always_picker: bool) -> Group {
+    let choices = all
+        .iter()
+        .map(|v| {
+            let project = projects.iter().find(|p| &p.name == v);
+            let label = project
+                .map(|p| p.title.as_str())
+                .filter(|t| !t.is_empty())
+                .unwrap_or(v)
+                .to_owned();
+            let key = project.map_or("", |p| p.key.as_str());
+            let meta = match (label == *v, key.is_empty()) {
+                (_, true) => String::new(),
+                (true, false) => key.to_owned(),
+                (false, false) => format!("{v} · {key}"),
+            };
+            Choice {
+                search: format!("{label} {v} {key}").to_lowercase(),
+                value: v.clone(),
+                label,
+                checked: picked.contains(v),
+                meta,
+            }
+        })
+        .collect();
+    Group {
+        choices,
+        picker: always_picker || all.len() > PILLS_MAX,
+        named: !picked.is_empty(),
+    }
 }
 
 /// `GET /admin/board/preview/{id}`: the facts and the opening text of a

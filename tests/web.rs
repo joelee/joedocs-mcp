@@ -3113,6 +3113,8 @@ async fn every_page_passes_the_structural_accessibility_checks() -> TestResult<(
         "/admin/documents/JD-3/history?file=items%2Ffirst",
         "/admin/documents/JD-1/diff?from=1",
         "/admin/documents/JD-4",
+        "/admin/board",
+        "/admin/board?filters=closed&project=joedocs&type=plans",
         "/admin/search",
         "/admin/search?q=gap+OR+body",
         "/admin/search?q=-gap",
@@ -5388,21 +5390,29 @@ async fn a_board_group_folds_to_one_line_from_the_address() -> TestResult<()> {
     );
     // The Filters panel is open by default; `filters=closed` keeps it shut,
     // with the key in the form so a filter change keeps it too.
-    let panel = |body: &str| -> Option<Tag> {
-        tags(body)
-            .into_iter()
-            .find(|t| t.name == "details" && t.get("data-board-filters-panel").is_some())
+    let find = |body: &str, attribute: &str| -> Option<Tag> {
+        tags(body).into_iter().find(|t| t.get(attribute).is_some())
     };
     let shut = get("filters=closed").await?;
-    let tag = panel(&shut.body).ok_or("no Filters panel")?;
-    assert!(tag.get("open").is_none(), "closed from the address");
+    let toggle = find(&shut.body, "data-filter-toggle").ok_or("no Filters toggle")?;
+    assert_eq!(
+        toggle.get("aria-expanded"),
+        Some("false"),
+        "closed from the address"
+    );
+    assert_eq!(toggle.get("aria-controls"), Some("board-filter-panel"));
+    let panel = find(&shut.body, "data-filter-panel").ok_or("no Filters panel")?;
+    assert_eq!(panel.get("id"), Some("board-filter-panel"));
+    assert!(panel.get("hidden").is_some());
     assert!(
         shut.body.contains(
             "<input type=\"hidden\" name=\"filters\" value=\"closed\" data-filters-closed>"
         )
     );
-    let tag = panel(&open.body).ok_or("no Filters panel")?;
-    assert!(tag.get("open").is_some(), "open by default");
+    let toggle = find(&open.body, "data-filter-toggle").ok_or("no Filters toggle")?;
+    assert_eq!(toggle.get("aria-expanded"), Some("true"), "open by default");
+    let panel = find(&open.body, "data-filter-panel").ok_or("no Filters panel")?;
+    assert!(panel.get("hidden").is_none());
     assert!(!open.body.contains("data-filters-closed"));
     // Ungrouped, nothing folds.
     let ungrouped = get("group=none&collapse=all").await?;
@@ -5481,6 +5491,114 @@ async fn the_board_filters_groups_and_sorts_from_the_address() -> TestResult<()>
             .contains("name=\"status\" value=\"draft\" checked")
     );
     assert!(!page.body.contains("name=\"status\" value=\"done\" checked"));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_filter_panel_has_a_header_line_pills_and_a_picker() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    let find = |body: &str, attribute: &str| -> Option<Tag> {
+        tags(body).into_iter().find(|t| t.get(attribute).is_some())
+    };
+    let bare = get("").await?;
+    let body = &bare.body;
+    // The View controls sit on the header line, before the panel body.
+    let bar = body.find("data-filter-bar").ok_or("no header line")?;
+    let panel = body.find("data-filter-panel").ok_or("no panel body")?;
+    for control in [
+        "name=\"group\" value=\"type\" checked",
+        "name=\"dir\" value=\"desc\" checked",
+        "<select name=\"sort\"",
+        "data-reset-view=\"board\"",
+    ] {
+        let at = body.find(control).ok_or(control)?;
+        assert!(bar < at && at < panel, "{control} on the header line");
+    }
+    assert!(body.contains("type=\"radio\" name=\"group\""));
+    // Nothing active: no count, no Clear all.
+    assert!(
+        find(body, "data-filter-count")
+            .ok_or("count")?
+            .get("hidden")
+            .is_some()
+    );
+    assert!(
+        find(body, "data-filter-clear")
+            .ok_or("clear")?
+            .get("hidden")
+            .is_some()
+    );
+    // Projects are a picker; types and statuses are pills.
+    let picker = find(body, "data-filter-picker").ok_or("no picker")?;
+    assert_eq!(picker.get("data-filter-picker"), Some("project"));
+    let opener = find(body, "data-picker-open").ok_or("no picker button")?;
+    assert_eq!(opener.get("aria-expanded"), Some("false"));
+    assert!(body.contains(">All projects<"));
+    assert!(body.contains("aria-label=\"Search 2 projects\""));
+    assert!(body.contains("aria-label=\"Only Alpha\""));
+    assert!(body.contains("<span class=\"picker-meta\">alpha · AL</span>"));
+    let all = find(body, "data-pills-all").ok_or("no All pill")?;
+    assert_eq!(all.get("aria-pressed"), Some("true"));
+    assert!(body.contains("class=\"pill st-review\""));
+    assert!(body.contains("data-filter-default=\"draft,review,approved,parked\""));
+    assert!(body.contains("data-pills-default>Open only<"));
+    // The attention switch.
+    assert!(body.contains("role=\"switch\" name=\"attention\" value=\"1\""));
+    // Filters in force: the count, Clear all, the All pill released, and
+    // the picker's button names the choice.
+    let chosen = get("project=beta&type=plans&status=done&attention=1").await?;
+    let count = find(&chosen.body, "data-filter-count").ok_or("count")?;
+    assert!(count.get("hidden").is_none());
+    assert!(chosen.body.contains("data-filter-count>4<"));
+    assert!(
+        find(&chosen.body, "data-filter-clear")
+            .ok_or("clear")?
+            .get("hidden")
+            .is_none()
+    );
+    assert_eq!(
+        find(&chosen.body, "data-pills-all")
+            .ok_or("All")?
+            .get("aria-pressed"),
+        Some("false")
+    );
+    assert!(chosen.body.contains(">Add or remove projects<"));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn a_long_status_list_is_a_picker() -> TestResult<()> {
+    let server = start_full(
+        |config| {
+            config.documents.statuses.extend(
+                [
+                    "extra-1", "extra-2", "extra-3", "extra-4", "extra-5", "extra-6",
+                ]
+                .map(String::from),
+            );
+        },
+        board_fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    assert!(page.body.contains("data-filter-picker=\"status\""));
+    assert!(!page.body.contains("data-pills-default"));
+    // Eight types stay pills.
+    assert!(page.body.contains("data-pills-all"));
+    assert!(
+        page.body
+            .contains("name=\"status\" value=\"draft\" checked")
+    );
     server.stop().await
 }
 
