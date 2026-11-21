@@ -199,10 +199,13 @@
     }, wait);
   };
 
+  // The grid alone, for the address as written: rebuilding it with
+  // URLSearchParams would encode the commas of a list (`project=a,b`) as
+  // `%2C`, which the server reads as one value.
   const fragmentUrl = () => {
-    const params = new URLSearchParams(location.search);
-    params.set("fragment", "1");
-    return `/admin/board?${params}`;
+    const query = location.search.replace(/^\?/, "").split("&").filter((p) => p && !p.startsWith("fragment="));
+    query.push("fragment=1");
+    return `/admin/board?${query.join("&")}`;
   };
 
   // A failed fetch is tried again, backing off, until one succeeds. While
