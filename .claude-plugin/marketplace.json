@@ -1,0 +1,16 @@
+{
+  "name": "joedocs",
+  "owner": {
+    "name": "Joe Lee"
+  },
+  "metadata": {
+    "description": "JoeDocs: a central MCP server for multi-project documentation"
+  },
+  "plugins": [
+    {
+      "name": "joedocs",
+      "source": "./plugins/joedocs",
+      "description": "JoeDocs MCP server and delivery-workflow skills: central multi-project documentation for agents"
+    }
+  ]
+}

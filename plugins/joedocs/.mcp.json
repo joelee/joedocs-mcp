@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "joedocs": {
+      "type": "http",
+      "url": "${JOEDOCS_URL:-http://127.0.0.1:8750/mcp}",
+      "headers": { "Authorization": "Bearer ${JOEDOCS_API_KEY}" }
+    }
+  }
+}

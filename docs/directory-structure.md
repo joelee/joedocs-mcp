@@ -24,6 +24,9 @@
 ├── scripts/board-drive.sh     just board-drive: a scripted run of agent writes against a scratch server, the Board's demo
 ├── scripts/board-drive-showcase.sh  just board-drive-showcase: the Board showcase on its own store, .local/showcase (git-ignored)
 ├── scripts/scratch-lib.sh     Shell functions the scratch scripts share (sourced)
+├── scripts/sync-plugin-skills.sh  Regenerates plugins/joedocs/skills from docs/skills (--check fails on drift)
+├── .claude-plugin/marketplace.json  Claude Code plugin marketplace catalog (/plugin marketplace add)
+├── plugins/joedocs/        The Claude Code plugin: .claude-plugin/plugin.json, .mcp.json, and skills/ (generated, do not edit)
 ├── examples/scratch_seed.rs   The scratch server's sample data, written over MCP (not published)
 ├── examples/board_drive.rs    The writes just board-drive makes, over MCP (not published)
 ├── examples/board_drive_showcase.rs  The showcase's agents and their writes, over MCP, and its reset's copy of dev (not published)
