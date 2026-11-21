@@ -434,7 +434,11 @@
         const group = input?.closest("[data-filter-group]");
         if (group && defaults(group).length && lit(group).length === 0) {
           reset(group);
-          announce(`${group.dataset.filterLabel || "Filter"}: back to ${group.dataset.filterDefaultLabel || "the defaults"}`);
+          const note = `${group.dataset.filterLabel || "Filter"}: back to ${group.dataset.filterDefaultLabel || "the defaults"}`;
+          // Said now, and kept for a page that announces its own update
+          // next, so it can say both.
+          form.dataset.filterNote = note;
+          announce(note);
         }
         refresh();
       },

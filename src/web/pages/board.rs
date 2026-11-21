@@ -139,6 +139,8 @@ struct BoardGrid {
     rows: Vec<Row>,
     /// Whether rows have titles (not when ungrouped).
     titled: bool,
+    /// How many of its documents need attention, folded rows included.
+    lit: usize,
 }
 
 struct Column {
@@ -498,6 +500,7 @@ fn grid(
         }
     }
     sort_cards(&mut cards, view);
+    let lit = cards.iter().filter(|c| c.attention.is_some()).count();
     let columns = statuses
         .iter()
         .map(|s| Column {
@@ -541,6 +544,7 @@ fn grid(
         columns,
         rows,
         titled: view.group != "none",
+        lit,
     })
 }
 

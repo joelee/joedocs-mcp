@@ -5311,6 +5311,14 @@ async fn the_board_shows_open_documents_by_status_and_type() -> TestResult<()> {
     );
     assert!(!fragment.body.contains("<html"));
     assert_eq!(board_cards(&fragment.body), cards);
+    // The grid says how many of its documents need attention, folded rows
+    // included, for the attention switch's count (JD-71 D-10).
+    assert!(fragment.body.contains("data-lit=\"1\""));
+    let folded = server
+        .get("/admin/board?fragment=1&collapse=plans", Some(&cookie))
+        .await?;
+    assert!(!board_cards(&folded.body).contains(&"AL-1".to_owned()));
+    assert!(folded.body.contains("data-lit=\"1\""));
     server.stop().await
 }
 

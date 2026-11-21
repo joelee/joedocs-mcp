@@ -92,35 +92,17 @@
   // --- The filter band -----------------------------------------------
 
   const form = document.querySelector("[data-board-filters]");
-  // The one-line summary shown beside "Filters" when the band is folded.
-  const summarize = () => {
-    const out = document.querySelector("[data-board-summary]");
-    if (!form || !out) {
+  // The attention switch's count: how many documents of the current view
+  // need attention, as the grid says (`data-lit`, folded rows included),
+  // so it never goes stale on a live refresh.
+  const countLit = () => {
+    const badge = form?.querySelector("[data-attention-count]");
+    if (!badge) {
       return;
     }
-    const count = (name, none) => {
-      const all = form.querySelectorAll(`input[name="${name}"]`).length;
-      const on = form.querySelectorAll(`input[name="${name}"]:checked`).length;
-      return on === 0 ? none : on === all ? "all" : `${on} of ${all}`;
-    };
-    const chosen = (name) => {
-      const select = form.elements.namedItem(name);
-      return select instanceof HTMLSelectElement ? select.selectedOptions[0].textContent.toLowerCase() : "";
-    };
-    const parts = [
-      `projects: ${count("project", "all")}`,
-      `types: ${count("type", "all")}`,
-      `statuses: ${count("status", "open")}`,
-    ];
-    if (form.elements.namedItem("attention")?.checked) {
-      parts.push("needing attention");
-    }
-    parts.push(`group: ${chosen("group")}`, `${chosen("sort")}, ${chosen("dir")}`);
-    const folded = [...form.querySelectorAll("input[data-collapse]")].map((input) => input.value);
-    if (folded.length) {
-      parts.push(`folded: ${folded.join(", ")}`);
-    }
-    out.textContent = `- ${parts.join(" · ")}`;
+    const lit = Number(grid()?.dataset.lit || 0);
+    badge.textContent = String(lit);
+    badge.hidden = lit === 0;
   };
 
   // --- The stream ----------------------------------------------------
@@ -447,8 +429,15 @@
         stats.maxLatency = Math.max(stats.maxLatency, stats.latency);
         eventAt = 0;
       }
+      countLit();
       if (instant) {
-        say(`Board: ${stats.cards} documents`);
+        // A note from the filter parts ("Statuses: back to open") is said
+        // with the count, which would otherwise replace it.
+        const note = form?.dataset.filterNote;
+        if (form) {
+          delete form.dataset.filterNote;
+        }
+        say(note ? `${note}. Board: ${stats.cards} documents` : `Board: ${stats.cards} documents`);
       } else {
         const parts = [];
         if (added.length) parts.push(`${added.length} new`);
@@ -669,37 +658,6 @@
       items[(at + step + items.length) % items.length].focus();
     }
   });
-  // The Filters panel opened or shut: `filters=closed` in the form keeps
-  // it in the address, as folds are, with no new grid. `toggle` does not
-  // bubble, so it is caught on the way down.
-  document.addEventListener(
-    "toggle",
-    (event) => {
-      const panel = event.target;
-      if (!(panel instanceof HTMLDetailsElement) || !panel.matches("[data-board-filters-panel]") || !form) {
-        return;
-      }
-      const held = form.querySelector("input[data-filters-closed]");
-      // Already as the form says (a browser fires `toggle` for a panel
-      // drawn open): nothing changed, so the address and the remembered
-      // view stay as they are.
-      if (panel.open === !held) {
-        return;
-      }
-      if (panel.open) {
-        held.remove();
-      } else {
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = "filters";
-        input.value = "closed";
-        input.dataset.filtersClosed = "";
-        form.append(input);
-      }
-      keepAddress();
-    },
-    true,
-  );
   // A menu closed by Escape or a click elsewhere: its button says so.
   document.addEventListener("toggle", (event) => {
     if (event.newState !== "closed") {
@@ -745,6 +703,30 @@
           refresh(false);
         }
       }
+      return;
+    }
+    // The Filters toggle opens or shuts the panel: `filters=closed` in the
+    // form keeps it in the address, as folds are, with no new grid.
+    const filterToggle = target.closest("[data-filter-toggle]");
+    if (filterToggle && form) {
+      const panel = form.querySelector("[data-filter-panel]");
+      const open = filterToggle.getAttribute("aria-expanded") !== "true";
+      filterToggle.setAttribute("aria-expanded", String(open));
+      if (panel) {
+        panel.hidden = !open;
+      }
+      const held = form.querySelector("input[data-filters-closed]");
+      if (open) {
+        held?.remove();
+      } else if (!held) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "filters";
+        input.value = "closed";
+        input.dataset.filtersClosed = "";
+        form.append(input);
+      }
+      keepAddress();
       return;
     }
     // A row title folds its row to one line, or shows it again: the fold
@@ -808,25 +790,31 @@
   });
 
   // The form is the view: its address, and app.js remembers it from there.
+  // The filter parts (filters.js) write it: several values comma-separated,
+  // defaults left out, so a Board with nothing filtered is `/admin/board`.
   const keepAddress = () => {
-    history.replaceState(null, "", `/admin/board?${new URLSearchParams(new FormData(form))}`);
+    const query = form.joedocsFilters
+      ? form.joedocsFilters.query()
+      : new URLSearchParams(new FormData(form)).toString();
+    history.replaceState(null, "", query ? `/admin/board?${query}` : "/admin/board");
     document.dispatchEvent(new CustomEvent("joedocs:view-changed", { detail: { view: "board" } }));
   };
   const applyFilters = () => {
     keepAddress();
-    summarize();
     hidePreview();
     refresh(true);
   };
   form?.addEventListener("change", (event) => {
     // Folds name the rows of one grouping: another grouping starts unfolded.
-    if (event.target instanceof HTMLSelectElement && event.target.name === "group") {
+    if (event.target instanceof HTMLInputElement && event.target.name === "group") {
       for (const input of form.querySelectorAll("input[data-collapse]")) {
         input.remove();
       }
     }
     applyFilters();
   });
+  // A filter part changed the form itself (a chip removed, Only, Clear all).
+  form?.addEventListener("filters:changed", applyFilters);
   form?.addEventListener("submit", (event) => {
     event.preventDefault();
     applyFilters();
@@ -874,6 +862,6 @@
   }, 60000);
 
   fillAgo(document);
-  summarize();
+  countLit();
   open();
 })();
