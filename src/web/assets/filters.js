@@ -20,7 +20,9 @@
 //   `[data-pills-default]` and `[data-pills-every]`;
 // - `[data-filter-chips]`, `[data-filter-count]`, `[data-filter-clear]`:
 //   the active filters, their number, and Clear all;
-// - `input[role="switch"]`: a switch, shown as a chip when on.
+// - `input[role="switch"]`: a switch, shown as a chip when on;
+// - `[data-view-menu]`: a compact button that names a view and opens a
+//   popover of its controls (see View menus below).
 
 (() => {
   "use strict";
@@ -256,9 +258,9 @@
       }
     };
 
-    const place = (picker) => {
-      const pop = picker.querySelector("[data-picker-pop]");
-      const anchor = picker.querySelector(".picker-box") || picker;
+    // A popover placed below `anchor` (above it when there is no room),
+    // through the CSSOM; on a narrow screen the stylesheet makes it a sheet.
+    const placeBelow = (pop, anchor) => {
       if (!pop || matchMedia("(max-width: 720px)").matches) {
         return;
       }
@@ -273,6 +275,8 @@
       pop.style.left = `${left}px`;
       pop.style.top = `${Math.max(8, top)}px`;
     };
+    const place = (picker) =>
+      placeBelow(picker.querySelector("[data-picker-pop]"), picker.querySelector(".picker-box") || picker);
 
     const visibleRows = (picker) =>
       [...picker.querySelectorAll("[data-picker-item]")].filter((li) => !li.hidden);
@@ -393,6 +397,62 @@
       addEventListener("scroll", () => pop?.matches(":popover-open") && place(picker), { passive: true });
     }
 
+    // --- View menus -------------------------------------------------------
+
+    // `[data-view-menu]`: a button (`data-view-open`) naming the view in
+    // `data-view-summary`, and a popover (`data-view-pop`) of controls. Each
+    // `[data-view-part]` (a fieldset of radios, or a select) adds the
+    // `data-short` text of its chosen value to the summary, after " · " or
+    // its own `data-view-join`.
+    const views = [...form.querySelectorAll("[data-view-menu]")];
+    const drawViews = () => {
+      for (const menu of views) {
+        const out = menu.querySelector("[data-view-summary]");
+        if (!out) {
+          continue;
+        }
+        let text = "";
+        for (const part of menu.querySelectorAll("[data-view-part]")) {
+          const chosen = part instanceof HTMLSelectElement ? part.selectedOptions[0] : part.querySelector("input:checked");
+          const short = chosen?.dataset.short;
+          if (short) {
+            text += text ? `${part.dataset.viewJoin ?? " \u00b7 "}${short}` : short;
+          }
+        }
+        out.textContent = text;
+      }
+    };
+    for (const menu of views) {
+      const opener = menu.querySelector("[data-view-open]");
+      const pop = menu.querySelector("[data-view-pop]");
+      if (!opener || !pop) {
+        continue;
+      }
+      opener.addEventListener("click", () => {
+        if (pop.matches(":popover-open")) {
+          pop.hidePopover();
+          return;
+        }
+        pop.showPopover();
+        placeBelow(pop, opener);
+        (pop.querySelector("input:checked") || pop.querySelector("input, select"))?.focus();
+      });
+      pop.addEventListener("toggle", (event) => {
+        const isOpen = event.newState === "open";
+        opener.setAttribute("aria-expanded", String(isOpen));
+        if (!isOpen && (pop.contains(document.activeElement) || document.activeElement === document.body)) {
+          opener.focus();
+        }
+      });
+      pop.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest("[data-view-done]")) {
+          pop.hidePopover();
+        }
+      });
+      addEventListener("resize", () => pop.matches(":popover-open") && placeBelow(pop, opener));
+      addEventListener("scroll", () => pop.matches(":popover-open") && placeBelow(pop, opener), { passive: true });
+    }
+
     // --- Pills' buttons ---------------------------------------------------
 
     form.addEventListener("click", (event) => {
@@ -447,6 +507,7 @@
 
     function refresh() {
       drawPills();
+      drawViews();
       for (const picker of form.querySelectorAll("[data-filter-picker]")) {
         drawPicker(picker);
       }

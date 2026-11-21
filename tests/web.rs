@@ -5532,6 +5532,26 @@ async fn the_board_filter_panel_has_a_header_line_pills_and_a_picker() -> TestRe
         assert!(bar < at && at < panel, "{control} on the header line");
     }
     assert!(body.contains("type=\"radio\" name=\"group\""));
+    // They sit in a popover behind one compact View button that names the
+    // view (JD-71 amendment 01, as JD-70's Tab D).
+    let opener = find(body, "data-view-open").ok_or("no View button")?;
+    assert_eq!(opener.get("aria-expanded"), Some("false"));
+    assert_eq!(opener.get("aria-controls"), Some("bf-view"));
+    let pop = find(body, "data-view-pop").ok_or("no View popover")?;
+    assert!(pop.get("popover").is_some());
+    assert_eq!(pop.get("id"), Some("bf-view"));
+    let pop_at = body.find("data-view-pop").ok_or("pop")?;
+    for control in ["name=\"group\"", "<select name=\"sort\"", "name=\"dir\""] {
+        let at = body.find(control).ok_or(control)?;
+        assert!(pop_at < at && at < panel, "{control} in the View popover");
+    }
+    assert!(body.contains("data-view-summary>Rows by type · Last updated ↓<"));
+    let ungrouped = get("group=none&sort=id&dir=asc").await?;
+    assert!(
+        ungrouped
+            .body
+            .contains("data-view-summary>No rows · Document ID ↑<")
+    );
     // Nothing active: no count, no Clear all.
     assert!(
         find(body, "data-filter-count")

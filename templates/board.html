@@ -41,28 +41,33 @@
     <button type="button" class="fbar-toggle" aria-expanded="{% if view.filters_closed %}false{% else %}true{% endif %}" aria-controls="board-filter-panel" data-filter-toggle><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"/></svg> <span class="fbar-title">Filters</span> <span class="fbar-count" data-filter-count{% if panel.active == 0 %} hidden{% endif %}>{{ panel.active }}</span></button>
     <div class="fbar-chips" role="group" aria-label="Active filters" data-filter-chips></div>
     <button type="button" class="link" data-filter-clear{% if panel.active == 0 %} hidden{% endif %}>Clear all</button>
-    <div class="fbar-view">
-      <fieldset class="fview" data-filter-default="type">
-        <legend class="visually-hidden">Group by</legend>
-        <span class="fview-cap" aria-hidden="true">Group</span>
-        <span class="seg">
-          <label for="bf-group-none"><input type="radio" name="group" value="none"{% if view.group == "none" %} checked{% endif %} id="bf-group-none">None</label><label for="bf-group-type"><input type="radio" name="group" value="type"{% if view.group == "type" %} checked{% endif %} id="bf-group-type">Type</label><label for="bf-group-project"><input type="radio" name="group" value="project"{% if view.group == "project" %} checked{% endif %} id="bf-group-project">Project</label>
-        </span>
-      </fieldset>
-      <span class="fview">
-        <label class="fview-cap" for="bf-sort">Sort</label>
-        <select name="sort" id="bf-sort" data-filter-default="updated">
-          <option value="updated"{% if view.sort == "updated" %} selected{% endif %}>Last updated</option>
-          <option value="created"{% if view.sort == "created" %} selected{% endif %}>Created</option>
-          <option value="id"{% if view.sort == "id" %} selected{% endif %}>Document ID</option>
-        </select>
-      </span>
-      <fieldset class="fview" data-filter-default="desc">
-        <legend class="visually-hidden">Order</legend>
-        <span class="seg">
-          <label for="bf-dir-desc" title="Descending"><input type="radio" name="dir" value="desc"{% if view.dir == "desc" %} checked{% endif %} id="bf-dir-desc"><span aria-hidden="true">&darr; Desc</span><span class="visually-hidden">Descending</span></label><label for="bf-dir-asc" title="Ascending"><input type="radio" name="dir" value="asc"{% if view.dir == "asc" %} checked{% endif %} id="bf-dir-asc"><span aria-hidden="true">&uarr; Asc</span><span class="visually-hidden">Ascending</span></label>
-        </span>
-      </fieldset>
+    <div class="fbar-view" data-view-menu>
+      <button type="button" class="fbtn" aria-expanded="false" aria-controls="bf-view" data-view-open><span class="fbtn-facet">View</span> <span class="fbtn-value" data-view-summary>{% if view.group == "none" %}No rows{% else %}Rows by {{ view.group }}{% endif %} · {% if view.sort == "created" %}Created{% else if view.sort == "id" %}Document ID{% else %}Last updated{% endif %} {% if view.dir == "asc" %}↑{% else %}↓{% endif %}</span><span class="caret" aria-hidden="true"></span></button>
+      <div class="picker-pop view-pop" id="bf-view" popover role="dialog" aria-label="View" data-view-pop>
+        <div class="view-body">
+          <fieldset class="fview" data-filter-default="type" data-view-part>
+            <legend class="fview-cap">Group</legend>
+            <span class="seg">
+              <label for="bf-group-none"><input type="radio" name="group" value="none"{% if view.group == "none" %} checked{% endif %} id="bf-group-none" data-short="No rows">None</label><label for="bf-group-type"><input type="radio" name="group" value="type"{% if view.group == "type" %} checked{% endif %} id="bf-group-type" data-short="Rows by type">Type</label><label for="bf-group-project"><input type="radio" name="group" value="project"{% if view.group == "project" %} checked{% endif %} id="bf-group-project" data-short="Rows by project">Project</label>
+            </span>
+          </fieldset>
+          <div class="fview">
+            <label class="fview-cap" for="bf-sort">Sort</label>
+            <select name="sort" id="bf-sort" data-filter-default="updated" data-view-part>
+              <option value="updated"{% if view.sort == "updated" %} selected{% endif %} data-short="Last updated">Last updated</option>
+              <option value="created"{% if view.sort == "created" %} selected{% endif %} data-short="Created">Created</option>
+              <option value="id"{% if view.sort == "id" %} selected{% endif %} data-short="Document ID">Document ID</option>
+            </select>
+          </div>
+          <fieldset class="fview" data-filter-default="desc" data-view-part data-view-join=" ">
+            <legend class="fview-cap">Order</legend>
+            <span class="seg">
+              <label for="bf-dir-desc"><input type="radio" name="dir" value="desc"{% if view.dir == "desc" %} checked{% endif %} id="bf-dir-desc" data-short="↓"><span aria-hidden="true">↓</span> Descending</label><label for="bf-dir-asc"><input type="radio" name="dir" value="asc"{% if view.dir == "asc" %} checked{% endif %} id="bf-dir-asc" data-short="↑"><span aria-hidden="true">↑</span> Ascending</label>
+            </span>
+          </fieldset>
+        </div>
+        <div class="picker-foot"><button type="button" data-view-done>Done</button></div>
+      </div>
       <button type="button" class="secondary fbar-reset" data-reset-view="board">Reset filters</button>
     </div>
   </div>
