@@ -5484,6 +5484,102 @@ async fn the_board_filters_groups_and_sorts_from_the_address() -> TestResult<()>
     server.stop().await
 }
 
+#[tokio::test]
+async fn the_board_reads_comma_separated_filters() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    // One key with commas, repeated keys, and both mixed name the same
+    // projects.
+    let repeated = board_cards(&get("project=alpha&project=beta").await?.body);
+    assert!(repeated.iter().any(|id| id.starts_with("AL-")));
+    assert!(repeated.iter().any(|id| id.starts_with("BE-")));
+    assert_eq!(
+        board_cards(&get("project=alpha,beta").await?.body),
+        repeated
+    );
+    assert_eq!(
+        board_cards(&get("project=alpha,beta&project=beta").await?.body),
+        repeated
+    );
+    assert_eq!(
+        board_cards(&get("project=beta,,beta").await?.body),
+        board_cards(&get("project=beta").await?.body),
+        "empty parts and duplicates are dropped"
+    );
+    // A comma sent as %2C stays inside the value: one name, no project.
+    assert_eq!(
+        board_cards(&get("project=alpha%2Cbeta").await?.body),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        data_values(&get("type=plans,notes").await?.body, "row-key"),
+        data_values(&get("type=plans&type=notes").await?.body, "row-key")
+    );
+    let statuses = get("status=draft,done").await?;
+    assert_eq!(data_values(&statuses.body, "column"), ["draft", "done"]);
+    let folded = get("group=type&collapse=notes,plans").await?;
+    for key in ["notes", "plans"] {
+        assert!(
+            board_row(&folded.body, key)
+                .starts_with("<section class=\"board-row board-row-folded\""),
+            "{key} folded"
+        );
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_form_ticks_only_the_named_projects_and_types() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    // Nothing named: every project and type shows, and none is ticked.
+    let bare = get("").await?;
+    assert!(
+        !bare
+            .body
+            .contains("name=\"project\" value=\"alpha\" checked")
+    );
+    assert!(
+        !bare
+            .body
+            .contains("name=\"project\" value=\"beta\" checked")
+    );
+    assert!(!bare.body.contains("name=\"type\" value=\"plans\" checked"));
+    // Statuses are lit when shown: the open ones by default.
+    assert!(
+        bare.body
+            .contains("name=\"status\" value=\"draft\" checked")
+    );
+    assert!(!bare.body.contains("name=\"status\" value=\"done\" checked"));
+    let plans = get("type=plans").await?;
+    assert!(plans.body.contains("name=\"type\" value=\"plans\" checked"));
+    assert!(!plans.body.contains("name=\"type\" value=\"notes\" checked"));
+    // Every project named is the same as none.
+    let all = get("project=alpha,beta").await?;
+    assert!(
+        !all.body
+            .contains("name=\"project\" value=\"alpha\" checked")
+    );
+    assert!(!all.body.contains("name=\"project\" value=\"beta\" checked"));
+    server.stop().await
+}
+
 /// A document body with every kind of block the preview must flatten.
 const PREVIEW_BODY: &str = "# Rich plan\n\nOpening <script>alert(1)</script> paragraph\nwrapped on two lines.\n\n- first item\n- second item\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n```plantuml\n@startuml\nA -> B\n@enduml\n```\n\n```rust\nfn main() {}\n```\n\n> [!note] A callout\n> Callout text.\n";
 

@@ -453,6 +453,26 @@ impl WebRequest {
             .collect()
     }
 
+    /// Every value of query parameter `key` as a list: each occurrence is
+    /// split on `,` before it is decoded (so `%2C` stays inside a value),
+    /// and the parts of every occurrence are joined, in order, without
+    /// empty parts or repeats. `project=a,b&project=c` is `[a, b, c]`.
+    pub(crate) fn query_list(&self, key: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let pairs = self.raw_query.as_deref().unwrap_or("").split('&');
+        for (name, value) in pairs.filter_map(|pair| pair.split_once('=')) {
+            if form_decode(name) != key {
+                continue;
+            }
+            for part in value.split(',').map(form_decode) {
+                if !part.is_empty() && !out.contains(&part) {
+                    out.push(part);
+                }
+            }
+        }
+        out
+    }
+
     /// Whether htmx sent it.
     pub(crate) fn is_htmx(&self) -> bool {
         session::text(&self.headers, "hx-request") == Some("true")
@@ -476,6 +496,14 @@ impl WebRequest {
 /// A path segment with `%XX` escapes decoded.
 fn percent_decode(segment: &str) -> String {
     form_urlencoded::parse(format!("x={}", segment.replace('+', "%2B")).as_bytes())
+        .next()
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default()
+}
+
+/// A query string component decoded as a form does (`+` is a space).
+fn form_decode(component: &str) -> String {
+    form_urlencoded::parse(format!("x={component}").as_bytes())
         .next()
         .map(|(_, v)| v.into_owned())
         .unwrap_or_default()

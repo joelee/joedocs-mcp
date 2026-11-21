@@ -95,16 +95,7 @@ impl View {
             group: pick("group", &["type", "project", "none"]),
             sort: pick("sort", &["updated", "created", "id"]),
             dir: pick("dir", &["desc", "asc"]),
-            collapsed: request
-                .query_all("collapse")
-                .into_iter()
-                .filter(|key| !key.is_empty())
-                .fold(Vec::new(), |mut keys, key| {
-                    if !keys.iter().any(|k| k == key) {
-                        keys.push(key.to_owned());
-                    }
-                    keys
-                }),
+            collapsed: request.query_list("collapse"),
         }
     }
 }
@@ -160,7 +151,9 @@ struct Card {
 /// none means every project, every type, and every status that is not
 /// closed), `attention=1`, `group`, `sort`, `dir`, `collapse` (the keys of
 /// rows folded to one line, any number), `filters=closed` (the Filters
-/// panel shut); `fragment=1` for the grid alone.
+/// panel shut); `fragment=1` for the grid alone. The list keys (`project`,
+/// `type`, `status`, `collapse`) take their values comma-separated
+/// (`project=a,b`), repeated (`project=a&project=b`), or both.
 pub(crate) fn page(
     store: &Store,
     state: &WebState,
@@ -171,17 +164,29 @@ pub(crate) fn page(
     let all_projects = store.projects().map_err(|e| WebError::from_store(&e))?;
     let settings = store.settings();
     let chosen = |key: &str, all: &[String], default: &dyn Fn(&str) -> bool| -> Vec<String> {
-        let asked = request.query_all(key);
+        let asked = request.query_list(key);
         all.iter()
             .filter(|v| {
                 if asked.is_empty() {
                     default(v)
                 } else {
-                    asked.contains(&v.as_str())
+                    asked.contains(v)
                 }
             })
             .cloned()
             .collect()
+    };
+    // What the form ticks for projects and types: only the values the
+    // address names, and none when it names none or every one (both mean
+    // all).
+    let named = |key: &str, all: &[String]| -> Vec<String> {
+        let asked = request.query_list(key);
+        let picked: Vec<String> = all.iter().filter(|v| asked.contains(v)).cloned().collect();
+        if picked.len() == all.len() {
+            Vec::new()
+        } else {
+            picked
+        }
     };
     let project_names: Vec<String> = all_projects.iter().map(|p| p.name.clone()).collect();
     let projects = chosen("project", &project_names, &|_| true);
@@ -218,13 +223,17 @@ pub(crate) fn page(
         title: "Board",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Board, ""),
-        projects: choices(&project_names, &projects, &|name| {
+        projects: choices(&project_names, &named("project", &project_names), &|name| {
             titles
                 .get(name)
                 .filter(|t| !t.is_empty())
                 .map_or_else(|| name.to_owned(), |t| (*t).to_owned())
         }),
-        types: choices(&settings.types, &types, &str::to_owned),
+        types: choices(
+            &settings.types,
+            &named("type", &settings.types),
+            &str::to_owned,
+        ),
         statuses: choices(&settings.statuses, &statuses, &str::to_owned),
         view,
         refresh_ms: board.refresh_ms,
