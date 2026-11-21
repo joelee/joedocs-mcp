@@ -3115,6 +3115,7 @@ async fn every_page_passes_the_structural_accessibility_checks() -> TestResult<(
         "/admin/documents/JD-4",
         "/admin/board",
         "/admin/board?filters=closed&project=joedocs&type=plans",
+        "/admin/board?project=no-such-project",
         "/admin/search",
         "/admin/search?q=gap+OR+body",
         "/admin/search?q=-gap",
@@ -5627,6 +5628,90 @@ async fn a_long_status_list_is_a_picker() -> TestResult<()> {
         page.body
             .contains("name=\"status\" value=\"draft\" checked")
     );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_refuses_unknown_filter_values() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    for (query, named) in [
+        ("project=zzz", "project: zzz"),
+        ("project=alpha,zzz", "project: zzz"),
+        ("type=zzz", "type: zzz"),
+        ("status=zzz", "status: zzz"),
+        ("group=zzz", "group: zzz"),
+        ("sort=zzz", "sort: zzz"),
+        ("dir=zzz", "dir: zzz"),
+        ("fragment=1&project=zzz", "project: zzz"),
+    ] {
+        let before = server.audit()?.len();
+        let reply = server
+            .get(&format!("/admin/board?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(reply.status, 400, "{query}: {}", reply.body);
+        assert!(
+            reply.body.contains(named),
+            "{query} names {named}: {}",
+            reply.body
+        );
+        let rows = server.audit()?;
+        assert!(
+            rows[before..]
+                .iter()
+                .any(|(t, _, o)| t == "admin:documents.board" && o == "invalid_argument"),
+            "{query} audited: {:?}",
+            &rows[before..]
+        );
+    }
+    // The refusal page offers to reset the Board's remembered filters.
+    let page = server.get("/admin/board?type=zzz", Some(&cookie)).await?;
+    assert!(
+        tags(&page.body).iter().any(|t| t.name == "a"
+            && t.get("href") == Some("/admin/board")
+            && t.get("data-reset-view") == Some("board")),
+        "{}",
+        page.body
+    );
+    // Empty parts and unknown fold keys are not refusals.
+    for query in [
+        "project=",
+        "project=alpha,,beta",
+        "collapse=zzz",
+        "attention=yes",
+    ] {
+        let reply = server
+            .get(&format!("/admin/board?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(reply.status, 200, "{query}: {}", reply.body);
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn only_projects_take_project_titles_on_the_board() -> TestResult<()> {
+    let server = start_full(
+        |_| {},
+        |store| {
+            board_fixture(store)?;
+            store.add_project("notes", "NO", Some("Notes project"))?;
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    // The type pill shows the type, the picker row the project's title.
+    assert!(
+        page.body.contains("id=\"bf-type-notes\">notes</label>"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains("<span class=\"picker-name\">Notes project</span>")
+    );
+    assert!(!page.body.contains("id=\"bf-type-notes\">Notes project"));
     server.stop().await
 }
 

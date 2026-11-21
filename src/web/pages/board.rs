@@ -220,6 +220,10 @@ pub(crate) fn page(
         }
     };
     let project_names: Vec<String> = all_projects.iter().map(|p| p.name.clone()).collect();
+    let unknown = unknown_values(request, &project_names, &settings.types, &settings.statuses);
+    if !unknown.is_empty() {
+        return Err(unknown_refusal(&unknown));
+    }
     let projects = chosen("project", &project_names, &|_| true);
     let types = chosen("type", &settings.types, &|_| true);
     let statuses = chosen("status", &settings.statuses, &|s| {
@@ -250,13 +254,10 @@ pub(crate) fn page(
             &named("project", &project_names),
             true,
         ),
-        types: group(
-            &all_projects,
-            &settings.types,
-            &named("type", &settings.types),
-            false,
-        ),
-        statuses: group(&all_projects, &settings.statuses, &statuses, false),
+        // Only projects have titles: a type or status named like a project
+        // keeps its own name.
+        types: group(&[], &settings.types, &named("type", &settings.types), false),
+        statuses: group(&[], &settings.statuses, &statuses, false),
         active: usize::from(!named("project", &project_names).is_empty())
             + usize::from(!named("type", &settings.types).is_empty())
             + usize::from(statuses != status_default)
@@ -275,6 +276,58 @@ pub(crate) fn page(
         grid,
     };
     Ok(render(StatusCode::OK, &page))
+}
+
+/// The values of the address the Board does not know, as `key: value`:
+/// a `project`, `type` or `status` that is not a project or configured
+/// value, or a `group`, `sort` or `dir` outside its values (JD-71
+/// amendment 02). Empty values are not refusals, nor are `collapse` keys
+/// (a fold may name a row that is not shown) or the flags.
+fn unknown_values(
+    request: &WebRequest,
+    projects: &[String],
+    types: &[String],
+    statuses: &[String],
+) -> Vec<String> {
+    let mut unknown = Vec::new();
+    for (key, known) in [("project", projects), ("type", types), ("status", statuses)] {
+        for value in request.query_list(key) {
+            if !known.contains(&value) {
+                unknown.push(format!("{key}: {value}"));
+            }
+        }
+    }
+    for (key, known) in [
+        ("group", &["type", "project", "none"][..]),
+        ("sort", &["updated", "created", "id"][..]),
+        ("dir", &["desc", "asc"][..]),
+    ] {
+        if let Some(value) = request.query(key).filter(|v| !v.is_empty())
+            && !known.contains(&value)
+        {
+            unknown.push(format!("{key}: {value}"));
+        }
+    }
+    unknown
+}
+
+/// The refusal for an address naming `unknown` values: `400
+/// invalid_argument`, with a link that forgets the remembered Board view.
+fn unknown_refusal(unknown: &[String]) -> WebError {
+    let message = format!(
+        "The Board's address names something it does not know ({}).",
+        unknown.join("; ")
+    );
+    let page = super::ErrorPage {
+        title: "Refused",
+        assets: assets::urls(),
+        status: StatusCode::BAD_REQUEST.as_u16(),
+        message: &message,
+        link: Some(("/admin/board", "Reset the Board's filters")),
+        reset_view: Some("board"),
+    };
+    let page = render(StatusCode::BAD_REQUEST, &page);
+    WebError::new(StatusCode::BAD_REQUEST, "invalid_argument", message).with_page(page)
 }
 
 /// A group of the filter panel: a checkbox per value of `all`, ticked when

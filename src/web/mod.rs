@@ -599,6 +599,7 @@ impl WebError {
             status: self.status.as_u16(),
             message: &self.message,
             link: None,
+            reset_view: None,
         };
         render(self.status, &page)
     }
