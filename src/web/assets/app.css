@@ -559,7 +559,9 @@ main:has(.board-page) { max-width: none; }
 @media (max-width: 720px) {
   .frow { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
   .flabel { padding-top: 0; }
-  .fbar-chips { order: 3; flex-basis: 100%; }
+  /* The chips take a line of their own, after the toggle and before
+     Clear all, View and Reset: the same order as the Tab order. */
+  .fbar-chips { flex-basis: 100%; }
   .fbar-chips:empty { display: none; }
   .fbar-view { margin-left: 0; }
 }

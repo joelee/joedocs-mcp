@@ -266,6 +266,15 @@
           signedOut();
           return null;
         }
+        // The address names something the Board no longer knows (a type
+        // or status removed from the configuration): reload once, so the
+        // page shows the refusal and its reset link, rather than retrying.
+        if (res.status === 400) {
+          ended = true;
+          close();
+          location.reload();
+          return null;
+        }
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);
         }
@@ -808,6 +817,11 @@
     refresh(true);
   };
   form?.addEventListener("change", (event) => {
+    // A control without a name (a picker's search field) is not part of
+    // the view: leaving it changes nothing (JD-72 MED-01).
+    if (!(event.target instanceof Element) || !event.target.getAttribute("name")) {
+      return;
+    }
     // Folds name the rows of one grouping: another grouping starts unfolded.
     if (event.target instanceof HTMLInputElement && event.target.name === "group") {
       for (const input of form.querySelectorAll("input[data-collapse]")) {
