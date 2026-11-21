@@ -138,6 +138,13 @@ JoeDocs needs `git` at run time. On macOS the Xcode Command Line Tools provide i
 
    Then ask it: *"List my JoeDocs projects and create a note about this repository."*
 
+   Or install it as a Claude Code plugin, which also brings the [skills](https://github.com/joelee/joedocs-mcp/blob/main/docs/skills/README.md). Set `JOEDOCS_API_KEY` (and `JOEDOCS_URL` if the server is not at `http://127.0.0.1:8750/mcp`) in the environment Claude Code starts from, then:
+
+   ```text
+   /plugin marketplace add joelee/joedocs-mcp
+   /plugin install joedocs@joedocs
+   ```
+
 To use one server from several machines, run it on a server and publish it over Tailscale or a TLS proxy. The [deployment guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/deployment.md) walks through it step by step.
 
 ## What agents can do

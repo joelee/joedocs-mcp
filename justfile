@@ -36,6 +36,10 @@ lint:
 actionlint:
     actionlint -shellcheck= -pyflakes=
 
+# Check plugins/joedocs/skills matches docs/skills (regenerate with scripts/sync-plugin-skills.sh)
+plugin-skills:
+    scripts/sync-plugin-skills.sh --check
+
 # Run tests with nextest (set NEXTEST_PROFILE=ci in CI)
 test:
     cargo nextest run --all-features --workspace --locked
@@ -110,7 +114,7 @@ msrv:
     cargo +{{msrv}} check --all-targets --all-features --locked
 
 # Full gate, identical locally and in CI
-ci: fetch fmt-check lint actionlint coverage doctest doc deny secrets build
+ci: fetch fmt-check lint actionlint plugin-skills coverage doctest doc deny secrets build
 
 # Start the local Docker Compose stack as you, with its data in .local/data (or $JOEDOCS_DATA)
 docker-up:

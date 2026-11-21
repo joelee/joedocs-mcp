@@ -27,6 +27,7 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 | `just doctest` | Run doc-tests (nextest skips them). |
 | `just doc` | Build API docs with warnings as errors. |
 | `just deny` | Licences, bans and sources. |
+| `just plugin-skills` | Checks `plugins/joedocs/skills` matches `docs/skills`; regenerate with `scripts/sync-plugin-skills.sh` after editing a skill. Part of `just ci`. |
 | `just advisories` | RustSec advisories: its own CI check, not part of `just ci`; an active advisory blocks a production release (see Releasing). |
 | `just actionlint` | Lint the GitHub Actions workflows (shellcheck and pyflakes integrations off). |
 | `just pre-commit` | The checks the git hook runs before each commit. |

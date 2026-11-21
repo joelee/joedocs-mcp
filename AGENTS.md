@@ -14,6 +14,7 @@ This Rust project targets Linux and macOS and was generated from the team's carg
 | Full local gate (same as CI) | `just ci` |
 | Lint only | `just lint` |
 | Lint the GitHub Actions workflows | `just actionlint` |
+| Check the bundled plugin skills are in sync | `just plugin-skills` |
 | Tests only (nextest) | `just test` |
 | Coverage (fails under 80% lines) | `just coverage` |
 | Secret scan of staged changes | `just secrets-staged` |
@@ -23,7 +24,7 @@ This Rust project targets Linux and macOS and was generated from the team's carg
 | Start the local Docker Compose stack (data in `.local/data`) | `just docker-up` |
 | Deployment tests against Docker Compose (needs Docker) | `just docker-test` |
 
-`just ci` runs, in order: `fetch` → `fmt-check` → `lint` → `actionlint` → `coverage` → `doctest` → `doc` → `deny` (licences, bans and sources) → `secrets` → `build`. RustSec advisories run as their own CI check, `just advisories` (`.github/workflows/advisories.yml`): it does not block a merge, but an active advisory blocks a production release (see Security). Never weaken a gate (threshold, lint level, `--locked`) to make it pass.
+`just ci` runs, in order: `fetch` → `fmt-check` → `lint` → `actionlint` → `plugin-skills` → `coverage` → `doctest` → `doc` → `deny` (licences, bans and sources) → `secrets` → `build`. RustSec advisories run as their own CI check, `just advisories` (`.github/workflows/advisories.yml`): it does not block a merge, but an active advisory blocks a production release (see Security). Never weaken a gate (threshold, lint level, `--locked`) to make it pass.
 
 ## Toolchain And Tools
 
