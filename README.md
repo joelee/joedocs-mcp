@@ -202,6 +202,8 @@ Further out:
 - Rewriting `[[links]]` to a renamed document in the same project.
 - Approval provenance: server-stamped status changes, and optionally a grant needed to approve.
 - Web interface appearance: a stylesheet of your own, named in the configuration, on top of the bundled one (an idea to explore first).
+- Hiding projects from the Board, per user, so a server with many projects does not flood it (an idea to explore first).
+- The Board's new filter parts (the searchable picker, pills and filter chips) on Documents, Search, Archive and Audit.
 - A homebrew-core formula.
 - From the design plan's "Later" list: per-type templates, documents as MCP resources, backlinks, embedding search, attachments, secret scanning on write.
 

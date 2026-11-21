@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **A new Board Filters panel.** The rows of checkboxes are replaced. Projects are picked from a list with a search box, **Select all**, **Clear** and **Only**, and show as chips. Types and statuses are pills, with an **All** pill for types and **Open only** and **All** for statuses. "Only needing attention" is a switch that counts the documents needing attention. The panel's header line shows the filters in force as chips you can remove, **Clear all**, the grouping, sort and order, and **Reset filters**, whether the panel is open or folded. Nothing chosen means all, so projects created later appear unless you chose projects by name. A type or status list longer than 12 values uses the searchable list instead of pills.
+- **Shorter Board addresses.** Several values are one key, separated by commas (`/admin/board?project=joedocs,omibot&type=plans,ideas`), and values at their defaults are left out, so a Board with nothing filtered is `/admin/board`. Links and remembered views with repeated keys (`project=a&project=b`) still work, and are rewritten in the new form at your next change. An older JoeDocs reads a comma-separated value as one name.
+
 ## [0.5.6-rc.1] - 2026-11-18
 
 **Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-dev, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. JoeDocs does not use `chrono` itself; it comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474), for [#1469](https://github.com/modelcontextprotocol/rust-sdk/issues/1469); tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, or build it from its tag.
