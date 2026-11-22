@@ -409,8 +409,10 @@ For every specialist task:
    `T-NNN`, the skill, a one-line brief, inputs with revisions, expected
    outputs, `dispatched`, the time (`date -u +%Y-%m-%dT%H:%M:%SZ`).
 2. **Invoke** the skill with the Skill tool (`joedocs-research-scout`,
-   `joedocs-research-writer` or `joedocs-research-critic`), passing the
-   hand-off brief as its arguments. Each runs in a forked subagent that does
+   `joedocs-research-writer` or `joedocs-research-critic`; installed from
+   the JoeDocs plugin, their names carry its prefix, as in
+   `joedocs:joedocs-research-scout`), passing the hand-off brief as its
+   arguments. Each runs in a forked subagent that does
    not see this conversation, one at a time; the brief must hold everything:
 
    ```text

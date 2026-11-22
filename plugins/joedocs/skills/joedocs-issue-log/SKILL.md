@@ -29,7 +29,7 @@ the fix, or change the repository: the planner (`joedocs-planner`) turns
 issues into plans, and the builder implements them.
 
 The tool names below assume the JoeDocs server is registered in Claude Code as
-`joedocs` (tools `mcp__plugin_joedocs_joedocs__*`). If it has another name, use that server's
+`joedocs` by the `joedocs` plugin (tools `mcp__plugin_joedocs_joedocs__*`). If it has another name, use that server's
 tools and adjust `allowed-tools`.
 
 ## Mission

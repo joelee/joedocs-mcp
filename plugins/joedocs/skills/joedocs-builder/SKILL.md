@@ -48,7 +48,7 @@ deployment is complete. The user decides when to ask for a review
 (`joedocs-code-review`).
 
 The tool names below assume the JoeDocs server is registered in Claude Code as
-`joedocs` (tools `mcp__plugin_joedocs_joedocs__*`). If it has another name, use that server's
+`joedocs` by the `joedocs` plugin (tools `mcp__plugin_joedocs_joedocs__*`). If it has another name, use that server's
 tools and adjust `allowed-tools`. `allowed-tools` pre-approves the git commands
 this skill needs, including `git add --` and `git commit`; the project's own
 test and build commands still go through your normal permission settings.

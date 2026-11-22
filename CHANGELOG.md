@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- **Claude Code plugin.** The repository is now a Claude Code plugin marketplace: `/plugin marketplace add joelee/joedocs-mcp`, then `/plugin install joedocs@joedocs`. The plugin connects Claude Code to a JoeDocs server (`JOEDOCS_URL`, default `http://127.0.0.1:8750/mcp`, and `JOEDOCS_API_KEY`) and bundles the `docs/skills` skills. `scripts/sync-plugin-skills.sh` regenerates the bundled copy; `--check` fails when it is stale.
+- **Claude Code plugin.** The repository is now a Claude Code plugin marketplace: `/plugin marketplace add joelee/joedocs-mcp`, then `/plugin install joedocs@joedocs`. The plugin connects Claude Code to a JoeDocs server (`JOEDOCS_URL`, default `http://127.0.0.1:8750/mcp`, and `JOEDOCS_API_KEY`) and bundles the `docs/skills` skills. `scripts/sync-plugin-skills.sh` regenerates the bundled copy; `--check` fails when it is stale. The plugin has no version of its own, so installed copies pick up each change on `main` when Claude Code updates the marketplace. Use the plugin or a manual setup (`claude mcp add` and copied skill folders), not both.
 
 ## [0.5.6-rc.1] - 2026-11-18
 

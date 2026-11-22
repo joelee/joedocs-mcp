@@ -40,7 +40,7 @@ Your only writable surface is JoeDocs review documents. If a code change is
 needed, describe it in the report.
 
 The tool names below assume the JoeDocs server is registered in Claude Code as
-`joedocs` (tools `mcp__plugin_joedocs_joedocs__*`). If it has another name, use that server's
+`joedocs` by the `joedocs` plugin (tools `mcp__plugin_joedocs_joedocs__*`). If it has another name, use that server's
 tools and adjust `allowed-tools`.
 
 ## Mission

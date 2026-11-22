@@ -157,6 +157,8 @@ claude mcp get joedocs        # Connected
 
 In a session, `/mcp` should list nineteen JoeDocs tools. Ask *"List my JoeDocs projects"* to check the key's grants.
 
+Or install the **JoeDocs plugin for Claude Code**, which adds the server and the [skills](skills/README.md) together. It reads the URL from `JOEDOCS_URL` (default `http://127.0.0.1:8750/mcp`) and the key from `JOEDOCS_API_KEY`, so set both in the environment Claude Code starts from (see below for keeping the key out of files), then run `/plugin marketplace add joelee/joedocs-mcp` and `/plugin install joedocs@joedocs` in a session. Use the plugin or `claude mcp add`, not both: together they give two JoeDocs servers, and with skill folders copied by hand, two copies of every skill (see [the skills' Install section](skills/README.md#install)).
+
 To create a key from the client machine without copying it by hand, run `key create` over SSH and capture the last line (non-interactive SSH may not have `~/.cargo/bin` on `PATH`, so give the full path):
 
 ```bash
