@@ -125,13 +125,21 @@
   // order as a query string in localStorage (`joedocs-<view>-view`), and
   // the menu links marked `data-remember` lead back to it. An address with
   // a query shows what it says; a bare one shows the defaults. "Reset
-  // filters" forgets the view.
+  // view" (Board) and "Reset filters" (Documents) forget the view. A view
+  // is remembered only from a page with its filter form (`form`), so an
+  // error page at the same address, such as a 400 refusal, leaves the
+  // remembered view alone (JD-74).
   const VIEWS = {
     board: {
       path: "/admin/board",
+      form: "form[data-board-filters]",
       keys: ["project", "type", "status", "attention", "group", "sort", "dir", "collapse", "filters"],
     },
-    documents: { path: "/admin/documents", keys: ["project", "type", "status", "sort", "dir", "limit"] },
+    documents: {
+      path: "/admin/documents",
+      form: "#documents-filters",
+      keys: ["project", "type", "status", "sort", "dir", "limit"],
+    },
   };
   const viewKey = (view) => `joedocs-${view}-view`;
   const storedView = (view) => {
@@ -184,9 +192,10 @@
     }
     rememberLinks();
   };
-  // A page opened with a view in its address remembers it.
-  for (const [view, { path }] of Object.entries(VIEWS)) {
-    const query = location.pathname === path ? viewQuery(view, location.search) : "";
+  // A view's own page opened with a view in its address remembers it.
+  for (const [view, { path, form }] of Object.entries(VIEWS)) {
+    const own = location.pathname === path && document.querySelector(form);
+    const query = own ? viewQuery(view, location.search) : "";
     if (query) {
       saveView(view, query);
     }

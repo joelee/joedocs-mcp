@@ -4979,6 +4979,39 @@ async fn the_board_and_documents_remember_their_view_and_offer_a_reset() -> Test
 }
 
 #[tokio::test]
+async fn views_are_remembered_only_from_pages_with_their_filter_form() -> TestResult<()> {
+    // `app.js` remembers a view on load only when the page carries the
+    // view's filter form (JD-74), so a refusal at the same address leaves
+    // the remembered view alone. These are the markers it looks for.
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let board_form = |body: &str| {
+        tags(body)
+            .iter()
+            .any(|t| t.name == "form" && t.get("data-board-filters").is_some())
+    };
+    let documents_form = |body: &str| {
+        tags(body)
+            .iter()
+            .any(|t| t.name == "form" && t.get("id") == Some("documents-filters"))
+    };
+    let board = server.get("/admin/board", Some(&cookie)).await?;
+    assert!(board_form(&board.body), "the Board has its form");
+    let documents = server.get("/admin/documents", Some(&cookie)).await?;
+    assert!(documents_form(&documents.body), "Documents has its form");
+    for path in [
+        "/admin/board?project=no-such-project",
+        "/admin/documents?sort=zzz",
+    ] {
+        let refused = server.get(path, Some(&cookie)).await?;
+        assert_eq!(refused.status, 400, "{path}");
+        assert!(!board_form(&refused.body), "{path}");
+        assert!(!documents_form(&refused.body), "{path}");
+    }
+    server.stop().await
+}
+
+#[tokio::test]
 async fn every_signed_in_page_has_one_back_to_top_button() -> TestResult<()> {
     let server = start_full(|_| {}, fixture).await?;
     let cookie = server.login().await?;
