@@ -17,9 +17,10 @@
 // - `[data-filter-picker]`: a picker (its button, popover, search field,
 //   list, Select all, Clear, Only, counter, chips);
 // - `[data-filter-pills]`: pills, with `[data-pills-all]` (choose none),
-//   `[data-pills-default]` and `[data-pills-every]`;
+//   `[data-pills-default]` and `[data-pills-every]` (in a
+//   `[data-pills-tools]`), each hidden while it would change nothing;
 // - `[data-filter-chips]`, `[data-filter-count]`, `[data-filter-clear]`:
-//   the active filters, their number, and Clear all;
+//   the active filters, their number, and Clear all (shown from two);
 // - `input[role="switch"]`: a switch, shown as a chip when on;
 // - `[data-view-menu]`: a compact button that names a view and opens a
 //   popover of its controls (see View menus below).
@@ -203,11 +204,41 @@
     const drawPills = () => {
       for (const pills of form.querySelectorAll("[data-filter-pills]")) {
         const group = pills.closest("[data-filter-group]");
+        if (!group) {
+          continue;
+        }
         const all = pills.querySelector("[data-pills-all]");
-        if (group && all) {
+        if (all) {
           all.setAttribute("aria-pressed", String(atDefault(group)));
         }
+        // A shortcut shows only while it would change something (JD-70
+        // option E): Open only away from the default, All while a value
+        // is unlit; their holder goes when both do.
+        const back = pills.querySelector("[data-pills-default]");
+        const every = pills.querySelector("[data-pills-every]");
+        if (back) {
+          back.hidden = atDefault(group);
+        }
+        if (every) {
+          every.hidden = lit(group).length === inputs(group).length;
+        }
+        const tools = pills.querySelector("[data-pills-tools]");
+        if (tools) {
+          tools.hidden = [back, every].every((b) => !b || b.hidden);
+        }
       }
+    };
+
+    // A shortcut that hid itself hands focus to the other one, or to the
+    // group's first pill, so focus is never left on a hidden button.
+    const keepFocus = (button, group) => {
+      if (!button.hidden) {
+        return;
+      }
+      const other = [...group.querySelectorAll("[data-pills-default], [data-pills-every]")].find(
+        (b) => b !== button && !b.hidden,
+      );
+      (other || inputs(group)[0])?.focus();
     };
 
     // --- Pickers ----------------------------------------------------------
@@ -467,9 +498,11 @@
       } else if (target.closest("[data-pills-default]")) {
         reset(group);
         changed();
+        keepFocus(target.closest("[data-pills-default]"), group);
       } else if (target.closest("[data-pills-every]")) {
         setLit(group, inputs(group).map((i) => i.value));
         changed();
+        keepFocus(target.closest("[data-pills-every]"), group);
       }
     });
 
@@ -518,7 +551,8 @@
         badge.hidden = count === 0;
       }
       if (clear) {
-        clear.hidden = count === 0;
+        // From two chips: with one, its own × does the same (JD-70 option E).
+        clear.hidden = count < 2;
       }
     }
 
