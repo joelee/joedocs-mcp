@@ -199,19 +199,19 @@ Running JoeDocs as a systemd or `brew services` service, reaching it from other 
 CI runs on GitHub Actions ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) for pushes to `main` and for pull requests:
 
 - `just ci` on Ubuntu and macOS, with full git history (for the gitleaks scan) and `NEXTEST_PROFILE=ci`; the JUnit report is uploaded as an artifact.
-- `just docker-test`, which builds the image and runs the deployment tests against it.
+- `just docker-test`, which builds the image and runs the deployment tests against it, then `just docker-first-run-test`, which checks the image's first run without Compose.
 
 The RustSec advisory check runs on its own, in [`.github/workflows/advisories.yml`](../.github/workflows/advisories.yml) (job `cargo deny advisories`, `just advisories`), on pushes to `main`, pull requests, daily and by hand. It is not one of the checks `main` requires, so an advisory does not block a merge; it shows red while one is active, and blocks a production release.
 
 The same workflow runs as a reusable workflow (`workflow_call`) from [`.github/workflows/release.yml`](../.github/workflows/release.yml) on every release tag, before anything is published (see Releasing).
 
-Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS`, `GITLEAKS_VERSION` and `ACTIONLINT_VERSION` variables, with gitleaks and actionlint checksums per platform). Keep the tool versions in step with what `just setup` installs locally. Dependabot proposes weekly updates for actions and crates; every proposal runs CI, including `cargo deny`.
+Actions are pinned to commit SHAs and tools to exact versions (the `TOOLS`, `GITLEAKS_VERSION` and `ACTIONLINT_VERSION` variables, with gitleaks and actionlint checksums per platform). Keep the tool versions in step with what `just setup` installs locally. Dependabot proposes weekly updates for actions, crates and the Dockerfile's runtime base (`debian:trixie-slim`, pinned by digest; the build stage's `rust` image follows `rust-toolchain.toml` and is left out); every proposal runs CI, including `cargo deny`.
 
 ## Releasing
 
 Versions number the command line, the configuration and the MCP tools; the Rust library in the crate is internal. A published version can never be replaced (only yanked), so check before publishing.
 
-Pushing a signed tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml): a `vX.Y.Z` tag makes a production release, a `vX.Y.Z-<pre>` tag (such as `v0.5.6-dev`) a GitHub pre-release (see Pre-releases). It checks the tag, then runs the full CI gate and the advisory check on the tagged commit and, alongside them, builds the release binaries: Linux x86_64 and aarch64 (static, musl) and macOS Apple silicon. Each is checked (`--version`, and on Linux no shared libraries) and kept as a workflow artifact. For a production release, the workflow then waits for approval in the `release` environment, publishes to crates.io with Trusted Publishing (no stored token), and asks the Homebrew tap to bump the formula. Last, it creates the GitHub release from the CHANGELOG section, with the three `joedocs-X.Y.Z-<target>.tar.gz` archives, their `SHA256SUMS`, and a build-provenance attestation for each archive. Release builds use no cache.
+Pushing a signed tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml): a `vX.Y.Z` tag makes a production release, a `vX.Y.Z-<pre>` tag (such as `v0.5.6-dev`) a GitHub pre-release (see Pre-releases). It checks the tag, then runs the full CI gate and the advisory check on the tagged commit and, alongside them, builds the release binaries: Linux x86_64 and aarch64 (static, musl) and macOS Apple silicon. Each is checked (`--version`, and on Linux no shared libraries) and kept as a workflow artifact. For a production release, the workflow then waits for approval in the `release` environment, publishes to crates.io with Trusted Publishing (no stored token), and asks the Homebrew tap to bump the formula. Last, it creates the GitHub release from the CHANGELOG section, with the three `joedocs-X.Y.Z-<target>.tar.gz` archives, their `SHA256SUMS`, and a build-provenance attestation for each archive. Then, after a second approval in the `release` environment, it publishes the container images (see Container images). Release builds use no cache.
 
 ### One-time setup
 
@@ -219,6 +219,9 @@ Pushing a signed tag runs [`.github/workflows/release.yml`](../.github/workflows
 2. **GitHub environment:** Settings → Environments → `release`, with yourself as required reviewer and deployments limited to `v*` tags.
 3. **Homebrew tap:** finish the tap's setup ([`docs-release.md`](https://github.com/joelee/homebrew-oss/blob/main/docs-release.md), parts 1 and 2), then add to this repository the variable `TAP_BOT_CLIENT_ID` (the App's client ID, shown on its settings page) and, in the `release` environment, the secret `TAP_BOT_PRIVATE_KEY`. Without them the release still publishes, and the tap's daily check picks up the new version.
 4. **Signing key:** release tags are signed (`git tag -s`), so git needs a signing key (`user.signingkey`, GPG or SSH with `gpg.format`), and the public key must be on your GitHub account, because the workflow refuses a tag that GitHub does not report as verified.
+5. **Container registries,** before the first release that publishes images:
+   - **Docker Hub:** create an access token (Account settings → Personal access tokens) with Read & Write access to `joeworks/joedocs` (create the repository first if it does not exist). In the `release` environment, add the secret `DOCKERHUB_TOKEN` (the token) and the variable `DOCKERHUB_USERNAME` (the Docker Hub user the token belongs to). Without them, `image-publish` fails before it builds, naming what is missing; the GitHub release is already out by then, so rerun only that job once they are set.
+   - **GHCR:** nothing to store; the job pushes with the workflow's `GITHUB_TOKEN` (`packages: write`). A new GHCR package is private, so **after the first push**, open the package (your profile → Packages → `joedocs`), and in Package settings change the visibility to Public and connect it to the `joedocs-mcp` repository.
 
 ### Each release
 
@@ -249,17 +252,19 @@ No production release while a RustSec advisory is active: `just advisories` (`ca
    git push origin vX.Y.Z
    ```
 
-6. In the Actions tab, open the Release run and approve the `release` deployment once the checks and CI pass.
+6. In the Actions tab, open the Release run and approve the `release` deployment once the checks and CI pass. After the GitHub release, approve the second `release` deployment, for `image-publish` (the container images).
 7. Check the result:
    - the version on crates.io;
    - the GitHub release, with the three archives and `SHA256SUMS`, checked with `gh release download vX.Y.Z -p '*' -D /tmp/jd-X.Y.Z && (cd /tmp/jd-X.Y.Z && shasum -a 256 -c SHA256SUMS)` and `gh attestation verify /tmp/jd-X.Y.Z/joedocs-X.Y.Z-<target>.tar.gz -R joelee/joedocs-mcp`;
-   - the tap's `joedocs X.Y.Z` pull request, which merges by itself once the tap's tests pass.
+   - the tap's `joedocs X.Y.Z` pull request, which merges by itself once the tap's tests pass;
+   - the container images, as in Container images.
 
 ### When the release fails
 
 - **Before publishing** (a check, CI, a binary build, or the approval was rejected): nothing was published. Fix the problem on `main`, then move the tag: `git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`, and tag and push again.
 - **After publishing:** the version is on crates.io and cannot be replaced, so never rerun the Publish job: `cargo publish` fails for a version that already exists.
   - If the GitHub release failed (including its checksums or attestations), rerun only the GitHub release job: it takes the binaries from the run's artifacts. Creating the release by hand (below) leaves out the binaries.
+  - If `image-publish` failed (for example the Docker Hub credentials were missing), rerun only that job; the tags it pushes are the same each time.
   - If the Homebrew dispatch failed, the tap's daily check bumps the formula by itself; to bump it now, run `gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z`.
   - Fix anything else forward with a new patch version.
 
@@ -267,7 +272,30 @@ No production release while a RustSec advisory is active: `just advisories` (`ca
 
 While a release is held back, for example by an advisory, its work can be shared as a pre-release: a version with a SemVer pre-release part in `Cargo.toml` (`X.Y.Z-dev`, `X.Y.Z-rc.1`), and a `## [X.Y.Z-dev] - YYYY-MM-DD` changelog section that says why it is not a release. A pre-release is not for production use, and goes to GitHub only, never crates.io or Homebrew.
 
-Merge it to `main` and tag it as in Each release (`git tag -s vX.Y.Z-dev -m "JoeDocs X.Y.Z-dev"`, then `git tag -v` and push). The release workflow runs the checks, CI and the binary builds, and its advisory check reports any active advisory without failing. After approval in the `release` environment it creates a GitHub release marked **Pre-release**, never Latest, with the three archives, `SHA256SUMS` and the attestations. Its notes are the changelog section, then an "Active RustSec advisories" list with a link to each advisory, and "Not for production use." When the release goes ahead, set the version to `X.Y.Z` and rename and date the section.
+Merge it to `main` and tag it as in Each release (`git tag -s vX.Y.Z-dev -m "JoeDocs X.Y.Z-dev"`, then `git tag -v` and push). The release workflow runs the checks, CI and the binary builds, and its advisory check reports any active advisory without failing. After approval in the `release` environment it creates a GitHub release marked **Pre-release**, never Latest, with the three archives, `SHA256SUMS` and the attestations, and after the second approval its container images, tagged with the exact version only (`X.Y.Z-rc.1`), never `X.Y` or `latest`. Its notes are the changelog section, then an "Active RustSec advisories" list with a link to each advisory, and "Not for production use." When the release goes ahead, set the version to `X.Y.Z` and rename and date the section.
+
+### Container images
+
+The `image` job builds the Dockerfile's `release` target from the run's Linux musl binaries (nothing is compiled for the image) and smoke-tests the amd64 image: no volumes, healthy, the first-run banner. It runs in dry runs too, where it also builds both platforms without pushing. On a tag push, `image-publish` runs after the GitHub release: it checks the binaries against the release's `SHA256SUMS`, then pushes `linux/amd64` and `linux/arm64` to `docker.io/joeworks/joedocs` and `ghcr.io/joelee/joedocs`, with BuildKit SBOM and provenance attestations, and a GitHub build-provenance attestation of the image digest, stored with the GHCR image. Tags:
+
+| Release | Tags |
+| --- | --- |
+| Pre-release `vX.Y.Z-<pre>` | `X.Y.Z-<pre>` only |
+| Production `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest` |
+
+A production image is a production release, so it waits on the same advisory gate: `image-publish` needs the GitHub release, which a production release creates only after the crates.io publish. Images are built only at release tags, never on a schedule; the runtime base's Dependabot updates reach images at the next release.
+
+After a release, check the images (the digest is in `image-publish`'s summary):
+
+```bash
+docker pull joeworks/joedocs:X.Y.Z && docker pull ghcr.io/joelee/joedocs:X.Y.Z
+docker run --rm joeworks/joedocs:X.Y.Z joedocs --version
+docker buildx imagetools inspect joeworks/joedocs:X.Y.Z   # linux/amd64, linux/arm64, and an attestation manifest each
+docker buildx imagetools inspect ghcr.io/joelee/joedocs:X.Y.Z --format '{{json .Provenance}}' | head -c 300
+gh attestation verify oci://ghcr.io/joelee/joedocs:X.Y.Z --repo joelee/joedocs-mcp
+```
+
+For a production release, also check that `latest` and `X.Y` point at the same digest as `X.Y.Z` (`docker buildx imagetools inspect joeworks/joedocs:latest`).
 
 ### Releasing by hand
 
@@ -283,4 +311,4 @@ gh release create vX.Y.Z --title "JoeDocs X.Y.Z" \
 gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z
 ```
 
-Pushing the tag also starts the release workflow; reject its `release` deployment, since the crate is already published. A release made by hand has no binaries.
+Pushing the tag also starts the release workflow; reject its `release` deployment, since the crate is already published. A release made by hand has no binaries and no container images.
