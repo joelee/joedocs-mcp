@@ -332,6 +332,7 @@ pub(crate) fn refused(error: &store::Error) -> WebError {
             status: refusal.status.as_u16(),
             message: &refusal.message,
             link: Some(("/admin/archive", "Find it in the Archive")),
+            reset_view: None,
         };
         let page = render(refusal.status, &page);
         return refusal.with_page(page);

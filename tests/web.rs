@@ -3113,6 +3113,9 @@ async fn every_page_passes_the_structural_accessibility_checks() -> TestResult<(
         "/admin/documents/JD-3/history?file=items%2Ffirst",
         "/admin/documents/JD-1/diff?from=1",
         "/admin/documents/JD-4",
+        "/admin/board",
+        "/admin/board?filters=closed&project=joedocs&type=plans",
+        "/admin/board?project=no-such-project",
         "/admin/search",
         "/admin/search?q=gap+OR+body",
         "/admin/search?q=-gap",
@@ -4945,33 +4948,65 @@ async fn the_board_and_documents_remember_their_view_and_offer_a_reset() -> Test
             ("/admin/documents".to_owned(), "documents".to_owned()),
         ]
     );
-    // Each page has a visible Reset filters button for its own view, and
-    // the Board's menu item resets the same way.
-    for (path, view) in [("/admin/board", "board"), ("/admin/documents", "documents")] {
-        let page = server.get(path, Some(&cookie)).await?;
-        let resets: Vec<Tag> = tags(&page.body)
-            .into_iter()
-            .filter(|t| t.get("data-reset-view") == Some(view))
-            .collect();
-        let button = resets
+    // Documents has a visible Reset filters button for its view; the Board
+    // has one reset, its actions menu's Reset view (JD-71 amendment 03).
+    let page = server.get("/admin/documents", Some(&cookie)).await?;
+    let button = tags(&page.body)
+        .into_iter()
+        .find(|t| t.name == "button" && t.get("data-reset-view") == Some("documents"))
+        .ok_or("no Reset filters button")?;
+    assert_eq!(button.get("type"), Some("button"));
+    assert!(
+        page.body
+            .contains("data-reset-view=\"documents\">Reset filters</button>")
+    );
+    let board = server.get("/admin/board", Some(&cookie)).await?;
+    let resets: Vec<Tag> = tags(&board.body)
+        .into_iter()
+        .filter(|t| t.get("data-reset-view") == Some("board"))
+        .collect();
+    assert_eq!(resets.len(), 1, "one Board reset");
+    assert_eq!(resets[0].name, "a");
+    assert_eq!(resets[0].get("href"), Some("/admin/board"));
+    assert!(
+        board
+            .body
+            .contains("href=\"/admin/board\" data-reset-view=\"board\">Reset view</a>")
+    );
+    assert!(!board.body.contains("Reset filters"));
+    assert!(!board.body.contains("Reset the filters"));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn views_are_remembered_only_from_pages_with_their_filter_form() -> TestResult<()> {
+    // `app.js` remembers a view on load only when the page carries the
+    // view's filter form (JD-74), so a refusal at the same address leaves
+    // the remembered view alone. These are the markers it looks for.
+    let server = start_full(|_| {}, fixture).await?;
+    let cookie = server.login().await?;
+    let board_form = |body: &str| {
+        tags(body)
             .iter()
-            .find(|t| t.name == "button")
-            .ok_or("no Reset filters button")?;
-        assert_eq!(button.get("type"), Some("button"), "{path}");
-        assert!(
-            page.body.contains(&format!(
-                "data-reset-view=\"{view}\">Reset filters</button>"
-            )),
-            "{path}"
-        );
-        if view == "board" {
-            assert!(
-                resets
-                    .iter()
-                    .any(|t| t.name == "a" && t.get("href") == Some("/admin/board")),
-                "the Board actions item resets too"
-            );
-        }
+            .any(|t| t.name == "form" && t.get("data-board-filters").is_some())
+    };
+    let documents_form = |body: &str| {
+        tags(body)
+            .iter()
+            .any(|t| t.name == "form" && t.get("id") == Some("documents-filters"))
+    };
+    let board = server.get("/admin/board", Some(&cookie)).await?;
+    assert!(board_form(&board.body), "the Board has its form");
+    let documents = server.get("/admin/documents", Some(&cookie)).await?;
+    assert!(documents_form(&documents.body), "Documents has its form");
+    for path in [
+        "/admin/board?project=no-such-project",
+        "/admin/documents?sort=zzz",
+    ] {
+        let refused = server.get(path, Some(&cookie)).await?;
+        assert_eq!(refused.status, 400, "{path}");
+        assert!(!board_form(&refused.body), "{path}");
+        assert!(!documents_form(&refused.body), "{path}");
     }
     server.stop().await
 }
@@ -5309,6 +5344,14 @@ async fn the_board_shows_open_documents_by_status_and_type() -> TestResult<()> {
     );
     assert!(!fragment.body.contains("<html"));
     assert_eq!(board_cards(&fragment.body), cards);
+    // The grid says how many of its documents need attention, folded rows
+    // included, for the attention switch's count (JD-71 D-10).
+    assert!(fragment.body.contains("data-lit=\"1\""));
+    let folded = server
+        .get("/admin/board?fragment=1&collapse=plans", Some(&cookie))
+        .await?;
+    assert!(!board_cards(&folded.body).contains(&"AL-1".to_owned()));
+    assert!(folded.body.contains("data-lit=\"1\""));
     server.stop().await
 }
 
@@ -5388,21 +5431,29 @@ async fn a_board_group_folds_to_one_line_from_the_address() -> TestResult<()> {
     );
     // The Filters panel is open by default; `filters=closed` keeps it shut,
     // with the key in the form so a filter change keeps it too.
-    let panel = |body: &str| -> Option<Tag> {
-        tags(body)
-            .into_iter()
-            .find(|t| t.name == "details" && t.get("data-board-filters-panel").is_some())
+    let find = |body: &str, attribute: &str| -> Option<Tag> {
+        tags(body).into_iter().find(|t| t.get(attribute).is_some())
     };
     let shut = get("filters=closed").await?;
-    let tag = panel(&shut.body).ok_or("no Filters panel")?;
-    assert!(tag.get("open").is_none(), "closed from the address");
+    let toggle = find(&shut.body, "data-filter-toggle").ok_or("no Filters toggle")?;
+    assert_eq!(
+        toggle.get("aria-expanded"),
+        Some("false"),
+        "closed from the address"
+    );
+    assert_eq!(toggle.get("aria-controls"), Some("board-filter-panel"));
+    let panel = find(&shut.body, "data-filter-panel").ok_or("no Filters panel")?;
+    assert_eq!(panel.get("id"), Some("board-filter-panel"));
+    assert!(panel.get("hidden").is_some());
     assert!(
         shut.body.contains(
             "<input type=\"hidden\" name=\"filters\" value=\"closed\" data-filters-closed>"
         )
     );
-    let tag = panel(&open.body).ok_or("no Filters panel")?;
-    assert!(tag.get("open").is_some(), "open by default");
+    let toggle = find(&open.body, "data-filter-toggle").ok_or("no Filters toggle")?;
+    assert_eq!(toggle.get("aria-expanded"), Some("true"), "open by default");
+    let panel = find(&open.body, "data-filter-panel").ok_or("no Filters panel")?;
+    assert!(panel.get("hidden").is_none());
     assert!(!open.body.contains("data-filters-closed"));
     // Ungrouped, nothing folds.
     let ungrouped = get("group=none&collapse=all").await?;
@@ -5481,6 +5532,392 @@ async fn the_board_filters_groups_and_sorts_from_the_address() -> TestResult<()>
             .contains("name=\"status\" value=\"draft\" checked")
     );
     assert!(!page.body.contains("name=\"status\" value=\"done\" checked"));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_filter_panel_has_a_header_line_pills_and_a_picker() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    let find = |body: &str, attribute: &str| -> Option<Tag> {
+        tags(body).into_iter().find(|t| t.get(attribute).is_some())
+    };
+    let bare = get("").await?;
+    let body = &bare.body;
+    // The View controls sit on the header line, before the panel body.
+    let bar = body.find("data-filter-bar").ok_or("no header line")?;
+    let panel = body.find("data-filter-panel").ok_or("no panel body")?;
+    for control in [
+        "name=\"group\" value=\"type\" checked",
+        "name=\"dir\" value=\"desc\" checked",
+        "<select name=\"sort\"",
+    ] {
+        let at = body.find(control).ok_or(control)?;
+        assert!(bar < at && at < panel, "{control} on the header line");
+    }
+    assert!(body.contains("type=\"radio\" name=\"group\""));
+    // No reset on the header line: the actions menu has it (amendment 03).
+    let reset = body.find("data-reset-view").ok_or("no reset")?;
+    assert!(reset > panel, "the reset is not on the header line");
+    // They sit in a popover behind one compact View button that names the
+    // view (JD-71 amendment 01, as JD-70's Tab D).
+    let opener = find(body, "data-view-open").ok_or("no View button")?;
+    assert_eq!(opener.get("aria-expanded"), Some("false"));
+    assert_eq!(opener.get("aria-controls"), Some("bf-view"));
+    let pop = find(body, "data-view-pop").ok_or("no View popover")?;
+    assert!(pop.get("popover").is_some());
+    assert_eq!(pop.get("id"), Some("bf-view"));
+    let pop_at = body.find("data-view-pop").ok_or("pop")?;
+    for control in ["name=\"group\"", "<select name=\"sort\"", "name=\"dir\""] {
+        let at = body.find(control).ok_or(control)?;
+        assert!(pop_at < at && at < panel, "{control} in the View popover");
+    }
+    assert!(body.contains("data-view-summary>Rows by type · Last updated ↓<"));
+    let ungrouped = get("group=none&sort=id&dir=asc").await?;
+    assert!(
+        ungrouped
+            .body
+            .contains("data-view-summary>No rows · Document ID ↑<")
+    );
+    // Nothing active: no count, no Clear all.
+    assert!(
+        find(body, "data-filter-count")
+            .ok_or("count")?
+            .get("hidden")
+            .is_some()
+    );
+    assert!(
+        find(body, "data-filter-clear")
+            .ok_or("clear")?
+            .get("hidden")
+            .is_some()
+    );
+    // Projects are a picker; types and statuses are pills.
+    let picker = find(body, "data-filter-picker").ok_or("no picker")?;
+    assert_eq!(picker.get("data-filter-picker"), Some("project"));
+    let opener = find(body, "data-picker-open").ok_or("no picker button")?;
+    assert_eq!(opener.get("aria-expanded"), Some("false"));
+    assert!(body.contains(">All projects<"));
+    assert!(body.contains("aria-label=\"Search 2 projects\""));
+    assert!(body.contains("aria-label=\"Only Alpha\""));
+    assert!(body.contains("<span class=\"picker-meta\">alpha · AL</span>"));
+    let all = find(body, "data-pills-all").ok_or("no All pill")?;
+    assert_eq!(all.get("aria-pressed"), Some("true"));
+    assert!(body.contains("class=\"pill st-review\""));
+    assert!(body.contains("data-filter-default=\"draft,review,approved,parked\""));
+    assert!(body.contains(">Open only<"));
+    // The attention switch.
+    assert!(body.contains("role=\"switch\" name=\"attention\" value=\"1\""));
+    // Filters in force: the count, Clear all, the All pill released, and
+    // the picker's button names the choice.
+    let chosen = get("project=beta&type=plans&status=done&attention=1").await?;
+    let count = find(&chosen.body, "data-filter-count").ok_or("count")?;
+    assert!(count.get("hidden").is_none());
+    assert!(chosen.body.contains("data-filter-count>4<"));
+    assert!(
+        find(&chosen.body, "data-filter-clear")
+            .ok_or("clear")?
+            .get("hidden")
+            .is_none()
+    );
+    assert_eq!(
+        find(&chosen.body, "data-pills-all")
+            .ok_or("All")?
+            .get("aria-pressed"),
+        Some("false")
+    );
+    assert!(chosen.body.contains(">Add or remove projects<"));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn status_shortcuts_and_clear_all_show_only_when_they_do_something() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    let find = |body: &str, attribute: &str| -> Option<Tag> {
+        tags(body).into_iter().find(|t| t.get(attribute).is_some())
+    };
+    // Status shortcuts show only when they would change something, and
+    // Clear all only from two chips (amendment 03, as JD-70 option E).
+    let hidden = |body: &str, attribute: &str| -> Result<bool, String> {
+        Ok(find(body, attribute)
+            .ok_or_else(|| attribute.to_owned())?
+            .get("hidden")
+            .is_some())
+    };
+    let bare = get("").await?;
+    let body = &bare.body;
+    assert!(
+        hidden(body, "data-pills-default")?,
+        "Open only at the default"
+    );
+    assert!(!hidden(body, "data-pills-every")?);
+    assert!(!hidden(body, "data-pills-tools")?);
+    let every = get("status=draft,review,approved,parked,done,rejected,superseded").await?;
+    assert!(!hidden(&every.body, "data-pills-default")?);
+    assert!(
+        hidden(&every.body, "data-pills-every")?,
+        "All with every status"
+    );
+    let done = get("status=done").await?;
+    assert!(!hidden(&done.body, "data-pills-default")?);
+    assert!(!hidden(&done.body, "data-pills-every")?);
+    for (query, shown) in [
+        ("type=plans", false),
+        ("status=done", false),
+        ("type=plans&attention=1", true),
+        ("project=beta&type=plans&status=done&attention=1", true),
+    ] {
+        let page = get(query).await?;
+        assert_eq!(!hidden(&page.body, "data-filter-clear")?, shown, "{query}");
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn status_shortcuts_hide_when_nothing_is_closed() -> TestResult<()> {
+    // An empty list falls back to the default, so a list naming no known
+    // status is what closes nothing: every status is then the default, and
+    // Open only and All would both do nothing.
+    let server = start_full(
+        |config| config.documents.closed_statuses = vec!["no-such-status".to_owned()],
+        board_fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    for attribute in ["data-pills-tools", "data-pills-default", "data-pills-every"] {
+        let tag = tags(&page.body)
+            .into_iter()
+            .find(|t| t.get(attribute).is_some())
+            .ok_or(attribute)?;
+        assert!(tag.get("hidden").is_some(), "{attribute} hidden");
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn a_long_status_list_is_a_picker() -> TestResult<()> {
+    let server = start_full(
+        |config| {
+            config.documents.statuses.extend(
+                [
+                    "extra-1", "extra-2", "extra-3", "extra-4", "extra-5", "extra-6",
+                ]
+                .map(String::from),
+            );
+        },
+        board_fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    assert!(page.body.contains("data-filter-picker=\"status\""));
+    assert!(!page.body.contains("data-pills-default"));
+    // Eight types stay pills.
+    assert!(page.body.contains("data-pills-all"));
+    assert!(
+        page.body
+            .contains("name=\"status\" value=\"draft\" checked")
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_refuses_unknown_filter_values() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    for (query, named) in [
+        ("project=zzz", "project: zzz"),
+        ("project=alpha,zzz", "project: zzz"),
+        ("type=zzz", "type: zzz"),
+        ("status=zzz", "status: zzz"),
+        ("group=zzz", "group: zzz"),
+        ("sort=zzz", "sort: zzz"),
+        ("dir=zzz", "dir: zzz"),
+        ("fragment=1&project=zzz", "project: zzz"),
+    ] {
+        let before = server.audit()?.len();
+        let reply = server
+            .get(&format!("/admin/board?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(reply.status, 400, "{query}: {}", reply.body);
+        assert!(
+            reply.body.contains(named),
+            "{query} names {named}: {}",
+            reply.body
+        );
+        let rows = server.audit()?;
+        assert!(
+            rows[before..]
+                .iter()
+                .any(|(t, _, o)| t == "admin:documents.board" && o == "invalid_argument"),
+            "{query} audited: {:?}",
+            &rows[before..]
+        );
+    }
+    // The refusal page offers to reset the Board's remembered filters.
+    let page = server.get("/admin/board?type=zzz", Some(&cookie)).await?;
+    assert!(
+        tags(&page.body).iter().any(|t| t.name == "a"
+            && t.get("href") == Some("/admin/board")
+            && t.get("data-reset-view") == Some("board")),
+        "{}",
+        page.body
+    );
+    // askama escapes the apostrophe.
+    assert!(page.body.contains(">Reset the Board&#39;s view</a>"));
+    // Empty parts and unknown fold keys are not refusals.
+    for query in [
+        "project=",
+        "project=alpha,,beta",
+        "collapse=zzz",
+        "attention=yes",
+    ] {
+        let reply = server
+            .get(&format!("/admin/board?{query}"), Some(&cookie))
+            .await?;
+        assert_eq!(reply.status, 200, "{query}: {}", reply.body);
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn only_projects_take_project_titles_on_the_board() -> TestResult<()> {
+    let server = start_full(
+        |_| {},
+        |store| {
+            board_fixture(store)?;
+            store.add_project("notes", "NO", Some("Notes project"))?;
+            Ok(())
+        },
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    // The type pill shows the type, the picker row the project's title.
+    assert!(
+        page.body.contains("id=\"bf-type-notes\">notes</label>"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains("<span class=\"picker-name\">Notes project</span>")
+    );
+    assert!(!page.body.contains("id=\"bf-type-notes\">Notes project"));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_reads_comma_separated_filters() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    // One key with commas, repeated keys, and both mixed name the same
+    // projects.
+    let repeated = board_cards(&get("project=alpha&project=beta").await?.body);
+    assert!(repeated.iter().any(|id| id.starts_with("AL-")));
+    assert!(repeated.iter().any(|id| id.starts_with("BE-")));
+    assert_eq!(
+        board_cards(&get("project=alpha,beta").await?.body),
+        repeated
+    );
+    assert_eq!(
+        board_cards(&get("project=alpha,beta&project=beta").await?.body),
+        repeated
+    );
+    assert_eq!(
+        board_cards(&get("project=beta,,beta").await?.body),
+        board_cards(&get("project=beta").await?.body),
+        "empty parts and duplicates are dropped"
+    );
+    // A comma sent as %2C stays inside the value: one name, no project.
+    assert_eq!(
+        board_cards(&get("project=alpha%2Cbeta").await?.body),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        data_values(&get("type=plans,notes").await?.body, "row-key"),
+        data_values(&get("type=plans&type=notes").await?.body, "row-key")
+    );
+    let statuses = get("status=draft,done").await?;
+    assert_eq!(data_values(&statuses.body, "column"), ["draft", "done"]);
+    let folded = get("group=type&collapse=notes,plans").await?;
+    for key in ["notes", "plans"] {
+        assert!(
+            board_row(&folded.body, key)
+                .starts_with("<section class=\"board-row board-row-folded\""),
+            "{key} folded"
+        );
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn the_board_form_ticks_only_the_named_projects_and_types() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    // Nothing named: every project and type shows, and none is ticked.
+    let bare = get("").await?;
+    assert!(
+        !bare
+            .body
+            .contains("name=\"project\" value=\"alpha\" checked")
+    );
+    assert!(
+        !bare
+            .body
+            .contains("name=\"project\" value=\"beta\" checked")
+    );
+    assert!(!bare.body.contains("name=\"type\" value=\"plans\" checked"));
+    // Statuses are lit when shown: the open ones by default.
+    assert!(
+        bare.body
+            .contains("name=\"status\" value=\"draft\" checked")
+    );
+    assert!(!bare.body.contains("name=\"status\" value=\"done\" checked"));
+    let plans = get("type=plans").await?;
+    assert!(plans.body.contains("name=\"type\" value=\"plans\" checked"));
+    assert!(!plans.body.contains("name=\"type\" value=\"notes\" checked"));
+    // Every project named is the same as none.
+    let all = get("project=alpha,beta").await?;
+    assert!(
+        !all.body
+            .contains("name=\"project\" value=\"alpha\" checked")
+    );
+    assert!(!all.body.contains("name=\"project\" value=\"beta\" checked"));
     server.stop().await
 }
 
@@ -6150,7 +6587,28 @@ async fn only_the_board_loads_its_script_which_is_a_cached_asset() -> TestResult
     for other in ["/admin/", "/admin/documents", "/admin/audit"] {
         let page = server.get(other, Some(&cookie)).await?;
         assert!(!page.body.contains("board.js"), "{other} does not load it");
+        assert!(
+            !page.body.contains("filters.js"),
+            "{other} does not load it"
+        );
     }
+    // The filter parts (JD-71) are their own cached script, loaded before
+    // the Board's.
+    let parts = board
+        .body
+        .find("/filters.js\"")
+        .ok_or("filters.js not linked")?;
+    assert!(parts < at, "filters.js before board.js");
+    let start = board.body[..parts]
+        .rfind("/admin/assets/")
+        .ok_or("no asset path")?;
+    let path = &board.body[start..parts + "/filters.js".len()];
+    let script = server.get(path, None).await?;
+    assert_eq!(script.status, 200, "{path}");
+    assert!(
+        script.body.contains("data-filter-form"),
+        "the parts' script"
+    );
     // The page carries what the script needs: settings, the status
     // indicator, Pause, both menus and the preview container.
     for part in [

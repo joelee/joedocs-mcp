@@ -25,6 +25,12 @@
   --added: light-dark(#e3f4e7, #1a3323);
   --removed: light-dark(#fbe7e5, #3b2121);
   --mark: light-dark(#fff1a8, #5a4b10);
+  /* The filter panel's All pill stands apart from the value pills
+     (JD-71): darker than a pill in the light theme, lighter in the dark. */
+  --pill-all: light-dark(#e4e5e1, #2e3138);
+  --pill-all-on: light-dark(#d3d6e2, #3a4152);
+  /* A pill's edge, at least 3:1 against the panel (WCAG 1.4.11). */
+  --pill-edge: light-dark(#878b92, #6b7079);
 
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -277,7 +283,6 @@ button:disabled, button[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 .filters > div { display: grid; gap: var(--space-1); }
 /* Reset filters forgets a remembered view (JD-65). */
 .filters-reset { align-self: end; }
-.board-filters .filters-reset { margin-top: var(--space-2); }
 /* Filters apply as they change (htmx), so with scripts on the button is
    hidden from view; it stays in the form so Enter still submits it. */
 .js .filters-apply {
@@ -514,16 +519,128 @@ main:has(.board-page) { max-width: none; }
 .board-title { display: flex; gap: var(--space-2); align-items: center; }
 .board-title h1 { margin: 0; }
 
-.board-filters { margin-bottom: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: var(--space-2) var(--space-3); }
-.board-filters summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.board-filters-title { font-weight: 600; }
-.board-filters-summary { color: var(--muted); font-size: var(--text-sm); }
-.board-filters[open] .board-filters-summary { display: none; }
-.board-filters form { display: grid; gap: var(--space-2); margin-top: var(--space-2); justify-items: start; }
-.board-filters fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: center; }
-.board-filters legend { float: left; width: 5.5rem; margin-right: var(--space-2); color: var(--muted); font-size: var(--text-sm); }
-.board-filters .check { display: inline-flex; gap: var(--space-1); align-items: center; }
-.board-filters-selects label { display: inline-flex; gap: var(--space-2); align-items: center; color: var(--muted); font-size: var(--text-sm); }
+/* The Filters panel (JD-71): a header line that stays when the panel is
+   folded (the toggle, the active filters, the View controls, Reset), and
+   the panel body below it. */
+.board-filters { margin-bottom: var(--space-4); }
+/* `hidden` wins over the parts' own display rules. */
+.board-filters [hidden] { display: none !important; }
+/* Text buttons are targets too: at least 24px high (WCAG 2.5.8). */
+.board-filters button.link { min-height: 1.5rem; }
+.fbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); }
+.board-filters:has(.fpanel:not([hidden])) .fbar { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.fbar-toggle { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: none; border-color: transparent; color: var(--text); font-weight: 600; min-height: 2rem; }
+.fbar-toggle:hover { background: var(--surface-2); }
+.fbar-toggle svg { transition: transform 0.15s; flex: none; }
+.fbar-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.fbar-count { display: inline-grid; place-items: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.35rem; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 0.75rem; font-weight: 700; }
+/* The chips take the room left, but never less than 18rem: below that
+   the View controls wrap to a line of their own instead. */
+.fbar-chips { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; min-width: 0; flex: 1 1 18rem; }
+.fbar-chips:empty { flex-basis: 0; }
+.fbar-view { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-left: auto; }
+/* The View button names the grouping, sort and order, and opens a popover
+   with their controls (JD-71 amendment 01, as JD-70's Tab D). */
+.fbtn { display: inline-flex; align-items: center; gap: var(--space-2); max-width: 100%; min-height: 2rem; padding: var(--space-1) var(--space-3); border-color: var(--border); background: var(--surface); color: var(--text); font-size: var(--text-sm); font-weight: 400; }
+.fbtn:hover, .fbtn[aria-expanded="true"] { border-color: var(--accent); }
+.fbtn-facet { color: var(--muted); }
+.fbtn-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.view-pop { width: min(21rem, calc(100vw - 1rem)); }
+.view-body { display: grid; gap: var(--space-3); padding: var(--space-3); }
+.fview { display: grid; gap: var(--space-1); justify-items: start; min-width: 0; margin: 0; padding: 0; border: 0; }
+.fview-cap { padding: 0; color: var(--muted); font-size: var(--text-sm); font-weight: 600; }
+.fview select { min-width: 12rem; min-height: 2rem; padding: var(--space-1) var(--space-2); font-size: var(--text-sm); }
+.fpanel { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); }
+.fpanel[hidden] { display: none; }
+.frow { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: var(--space-2); align-items: start; }
+.flabel { color: var(--muted); font-size: var(--text-sm); font-weight: 600; padding-top: 0.35rem; }
+.fbody { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; min-width: 0; }
+@media (max-width: 720px) {
+  .frow { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .flabel { padding-top: 0; }
+  /* The chips take a line of their own, after the toggle and before
+     Clear all, View and Reset: the same order as the Tab order. */
+  .fbar-chips { flex-basis: 100%; }
+  .fbar-chips:empty { display: none; }
+  .fbar-view { margin-left: 0; }
+}
+
+/* --- Filter parts (JD-71): pills, chips, the switch, the picker, and a
+   segmented control. Each is a native control underneath. ------------- */
+
+.pills { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; min-width: 0; }
+.pill { position: relative; display: inline-flex; align-items: center; gap: 0.3em; min-height: 2rem; padding: 0 0.8em; border: 1px solid var(--pill-edge); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 0.95rem; font-weight: 400; cursor: pointer; user-select: none; white-space: nowrap; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+.pill input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
+.pill:hover { border-color: var(--accent); color: var(--text); }
+.pill:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
+.pill:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.pill:has(input:checked)::before { content: "\2713"; content: "\2713" / ""; font-size: 0.85em; }
+/* Status pills take the colours of the status badges and Board columns. */
+.pill.st-draft:has(input:checked) { background: var(--surface-2); border-color: var(--muted); color: var(--text); }
+.pill.st-review:has(input:checked) { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.pill.st-approved:has(input:checked), .pill.st-done:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.pill.st-rejected:has(input:checked), .pill.st-superseded:has(input:checked) { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
+.pill.st-parked:has(input:checked) { border-style: dashed; }
+/* All behaves differently (it clears the group's choice), so it looks
+   different: its own background, a solid edge when pressed. */
+button.pill-all { background: var(--pill-all); color: var(--text); border-color: var(--pill-edge); font-weight: 600; }
+button.pill-all:hover { border-color: var(--accent); }
+button.pill-all[aria-pressed="true"] { background: var(--pill-all-on); border-color: var(--accent); }
+.pills-tools { display: inline-flex; gap: var(--space-1); margin-left: var(--space-1); padding-left: var(--space-2); border-left: 1px solid var(--border); }
+
+.fchip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; min-height: 1.75rem; padding: 0 2px 0 0.65em; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--text-sm); }
+.fchip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fchip-facet { color: var(--muted); margin-right: 0.3em; }
+.fchip button { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 50%; background: none; color: inherit; font-size: 1rem; font-weight: 400; line-height: 1; }
+.fchip button:hover { background: var(--accent); color: var(--accent-text); }
+button.fchip-more { min-height: 1.75rem; padding: 0 0.65em; border-radius: 999px; border: 1px dashed var(--accent); background: none; color: var(--accent); font-size: var(--text-sm); font-weight: 400; }
+
+.switch { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 2rem; font-size: 1rem; font-weight: 400; cursor: pointer; }
+.switch input { appearance: none; position: relative; flex: none; width: 2.4rem; height: 1.4rem; margin: 0; padding: 0; border: 1px solid var(--muted); border-radius: 999px; background: var(--surface-2); cursor: pointer; transition: background 0.15s; }
+.switch input::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc(1.4rem - 6px); height: calc(1.4rem - 6px); border-radius: 50%; background: var(--muted); transition: transform 0.15s, background 0.15s; }
+.switch input:checked { background: var(--warn-soft); border-color: var(--warn); }
+.switch input:checked::before { transform: translateX(1rem); background: var(--warn); }
+.switch-count { display: inline-grid; place-items: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.35rem; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 0.75rem; font-weight: 700; }
+.switch-count[hidden] { display: none; }
+
+.seg { display: inline-flex; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.seg label { position: relative; display: inline-flex; align-items: center; gap: 0.25em; min-height: 2rem; padding: var(--space-1) var(--space-3); border-right: 1px solid var(--border); color: var(--text); font-size: var(--text-sm); font-weight: 400; cursor: pointer; white-space: nowrap; }
+.seg label:last-child { border-right: 0; }
+.seg input { position: absolute; inset: 0; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
+.seg label:has(input:checked) { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.seg label:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: -3px; }
+
+.picker { min-width: 0; max-width: 100%; }
+.picker-box { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); max-width: 100%; min-width: min(22rem, 100%); min-height: 2.4rem; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.picker-box:focus-within { border-color: var(--accent); }
+.picker-chips { display: contents; }
+.picker-trigger { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 2rem; padding: var(--space-1) var(--space-3); border-color: transparent; background: none; color: var(--muted); font-weight: 400; }
+.picker-trigger:hover, .picker-trigger[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
+.caret { flex: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; opacity: 0.7; }
+/* The popover is placed by filters.js, through the CSSOM. */
+.picker-pop { position: fixed; inset: auto; margin: 0; padding: 0; width: min(22rem, calc(100vw - 1rem)); max-height: min(28rem, calc(100vh - 1rem)); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: 0 10px 30px -10px light-dark(rgb(0 0 0 / 0.3), rgb(0 0 0 / 0.8)); }
+.picker-pop:popover-open { display: flex; flex-direction: column; }
+.picker-head { display: grid; gap: var(--space-2); padding: var(--space-2); border-bottom: 1px solid var(--border); }
+.picker-head input[type="search"] { width: 100%; }
+.picker-actions { display: flex; align-items: center; gap: var(--space-2); }
+.picker-count { margin-left: auto; color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.picker-list { flex: 1; overflow-y: auto; margin: 0; padding: var(--space-1); list-style: none; }
+.picker-list li { display: flex; align-items: center; gap: var(--space-1); border-radius: var(--radius); }
+.picker-list li[hidden] { display: none; }
+.picker-list li:hover, .picker-list li:focus-within { background: var(--accent-soft); }
+.picker-row { display: flex; flex: 1; align-items: center; gap: var(--space-2); min-width: 0; min-height: 2.25rem; padding: var(--space-1) var(--space-2); font-size: 1rem; font-weight: 400; cursor: pointer; }
+.picker-row input { flex: none; width: 1.05rem; height: 1.05rem; margin: 0; padding: 0; accent-color: var(--accent); }
+.picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-meta { flex: none; margin-left: auto; color: var(--muted); font-family: var(--mono); font-size: 0.75rem; }
+.picker-only { flex: none; margin-right: var(--space-1); }
+.picker-empty { margin: 0; padding: var(--space-4); color: var(--muted); text-align: center; }
+.picker-foot { display: none; justify-content: flex-end; padding: var(--space-2); border-top: 1px solid var(--border); }
+/* On a narrow screen the picker is a sheet at the bottom of the window. */
+@media (max-width: 720px) {
+  .picker-pop { left: 0 !important; right: 0 !important; top: auto !important; bottom: 0 !important; width: 100%; max-height: 75vh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+  .picker-pop::backdrop { background: rgb(0 0 0 / 0.45); }
+  .picker-foot { display: flex; }
+}
 
 /* Rows are grids of the same columns: a title column, then one per status,
    sharing the width and scrolling sideways when they do not fit. */

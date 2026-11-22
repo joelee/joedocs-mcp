@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - **Claude Code plugin.** The repository is now a Claude Code plugin marketplace: `/plugin marketplace add joelee/joedocs-mcp`, then `/plugin install joedocs@joedocs`. The plugin connects Claude Code to a JoeDocs server (`JOEDOCS_URL`, default `http://127.0.0.1:8750/mcp`, and `JOEDOCS_API_KEY`) and bundles the `docs/skills` skills. `scripts/sync-plugin-skills.sh` regenerates the bundled copy; `--check` fails when it is stale. The plugin has no version of its own, so installed copies pick up each change on `main` when Claude Code updates the marketplace. Use the plugin or a manual setup (`claude mcp add` and copied skill folders), not both.
 
+## [0.5.6-rc.2] - 2026-11-22
+
+**Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-rc.1, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. It comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474); tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, or build it from its tag.
+
+A modern Filters panel for the Board: a searchable project picker, pills for types and statuses, a compact View menu and shorter addresses. Unknown filter values are refused, and a refused address no longer replaces a remembered view. The configuration, MCP tools, admin API and database are unchanged.
+
+### Changed
+
+- **A new Board Filters panel.** The rows of checkboxes are replaced. Projects are picked from a list with a search box, **Select all**, **Clear** and **Only**, and show as chips. Types and statuses are pills, with an **All** pill for types and **Open only** and **All** for statuses, each shown only while it would change something. "Only needing attention" is a switch that counts the documents needing attention. The panel's header line shows the filters in force as chips you can remove, **Clear all** (with two or more chips), and the grouping, sort and order, whether the panel is open or folded. Nothing chosen means all, so projects created later appear unless you chose projects by name. A type or status list longer than 12 values uses the searchable list instead of pills.
+- **Shorter Board addresses.** Several values are one key, separated by commas (`/admin/board?project=joedocs,omibot&type=plans,ideas`), and values at their defaults are left out, so a Board with nothing filtered is `/admin/board`. Links and remembered views with repeated keys (`project=a&project=b`) still work, and are rewritten in the new form at your next change. An older JoeDocs reads a comma-separated value as one name. An address naming an unknown project, type or status, or an unknown grouping, sort or order, is now refused with 400 and a link that resets the Board's view, instead of showing an empty Board.
+- **One reset on the Board.** The **Reset filters** button beside the Board's filters (0.5.6-rc.1) is gone: **Reset view** in the Board's actions menu (formerly "Reset the filters") does the same, forgetting the remembered view and showing the defaults. The Documents page keeps its **Reset filters** button.
+
+### Fixed
+
+- **A refused address no longer replaces a remembered view.** Opening a Documents address that the server refuses (for example `/admin/documents?sort=zzz`, `400`) saved it as the remembered view, so the menu's Documents link kept leading to the error page, which has no reset link. Now only the Board or Documents page itself remembers its view, so the Board's new `400` refusals are not remembered either. A Documents view saved this way under 0.5.6-rc.1 stays until you open `/admin/documents` and press **Reset filters**.
+
+### Security
+
+- **`url` 2.5.9** (with `form_urlencoded` 1.2.3), for [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592): `url` 2.5.8 could overflow the stack in `Url::origin()` on a URL with deeply nested `blob:` prefixes. `cargo deny` now reports only RUSTSEC-2026-0543 (`chrono`, through `rmcp`).
+
 ## [0.5.6-rc.1] - 2026-11-18
 
 **Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-dev, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. JoeDocs does not use `chrono` itself; it comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474), for [#1469](https://github.com/modelcontextprotocol/rust-sdk/issues/1469); tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, or build it from its tag.
@@ -327,7 +347,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.1...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.2...HEAD
+[0.5.6-rc.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.1...v0.5.6-rc.2
 [0.5.6-rc.1]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-dev...v0.5.6-rc.1
 [0.5.6-dev]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...v0.5.6-dev
 [0.5.5]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...v0.5.5
