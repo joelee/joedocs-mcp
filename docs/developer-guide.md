@@ -34,6 +34,7 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 | `just secrets` | Scan git history for secrets: gitleaks' built-in rules plus a `.gitleaks.toml` rule for JoeDocs API keys (checked by `tests/secrets.rs`). |
 | `just msrv` | Check the declared MSRV builds (library profile). |
 | `just docker-test [port]` | Build a throwaway Compose stack, run the deployment tests against it before and after a restart, then remove it (default port 18750). |
+| `just docker-first-run-test [release]` | Check the image's first run without Compose (the sign-in banner, a restart, `JOEDOCS_INITIAL_ADMIN`, a passed-through command) for the source build and for the `release` target built from that GitHub release's musl archive (default 0.5.6-rc.2), then remove what it made. CI runs it after `docker-test`. |
 | `just ci` | Everything above, in CI order. |
 
 ## Testing
@@ -49,7 +50,7 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 
 ## Running with Docker
 
-`compose.yaml` runs `joedocs serve` in a container. On start it runs `joedocs init` (which does nothing once initialised). The vault and the state are bind-mounted from `.local/data` (git-ignored), so they persist across rebuilds and you can inspect them on the host:
+`compose.yaml` runs `joedocs serve` in a container, with the web interface on. On start, the image's entrypoint (`docker/entrypoint.sh`) runs `joedocs init` (which does nothing once initialised); on a store with no users it creates the user `admin` and prints its one-time password, once (`docker compose logs`). The vault and the state are bind-mounted from `.local/data` (git-ignored), so they persist across rebuilds and you can inspect them on the host:
 
 ```text
 .local/data/

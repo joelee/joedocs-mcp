@@ -36,9 +36,14 @@ RUN useradd --system --uid 10001 --create-home --home-dir /home/joedocs joedocs 
 
 USER joedocs
 WORKDIR /data
+# A standalone server: the web interface (and the admin API it needs) is on.
+# Signing in over plain HTTP works only on a loopback address, such as a
+# port published on 127.0.0.1; see docs/docker.md.
 ENV JOEDOCS__STORAGE__HOME=/data/vault \
     JOEDOCS__STORAGE__STATE_DIR=/data/state \
-    JOEDOCS__SERVER__BIND=0.0.0.0:8750
+    JOEDOCS__SERVER__BIND=0.0.0.0:8750 \
+    JOEDOCS__ADMIN__ENABLED=true \
+    JOEDOCS__ADMIN__WEB_UI=true
 VOLUME ["/data/vault", "/data/state"]
 EXPOSE 8750
 
@@ -46,9 +51,12 @@ EXPOSE 8750
 HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=5 \
     CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8750 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '^ok' <&3"]
 
-# `init` is idempotent, so the first start creates the vault, database and
-# history, and later starts only check them.
-CMD ["sh", "-c", "joedocs init && exec joedocs serve"]
+# The entrypoint runs `joedocs init` (idempotent), creates the first user
+# on a store with none and prints how to sign in, then serves. Other
+# arguments run as a command instead (docker/entrypoint.sh).
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["serve"]
 
 # A GitHub release's binary: dist/linux/amd64/joedocs or dist/linux/arm64/joedocs.
 FROM runtime AS release

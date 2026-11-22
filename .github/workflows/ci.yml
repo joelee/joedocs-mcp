@@ -122,3 +122,6 @@ jobs:
 
       - name: just docker-test
         run: just docker-test
+
+      - name: just docker-first-run-test
+        run: just docker-first-run-test
