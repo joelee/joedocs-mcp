@@ -12,7 +12,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- **A refused address no longer replaces a remembered view.** Opening a Board or Documents address that the server refuses (for example `/admin/board?project=no-such-project` or `/admin/documents?sort=zzz`, both `400`) used to save it as the page's remembered view, so the menu's Board or Documents link kept leading to the error; Documents' error page has no reset link. Now only the Board or Documents page itself remembers its view.
+- **A refused address no longer replaces a remembered view.** Opening a Documents address that the server refuses (for example `/admin/documents?sort=zzz`, `400`) saved it as the remembered view, so the menu's Documents link kept leading to the error page, which has no reset link. Now only the Board or Documents page itself remembers its view, so the Board's new `400` refusals are not remembered either. A Documents view saved this way under 0.5.6-rc.1 stays until you open `/admin/documents` and press **Reset filters**.
 
 ### Security
 
