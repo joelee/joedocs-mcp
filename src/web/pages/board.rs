@@ -14,6 +14,7 @@ use super::super::assets::{self, Urls};
 use super::super::{Session, WebError, WebRequest, WebState, render};
 use super::{Chrome, Section};
 use crate::db::Sort;
+use crate::store::ProjectRow;
 use crate::store::{
     DocumentInfo, ListRequest, MAX_LIST_LIMIT, MAX_SEARCH_LIMIT, SearchRequest, Store,
 };
@@ -47,9 +48,7 @@ struct BoardPage<'a> {
     title: &'a str,
     assets: Urls,
     chrome: Chrome<'a>,
-    projects: Vec<Choice>,
-    types: Vec<Choice>,
-    statuses: Vec<Choice>,
+    panel: Panel,
     view: View,
     refresh_ms: u32,
     preview_ms: u32,
@@ -58,11 +57,46 @@ struct BoardPage<'a> {
     grid: BoardGrid,
 }
 
-/// A checkbox in the filter band.
+/// The most values a type or status group shows as pills; a longer list
+/// is a picker (JD-71 D-08).
+const PILLS_MAX: usize = 12;
+
+/// The filter panel's choices (JD-71).
+struct Panel {
+    projects: Group,
+    types: Group,
+    statuses: Group,
+    /// The statuses lit by default (the open ones), comma-separated.
+    status_default: String,
+    /// How many filters differ from their defaults: the header line's
+    /// chips (Clear all shows from two, JD-71 amendment 03).
+    active: usize,
+    /// The lit statuses are the default, so Open only would do nothing.
+    statuses_at_default: bool,
+    /// Every status is lit, so All would do nothing.
+    statuses_all_lit: bool,
+}
+
+/// One group of the filter panel: projects, types or statuses.
+struct Group {
+    choices: Vec<Choice>,
+    /// A picker rather than pills (projects always; types and statuses
+    /// beyond [`PILLS_MAX`] values).
+    picker: bool,
+    /// Whether any value is ticked: projects and types tick only what the
+    /// address names (none ticked means all).
+    named: bool,
+}
+
+/// A checkbox in the filter panel.
 struct Choice {
     value: String,
     label: String,
     checked: bool,
+    /// Muted text after the label in a picker: a project's name and key.
+    meta: String,
+    /// What the picker's search matches, lower case.
+    search: String,
 }
 
 /// How the grid is grouped and sorted, and whether only lit cards show.
@@ -95,16 +129,7 @@ impl View {
             group: pick("group", &["type", "project", "none"]),
             sort: pick("sort", &["updated", "created", "id"]),
             dir: pick("dir", &["desc", "asc"]),
-            collapsed: request
-                .query_all("collapse")
-                .into_iter()
-                .filter(|key| !key.is_empty())
-                .fold(Vec::new(), |mut keys, key| {
-                    if !keys.iter().any(|k| k == key) {
-                        keys.push(key.to_owned());
-                    }
-                    keys
-                }),
+            collapsed: request.query_list("collapse"),
         }
     }
 }
@@ -119,6 +144,8 @@ struct BoardGrid {
     rows: Vec<Row>,
     /// Whether rows have titles (not when ungrouped).
     titled: bool,
+    /// How many of its documents need attention, folded rows included.
+    lit: usize,
 }
 
 struct Column {
@@ -160,7 +187,9 @@ struct Card {
 /// none means every project, every type, and every status that is not
 /// closed), `attention=1`, `group`, `sort`, `dir`, `collapse` (the keys of
 /// rows folded to one line, any number), `filters=closed` (the Filters
-/// panel shut); `fragment=1` for the grid alone.
+/// panel shut); `fragment=1` for the grid alone. The list keys (`project`,
+/// `type`, `status`, `collapse`) take their values comma-separated
+/// (`project=a,b`), repeated (`project=a&project=b`), or both.
 pub(crate) fn page(
     store: &Store,
     state: &WebState,
@@ -171,19 +200,35 @@ pub(crate) fn page(
     let all_projects = store.projects().map_err(|e| WebError::from_store(&e))?;
     let settings = store.settings();
     let chosen = |key: &str, all: &[String], default: &dyn Fn(&str) -> bool| -> Vec<String> {
-        let asked = request.query_all(key);
+        let asked = request.query_list(key);
         all.iter()
             .filter(|v| {
                 if asked.is_empty() {
                     default(v)
                 } else {
-                    asked.contains(&v.as_str())
+                    asked.contains(v)
                 }
             })
             .cloned()
             .collect()
     };
+    // What the form ticks for projects and types: only the values the
+    // address names, and none when it names none or every one (both mean
+    // all).
+    let named = |key: &str, all: &[String]| -> Vec<String> {
+        let asked = request.query_list(key);
+        let picked: Vec<String> = all.iter().filter(|v| asked.contains(v)).cloned().collect();
+        if picked.len() == all.len() {
+            Vec::new()
+        } else {
+            picked
+        }
+    };
     let project_names: Vec<String> = all_projects.iter().map(|p| p.name.clone()).collect();
+    let unknown = unknown_values(request, &project_names, &settings.types, &settings.statuses);
+    if !unknown.is_empty() {
+        return Err(unknown_refusal(&unknown));
+    }
     let projects = chosen("project", &project_names, &|_| true);
     let types = chosen("type", &settings.types, &|_| true);
     let statuses = chosen("status", &settings.statuses, &|s| {
@@ -201,31 +246,36 @@ pub(crate) fn page(
     if request.query("fragment") == Some("1") {
         return Ok(render(StatusCode::OK, &grid));
     }
-    let choices = |all: &[String], picked: &[String], label: &dyn Fn(&str) -> String| {
-        all.iter()
-            .map(|v| Choice {
-                value: v.clone(),
-                label: label(v),
-                checked: picked.contains(v),
-            })
-            .collect()
-    };
-    let titles: HashMap<&str, &str> = all_projects
+    let status_default: Vec<String> = settings
+        .statuses
         .iter()
-        .map(|p| (p.name.as_str(), p.title.as_str()))
+        .filter(|s| !board.closed_statuses.iter().any(|c| c == *s))
+        .cloned()
         .collect();
+    let panel = Panel {
+        projects: group(
+            &all_projects,
+            &project_names,
+            &named("project", &project_names),
+            true,
+        ),
+        // Only projects have titles: a type or status named like a project
+        // keeps its own name.
+        types: group(&[], &settings.types, &named("type", &settings.types), false),
+        statuses: group(&[], &settings.statuses, &statuses, false),
+        active: usize::from(!named("project", &project_names).is_empty())
+            + usize::from(!named("type", &settings.types).is_empty())
+            + usize::from(statuses != status_default)
+            + usize::from(view.attention_only),
+        statuses_at_default: statuses == status_default,
+        statuses_all_lit: statuses.len() == settings.statuses.len(),
+        status_default: status_default.join(","),
+    };
     let page = BoardPage {
         title: "Board",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Board, ""),
-        projects: choices(&project_names, &projects, &|name| {
-            titles
-                .get(name)
-                .filter(|t| !t.is_empty())
-                .map_or_else(|| name.to_owned(), |t| (*t).to_owned())
-        }),
-        types: choices(&settings.types, &types, &str::to_owned),
-        statuses: choices(&settings.statuses, &statuses, &str::to_owned),
+        panel,
         view,
         refresh_ms: board.refresh_ms,
         preview_ms: board.preview_ms,
@@ -233,6 +283,93 @@ pub(crate) fn page(
         grid,
     };
     Ok(render(StatusCode::OK, &page))
+}
+
+/// The values of the address the Board does not know, as `key: value`:
+/// a `project`, `type` or `status` that is not a project or configured
+/// value, or a `group`, `sort` or `dir` outside its values (JD-71
+/// amendment 02). Empty values are not refusals, nor are `collapse` keys
+/// (a fold may name a row that is not shown) or the flags.
+fn unknown_values(
+    request: &WebRequest,
+    projects: &[String],
+    types: &[String],
+    statuses: &[String],
+) -> Vec<String> {
+    let mut unknown = Vec::new();
+    for (key, known) in [("project", projects), ("type", types), ("status", statuses)] {
+        for value in request.query_list(key) {
+            if !known.contains(&value) {
+                unknown.push(format!("{key}: {value}"));
+            }
+        }
+    }
+    for (key, known) in [
+        ("group", &["type", "project", "none"][..]),
+        ("sort", &["updated", "created", "id"][..]),
+        ("dir", &["desc", "asc"][..]),
+    ] {
+        if let Some(value) = request.query(key).filter(|v| !v.is_empty())
+            && !known.contains(&value)
+        {
+            unknown.push(format!("{key}: {value}"));
+        }
+    }
+    unknown
+}
+
+/// The refusal for an address naming `unknown` values: `400
+/// invalid_argument`, with a link that forgets the remembered Board view.
+fn unknown_refusal(unknown: &[String]) -> WebError {
+    let message = format!(
+        "The Board's address names something it does not know ({}).",
+        unknown.join("; ")
+    );
+    let page = super::ErrorPage {
+        title: "Refused",
+        assets: assets::urls(),
+        status: StatusCode::BAD_REQUEST.as_u16(),
+        message: &message,
+        link: Some(("/admin/board", "Reset the Board's view")),
+        reset_view: Some("board"),
+    };
+    let page = render(StatusCode::BAD_REQUEST, &page);
+    WebError::new(StatusCode::BAD_REQUEST, "invalid_argument", message).with_page(page)
+}
+
+/// A group of the filter panel: a checkbox per value of `all`, ticked when
+/// in `picked`. Projects show their titles, with the name and key in a
+/// picker; values of a group longer than [`PILLS_MAX`] are a picker too.
+fn group(projects: &[ProjectRow], all: &[String], picked: &[String], always_picker: bool) -> Group {
+    let choices = all
+        .iter()
+        .map(|v| {
+            let project = projects.iter().find(|p| &p.name == v);
+            let label = project
+                .map(|p| p.title.as_str())
+                .filter(|t| !t.is_empty())
+                .unwrap_or(v)
+                .to_owned();
+            let key = project.map_or("", |p| p.key.as_str());
+            let meta = match (label == *v, key.is_empty()) {
+                (_, true) => String::new(),
+                (true, false) => key.to_owned(),
+                (false, false) => format!("{v} · {key}"),
+            };
+            Choice {
+                search: format!("{label} {v} {key}").to_lowercase(),
+                value: v.clone(),
+                label,
+                checked: picked.contains(v),
+                meta,
+            }
+        })
+        .collect();
+    Group {
+        choices,
+        picker: always_picker || all.len() > PILLS_MAX,
+        named: !picked.is_empty(),
+    }
 }
 
 /// `GET /admin/board/preview/{id}`: the facts and the opening text of a
@@ -423,6 +560,7 @@ fn grid(
         }
     }
     sort_cards(&mut cards, view);
+    let lit = cards.iter().filter(|c| c.attention.is_some()).count();
     let columns = statuses
         .iter()
         .map(|s| Column {
@@ -466,6 +604,7 @@ fn grid(
         columns,
         rows,
         titled: view.group != "none",
+        lit,
     })
 }
 

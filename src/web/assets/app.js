@@ -125,13 +125,21 @@
   // order as a query string in localStorage (`joedocs-<view>-view`), and
   // the menu links marked `data-remember` lead back to it. An address with
   // a query shows what it says; a bare one shows the defaults. "Reset
-  // filters" forgets the view.
+  // view" (Board) and "Reset filters" (Documents) forget the view. A view
+  // is remembered only from a page with its filter form (`form`), so an
+  // error page at the same address, such as a 400 refusal, leaves the
+  // remembered view alone (JD-74).
   const VIEWS = {
     board: {
       path: "/admin/board",
+      form: "form[data-board-filters]",
       keys: ["project", "type", "status", "attention", "group", "sort", "dir", "collapse", "filters"],
     },
-    documents: { path: "/admin/documents", keys: ["project", "type", "status", "sort", "dir", "limit"] },
+    documents: {
+      path: "/admin/documents",
+      form: "#documents-filters",
+      keys: ["project", "type", "status", "sort", "dir", "limit"],
+    },
   };
   const viewKey = (view) => `joedocs-${view}-view`;
   const storedView = (view) => {
@@ -141,15 +149,27 @@
       return "";
     }
   };
-  // The view's own keys of `params`, without empty values.
-  const viewQuery = (view, params) => {
-    const out = new URLSearchParams();
-    for (const [key, value] of params) {
-      if (VIEWS[view].keys.includes(key) && value !== "") {
-        out.append(key, value);
+  // The view's own keys of a query string, without empty values, copied
+  // as written: a comma-separated list (`status=draft,done`, JD-71) keeps
+  // its commas, which the server splits before decoding.
+  const viewQuery = (view, search) => {
+    const out = [];
+    for (const pair of search.replace(/^\?/, "").split("&")) {
+      const at = pair.indexOf("=");
+      if (at < 1 || at === pair.length - 1) {
+        continue;
+      }
+      let key;
+      try {
+        key = decodeURIComponent(pair.slice(0, at).replace(/\+/g, " "));
+      } catch {
+        continue;
+      }
+      if (VIEWS[view].keys.includes(key)) {
+        out.push(pair);
       }
     }
-    return out.toString();
+    return out.join("&");
   };
   const rememberLinks = () => {
     for (const link of document.querySelectorAll("a[data-remember]")) {
@@ -172,9 +192,10 @@
     }
     rememberLinks();
   };
-  // A page opened with a view in its address remembers it.
-  for (const [view, { path }] of Object.entries(VIEWS)) {
-    const query = location.pathname === path ? viewQuery(view, new URLSearchParams(location.search)) : "";
+  // A view's own page opened with a view in its address remembers it.
+  for (const [view, { path, form }] of Object.entries(VIEWS)) {
+    const own = location.pathname === path && document.querySelector(form);
+    const query = own ? viewQuery(view, location.search) : "";
     if (query) {
       saveView(view, query);
     }
@@ -185,7 +206,7 @@
   document.addEventListener("joedocs:view-changed", (event) => {
     const view = event.detail?.view;
     if (VIEWS[view]) {
-      saveView(view, viewQuery(view, new URLSearchParams(location.search)));
+      saveView(view, viewQuery(view, location.search));
     }
   });
 
@@ -464,7 +485,7 @@
         if (limit) {
           params.set("limit", limit);
         }
-        saveView("documents", viewQuery("documents", params));
+        saveView("documents", viewQuery("documents", params.toString()));
       }
     }
     drawDiagrams(region);

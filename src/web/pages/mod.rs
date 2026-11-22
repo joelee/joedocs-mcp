@@ -34,6 +34,9 @@ pub(crate) struct ErrorPage<'a> {
     pub(crate) message: &'a str,
     /// A link to where the thing can be found instead.
     pub(crate) link: Option<(&'a str, &'a str)>,
+    /// The remembered view the link forgets (`data-reset-view`), e.g.
+    /// `board`.
+    pub(crate) reset_view: Option<&'a str>,
 }
 
 /// A workspace in the navigation.
@@ -181,6 +184,7 @@ pub(crate) fn refused_with_link(error: &crate::store::Error, href: &str, label: 
         status: refusal.status.as_u16(),
         message: &refusal.message,
         link: Some((href, label)),
+        reset_view: None,
     };
     let page = super::render(refusal.status, &page);
     refusal.with_page(page)
