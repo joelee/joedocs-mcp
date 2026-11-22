@@ -227,15 +227,16 @@ docker exec joedocs rm /tmp/joedocs-backup.tgz
 
 Keep the archive private: it holds API key hashes and TOTP secrets.
 
-To restore, start from empty volumes or directories, with the server not running on them, and restore with the same version that made the archive or a newer one:
+To restore, start from empty volumes or directories, with the server not running on them, and restore with the same version that made the archive or a newer one. The archive goes in on standard input, because the container's user cannot read your private copy through a mount:
 
 ```bash
-docker run --rm -v joedocs-vault:/data/vault -v joedocs-state:/data/state \
-  -v "$PWD":/backup:ro joeworks/joedocs:0.5.6-rc.3 \
-  joedocs backup --restore /backup/joedocs-2026-11-22.tgz
+docker run --rm -i -v joedocs-vault:/data/vault -v joedocs-state:/data/state \
+  joeworks/joedocs:0.5.6-rc.3 \
+  sh -c 'cat > /tmp/joedocs-backup.tgz && joedocs backup --restore /tmp/joedocs-backup.tgz' \
+  < joedocs-2026-11-22.tgz
 ```
 
-Then start the server on those volumes as in [section 4](#4-named-volumes). With local directories, mount them instead (and add `--user` as in [section 5](#5-local-directories-for-the-vault-and-state)).
+Then start the server on those volumes as in [section 4](#4-named-volumes); it prints no banner, since the restored store has its users. With local directories, mount them instead, and add `--user` as in [section 5](#5-local-directories-for-the-vault-and-state).
 
 ## 12. Tags and upgrades
 
