@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - **A refused address no longer replaces a remembered view.** Opening a Board or Documents address that the server refuses (for example `/admin/board?project=no-such-project` or `/admin/documents?sort=zzz`, both `400`) used to save it as the page's remembered view, so the menu's Board or Documents link kept leading to the error; Documents' error page has no reset link. Now only the Board or Documents page itself remembers its view.
 
+### Security
+
+- **`url` 2.5.9** (with `form_urlencoded` 1.2.3), for [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592): `url` 2.5.8 could overflow the stack in `Url::origin()` on a URL with deeply nested `blob:` prefixes. `cargo deny` now reports only RUSTSEC-2026-0543 (`chrono`, through `rmcp`).
+
 ## [0.5.6-rc.1] - 2026-11-18
 
 **Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-dev, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. JoeDocs does not use `chrono` itself; it comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474), for [#1469](https://github.com/modelcontextprotocol/rust-sdk/issues/1469); tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, or build it from its tag.
