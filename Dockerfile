@@ -1,7 +1,14 @@
 # syntax=docker/dockerfile:1
 #
-# JoeDocs MCP server image. Build with `docker compose build`; see
-# docs/developer-guide.md ("Running with Docker").
+# JoeDocs MCP server image, with two targets on one runtime stage:
+#
+# - `local`, the default (the last stage), builds joedocs from source.
+#   `docker compose build` and `just docker-test` use it; see
+#   docs/developer-guide.md ("Running with Docker").
+# - `release` copies a prebuilt static binary from dist/linux/<arch>/joedocs:
+#   the musl binaries of a GitHub release, as the release workflow does
+#   (.github/workflows/release.yml, job `image`). For example:
+#   docker buildx build --target release --platform linux/amd64,linux/arm64 .
 
 # The Rust version matches rust-toolchain.toml (which is not copied in, so
 # the image's own toolchain is used without downloading components).
@@ -15,7 +22,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked --bin joedocs \
     && cp target/release/joedocs /usr/local/bin/joedocs
 
-FROM debian:trixie-slim
+# The runtime both targets share. The base is pinned by the digest of its
+# multi-platform index (linux/amd64 and linux/arm64); Dependabot proposes
+# updates (.github/dependabot.yml).
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime
 # git is the history store; JoeDocs runs it with the user's config ignored.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
@@ -23,7 +33,6 @@ RUN apt-get update \
 RUN useradd --system --uid 10001 --create-home --home-dir /home/joedocs joedocs \
     && mkdir -p /data/vault /data/state \
     && chown -R joedocs:joedocs /data
-COPY --from=build /usr/local/bin/joedocs /usr/local/bin/joedocs
 
 USER joedocs
 WORKDIR /data
@@ -40,3 +49,12 @@ HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=5 \
 # `init` is idempotent, so the first start creates the vault, database and
 # history, and later starts only check them.
 CMD ["sh", "-c", "joedocs init && exec joedocs serve"]
+
+# A GitHub release's binary: dist/linux/amd64/joedocs or dist/linux/arm64/joedocs.
+FROM runtime AS release
+ARG TARGETARCH
+COPY --chmod=0755 dist/linux/${TARGETARCH}/joedocs /usr/local/bin/joedocs
+
+# Built from source; the default target, so it stays last.
+FROM runtime AS local
+COPY --from=build /usr/local/bin/joedocs /usr/local/bin/joedocs
