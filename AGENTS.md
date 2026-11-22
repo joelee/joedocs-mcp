@@ -23,6 +23,7 @@ This Rust project targets Linux and macOS and was generated from the team's carg
 | Check the MSRV builds (library profile) | `just msrv` |
 | Start the local Docker Compose stack (data in `.local/data`) | `just docker-up` |
 | Deployment tests against Docker Compose (needs Docker) | `just docker-test` |
+| The image's first run without Compose (needs Docker and network) | `just docker-first-run-test` |
 
 `just ci` runs, in order: `fetch` → `fmt-check` → `lint` → `actionlint` → `plugin-skills` → `coverage` → `doctest` → `doc` → `deny` (licences, bans and sources) → `secrets` → `build`. RustSec advisories run as their own CI check, `just advisories` (`.github/workflows/advisories.yml`): it does not block a merge, but an active advisory blocks a production release (see Security). Never weaken a gate (threshold, lint level, `--locked`) to make it pass.
 
@@ -155,6 +156,7 @@ Follow `docs/AGENTS.md` for documentation rules. The maintained set is:
 - `README.md` (including the chosen MSRV profile and CI platform)
 - `CHANGELOG.md` (Keep a Changelog format)
 - `docs/deployment.md`
+- `docs/docker.md` (the Docker installation guide)
 - `docs/upgrading.md`
 - `docs/reference.md`
 - `docs/skills/` (agent skills that use JoeDocs)

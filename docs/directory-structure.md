@@ -3,14 +3,15 @@
 ```text
 .
 ├── .github/
-│   ├── workflows/ci.yml    just ci on Linux and macOS, and just docker-test
-│   ├── workflows/release.yml  Signed vX.Y.Z tag: checks, CI and binaries, approval, crates.io, tap, GitHub release with binaries
-│   └── dependabot.yml      Weekly action and crate update proposals
+│   ├── workflows/ci.yml    just ci on Linux and macOS, just docker-test and just docker-first-run-test
+│   ├── workflows/release.yml  Signed vX.Y.Z tag: checks, CI and binaries, approval, crates.io, tap, GitHub release with binaries, container images
+│   └── dependabot.yml      Weekly action, crate and Docker base update proposals
 ├── AGENTS.md               Instructions for coding agents
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code
-├── Dockerfile              Two-stage image: build, then debian-slim with git
+├── Dockerfile              Image: a source build (`local`, the default) or a release's binary (`release`), on debian-slim with git
+├── docker/entrypoint.sh    The image's entrypoint: init, the first user and its sign-in banner, then serve
 ├── compose.yaml            Local server; data bind-mounted from .local/data (git-ignored)
-├── .dockerignore           Sends only Cargo.toml, Cargo.lock, src/ and templates/ to the build
+├── .dockerignore           Sends only Cargo.toml, Cargo.lock, src/, templates/, dist/linux/ and docker/ to the build
 ├── CHANGELOG.md            Keep a Changelog
 ├── Cargo.toml              Manifest, MSRV, lint levels
 ├── Cargo.lock              Committed; CI uses --locked
@@ -25,6 +26,7 @@
 ├── scripts/board-drive-showcase.sh  just board-drive-showcase: the Board showcase on its own store, .local/showcase (git-ignored)
 ├── scripts/scratch-lib.sh     Shell functions the scratch scripts share (sourced)
 ├── scripts/sync-plugin-skills.sh  Regenerates plugins/joedocs/skills from docs/skills (--check fails on drift)
+├── scripts/docker-first-run-test.sh  just docker-first-run-test: the image's first run without Compose
 ├── .claude-plugin/marketplace.json  Claude Code plugin marketplace catalog (/plugin marketplace add)
 ├── plugins/joedocs/        The Claude Code plugin: .claude-plugin/plugin.json, .mcp.json, and skills/ (generated, do not edit)
 ├── examples/scratch_seed.rs   The scratch server's sample data, written over MCP (not published)

@@ -96,6 +96,17 @@ gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber 
 
 Each step runs only if the one before it succeeded, so a failed download, checksum or attestation stops before anything is installed. `gh attestation verify` checks that the archive was built by this repository's release workflow. `~/.local/bin` must be on your `PATH`. Without `gh`, download the archive and `SHA256SUMS` from the release page and run the `shasum` line; if it reports anything but `OK`, do not install the archive.
 
+**Docker** (from 0.5.6-rc.3; `linux/amd64` and `linux/arm64`, on Docker Hub and GHCR):
+
+```bash
+docker run -d --name joedocs -p 127.0.0.1:8750:8750 \
+  -v joedocs-vault:/data/vault -v joedocs-state:/data/state \
+  joeworks/joedocs:0.5.6-rc.3
+docker logs joedocs      # the web interface's address, the user admin and a one-time password
+```
+
+The first start creates the store and the user `admin`, and prints how to sign in. The image needs nothing else on your machine; the [Docker installation guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/docker.md) covers local directories for the data, configuration, HTTPS, Compose, backups and upgrades.
+
 **Linux or macOS** (Cargo, Rust 1.99 or newer and a C compiler):
 
 ```bash
@@ -201,7 +212,7 @@ Planned:
 - The research workflow skills out of beta (shipped as beta in 0.5.6: a coordinator, a scout, a writer and a critic, with your approval at each checkpoint), after a live trial.
 - More agent skills: decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
-- More ways to install: `cargo binstall joedocs` (the release binaries, no compiling), an Arch Linux AUR package `joedocs-bin`, and a container image on GitHub Container Registry, published with each release.
+- More ways to install: `cargo binstall joedocs` (the release binaries, no compiling) and an Arch Linux AUR package `joedocs-bin`.
 
 Further out:
 
@@ -219,6 +230,7 @@ The detailed backlog is kept in JoeDocs itself, as a multi-file document; what h
 ## Documentation
 
 - [Deployment guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/deployment.md): Linux, macOS, Docker, remote access, managing from another machine
+- [Docker installation](https://github.com/joelee/joedocs-mcp/blob/main/docs/docker.md): the published image, volumes and local directories, configuration, Compose, backups, upgrades
 - [Upgrading](https://github.com/joelee/joedocs-mcp/blob/main/docs/upgrading.md): backing up, each install method, going back, notes for each version
 - [Reference](https://github.com/joelee/joedocs-mcp/blob/main/docs/reference.md): commands, MCP tools, search syntax, front matter, errors
 - [Configuration](https://github.com/joelee/joedocs-mcp/blob/main/docs/configuration.md): every key, its default and its environment override
@@ -242,5 +254,5 @@ See the [developer guide](https://github.com/joelee/joedocs-mcp/blob/main/docs/d
 | Item | Value |
 | --- | --- |
 | MSRV profile | application (see `AGENTS.md`) |
-| CI platform | GitHub Actions ([`ci.yml`](https://github.com/joelee/joedocs-mcp/blob/main/.github/workflows/ci.yml): `just ci` on Linux and macOS, and `just docker-test`) |
+| CI platform | GitHub Actions ([`ci.yml`](https://github.com/joelee/joedocs-mcp/blob/main/.github/workflows/ci.yml): `just ci` on Linux and macOS, `just docker-test` and `just docker-first-run-test`) |
 | Licence | [Apache-2.0](https://github.com/joelee/joedocs-mcp/blob/main/LICENSE) |

@@ -50,7 +50,7 @@ This installs `cargo-nextest`, `cargo-llvm-cov` and `cargo-deny`, normalises `Ca
 
 ## Running with Docker
 
-`compose.yaml` runs `joedocs serve` in a container, with the web interface on. On start, the image's entrypoint (`docker/entrypoint.sh`) runs `joedocs init` (which does nothing once initialised); on a store with no users it creates the user `admin` and prints its one-time password, once (`docker compose logs`). The vault and the state are bind-mounted from `.local/data` (git-ignored), so they persist across rebuilds and you can inspect them on the host:
+`compose.yaml` runs `joedocs serve` in a container, with the web interface on. On start, the image's entrypoint (`docker/entrypoint.sh`) runs `joedocs init` (which does nothing once initialised); on a store with no users it creates the user `admin` and prints its one-time password, once (`docker compose logs`); [docker.md](docker.md) describes the published image for users. The vault and the state are bind-mounted from `.local/data` (git-ignored), so they persist across rebuilds and you can inspect them on the host:
 
 ```text
 .local/data/

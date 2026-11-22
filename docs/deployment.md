@@ -22,7 +22,7 @@ flowchart LR
 | macOS | `brew trust joelee/oss && brew tap joelee/oss && brew install joelee/oss/joedocs` |
 | Linux or macOS | A prebuilt binary from [GitHub Releases](https://github.com/joelee/joedocs-mcp/releases) (0.4.3 or later; below) |
 | Linux or macOS | `cargo install joedocs --locked` (Rust 1.99 or newer and a C compiler; installs to `~/.cargo/bin`) |
-| Docker | Build from a clone with the `Dockerfile` and `compose.yaml` (see the [developer guide](developer-guide.md#running-with-docker)) |
+| Docker | `docker run -d --name joedocs -p 127.0.0.1:8750:8750 -v joedocs-vault:/data/vault -v joedocs-state:/data/state joeworks/joedocs:0.5.6-rc.3` (from 0.5.6-rc.3, on Docker Hub and `ghcr.io/joelee/joedocs`; see the [Docker installation guide](docker.md)) |
 
 JoeDocs needs `git` at run time (`sudo pacman -S git`, `sudo apt install git`, or the Xcode Command Line Tools on macOS).
 
@@ -118,7 +118,9 @@ It reads `~/.config/joedocs/config.toml` like any other run. After changing the 
 
 ### Docker
 
-`compose.yaml` runs the server in a container with the vault and state bind-mounted from `.local/data`. It is meant for local trials and the deployment tests; see the [developer guide](developer-guide.md#running-with-docker).
+The published image (`joeworks/joedocs`, `ghcr.io/joelee/joedocs`) runs the server with `--restart unless-stopped` or under Compose, and sets up a standalone server on its first start: the store, the web interface, and the user `admin` with a one-time password in `docker logs`. The [Docker installation guide](docker.md) covers volumes and local directories, configuration, ports and HTTPS, Compose, keys, backups and upgrades. Inside the container, run admin commands with `docker exec joedocs joedocs ...`.
+
+The repository's own `compose.yaml` builds the image from source, with the vault and state bind-mounted from `.local/data`. It is meant for development and the deployment tests; see the [developer guide](developer-guide.md#running-with-docker).
 
 ## 5. Reach it from other machines
 
@@ -217,7 +219,7 @@ The admin commands can also run from another machine, through the server's admin
    session_hours = 8    # how long a login lasts
    ```
 
-2. On the server, create your user (with Docker: `docker compose exec joedocs joedocs user create alice`):
+2. On the server, create your user (with Docker: `docker exec joedocs joedocs user create alice`; the image creates `admin` on its first start):
 
    ```bash
    joedocs user create alice
