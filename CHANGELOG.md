@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Code plugin.** The repository is now a Claude Code plugin marketplace: `/plugin marketplace add joelee/joedocs-mcp`, then `/plugin install joedocs@joedocs`. The plugin connects Claude Code to a JoeDocs server (`JOEDOCS_URL`, default `http://127.0.0.1:8750/mcp`, and `JOEDOCS_API_KEY`) and bundles the `docs/skills` skills. `scripts/sync-plugin-skills.sh` regenerates the bundled copy; `--check` fails when it is stale. The plugin has no version of its own, so installed copies pick up each change on `main` when Claude Code updates the marketplace. Use the plugin or a manual setup (`claude mcp add` and copied skill folders), not both.
+
 ## [0.5.6-rc.2] - 2026-11-22
 
 **Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-rc.1, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. It comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474); tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, or build it from its tag.

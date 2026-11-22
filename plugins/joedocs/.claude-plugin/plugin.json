@@ -1,0 +1,9 @@
+{
+  "name": "joedocs",
+  "description": "Connect Claude Code to a JoeDocs server and use its delivery-workflow skills",
+  "repository": "https://github.com/joelee/joedocs-mcp",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Joe Lee"
+  }
+}

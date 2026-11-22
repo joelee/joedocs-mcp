@@ -49,6 +49,20 @@ The research skills (beta) are the exception: you talk to `joedocs-research-coor
 
 ## Install
 
+**As a Claude Code plugin.** The repository is a Claude Code plugin marketplace. Its `joedocs` plugin connects Claude Code to your JoeDocs server and brings every skill below, so you can skip steps 1 and 2. Set `JOEDOCS_API_KEY` (and `JOEDOCS_URL` if the server is not at `http://127.0.0.1:8750/mcp`) in the environment Claude Code starts from, then:
+
+```text
+/plugin marketplace add joelee/joedocs-mcp
+/plugin install joedocs@joedocs
+```
+
+From the plugin, the skills are named `joedocs:joedocs-planner` and so on, and the tools `mcp__plugin_joedocs_joedocs__*`. The plugin follows the repository's `main` branch and has no version of its own, so installed copies pick up each change there when Claude Code updates the marketplace.
+
+> [!warning] Use the plugin or a manual setup, not both
+> Installed on top of a manual setup (a `joedocs` server added with `claude mcp add` and skill folders in `~/.claude/skills` or `.claude/skills`), the plugin gives you two JoeDocs servers and two copies of every skill. Remove one: `claude mcp remove joedocs` and the copied `joedocs-*` folders, or `/plugin uninstall joedocs@joedocs`.
+
+**By hand**, for Claude Code without the plugin or for another agent harness:
+
 1. Connect Claude Code to your JoeDocs server under the name `joedocs` (see the [deployment guide](../deployment.md#6-connect-clients)). The skills call the tools as `mcp__joedocs__*`. If you used another name, change the `allowed-tools` lists to match.
 2. Copy the skill folders into your skills directory, for every project on the machine:
 
