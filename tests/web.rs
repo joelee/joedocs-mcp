@@ -4948,34 +4948,33 @@ async fn the_board_and_documents_remember_their_view_and_offer_a_reset() -> Test
             ("/admin/documents".to_owned(), "documents".to_owned()),
         ]
     );
-    // Each page has a visible Reset filters button for its own view, and
-    // the Board's menu item resets the same way.
-    for (path, view) in [("/admin/board", "board"), ("/admin/documents", "documents")] {
-        let page = server.get(path, Some(&cookie)).await?;
-        let resets: Vec<Tag> = tags(&page.body)
-            .into_iter()
-            .filter(|t| t.get("data-reset-view") == Some(view))
-            .collect();
-        let button = resets
-            .iter()
-            .find(|t| t.name == "button")
-            .ok_or("no Reset filters button")?;
-        assert_eq!(button.get("type"), Some("button"), "{path}");
-        assert!(
-            page.body.contains(&format!(
-                "data-reset-view=\"{view}\">Reset filters</button>"
-            )),
-            "{path}"
-        );
-        if view == "board" {
-            assert!(
-                resets
-                    .iter()
-                    .any(|t| t.name == "a" && t.get("href") == Some("/admin/board")),
-                "the Board actions item resets too"
-            );
-        }
-    }
+    // Documents has a visible Reset filters button for its view; the Board
+    // has one reset, its actions menu's Reset view (JD-71 amendment 03).
+    let page = server.get("/admin/documents", Some(&cookie)).await?;
+    let button = tags(&page.body)
+        .into_iter()
+        .find(|t| t.name == "button" && t.get("data-reset-view") == Some("documents"))
+        .ok_or("no Reset filters button")?;
+    assert_eq!(button.get("type"), Some("button"));
+    assert!(
+        page.body
+            .contains("data-reset-view=\"documents\">Reset filters</button>")
+    );
+    let board = server.get("/admin/board", Some(&cookie)).await?;
+    let resets: Vec<Tag> = tags(&board.body)
+        .into_iter()
+        .filter(|t| t.get("data-reset-view") == Some("board"))
+        .collect();
+    assert_eq!(resets.len(), 1, "one Board reset");
+    assert_eq!(resets[0].name, "a");
+    assert_eq!(resets[0].get("href"), Some("/admin/board"));
+    assert!(
+        board
+            .body
+            .contains("href=\"/admin/board\" data-reset-view=\"board\">Reset view</a>")
+    );
+    assert!(!board.body.contains("Reset filters"));
+    assert!(!board.body.contains("Reset the filters"));
     server.stop().await
 }
 
@@ -5527,12 +5526,14 @@ async fn the_board_filter_panel_has_a_header_line_pills_and_a_picker() -> TestRe
         "name=\"group\" value=\"type\" checked",
         "name=\"dir\" value=\"desc\" checked",
         "<select name=\"sort\"",
-        "data-reset-view=\"board\"",
     ] {
         let at = body.find(control).ok_or(control)?;
         assert!(bar < at && at < panel, "{control} on the header line");
     }
     assert!(body.contains("type=\"radio\" name=\"group\""));
+    // No reset on the header line: the actions menu has it (amendment 03).
+    let reset = body.find("data-reset-view").ok_or("no reset")?;
+    assert!(reset > panel, "the reset is not on the header line");
     // They sit in a popover behind one compact View button that names the
     // view (JD-71 amendment 01, as JD-70's Tab D).
     let opener = find(body, "data-view-open").ok_or("no View button")?;
@@ -5579,7 +5580,7 @@ async fn the_board_filter_panel_has_a_header_line_pills_and_a_picker() -> TestRe
     assert_eq!(all.get("aria-pressed"), Some("true"));
     assert!(body.contains("class=\"pill st-review\""));
     assert!(body.contains("data-filter-default=\"draft,review,approved,parked\""));
-    assert!(body.contains("data-pills-default>Open only<"));
+    assert!(body.contains(">Open only<"));
     // The attention switch.
     assert!(body.contains("role=\"switch\" name=\"attention\" value=\"1\""));
     // Filters in force: the count, Clear all, the All pill released, and
@@ -5601,6 +5602,80 @@ async fn the_board_filter_panel_has_a_header_line_pills_and_a_picker() -> TestRe
         Some("false")
     );
     assert!(chosen.body.contains(">Add or remove projects<"));
+    server.stop().await
+}
+
+#[tokio::test]
+async fn status_shortcuts_and_clear_all_show_only_when_they_do_something() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &'static str| {
+        let (server, cookie) = (&server, cookie.clone());
+        async move {
+            server
+                .get(&format!("/admin/board?{query}"), Some(&cookie))
+                .await
+        }
+    };
+    let find = |body: &str, attribute: &str| -> Option<Tag> {
+        tags(body).into_iter().find(|t| t.get(attribute).is_some())
+    };
+    // Status shortcuts show only when they would change something, and
+    // Clear all only from two chips (amendment 03, as JD-70 option E).
+    let hidden = |body: &str, attribute: &str| -> Result<bool, String> {
+        Ok(find(body, attribute)
+            .ok_or_else(|| attribute.to_owned())?
+            .get("hidden")
+            .is_some())
+    };
+    let bare = get("").await?;
+    let body = &bare.body;
+    assert!(
+        hidden(body, "data-pills-default")?,
+        "Open only at the default"
+    );
+    assert!(!hidden(body, "data-pills-every")?);
+    assert!(!hidden(body, "data-pills-tools")?);
+    let every = get("status=draft,review,approved,parked,done,rejected,superseded").await?;
+    assert!(!hidden(&every.body, "data-pills-default")?);
+    assert!(
+        hidden(&every.body, "data-pills-every")?,
+        "All with every status"
+    );
+    let done = get("status=done").await?;
+    assert!(!hidden(&done.body, "data-pills-default")?);
+    assert!(!hidden(&done.body, "data-pills-every")?);
+    for (query, shown) in [
+        ("type=plans", false),
+        ("status=done", false),
+        ("type=plans&attention=1", true),
+        ("project=beta&type=plans&status=done&attention=1", true),
+    ] {
+        let page = get(query).await?;
+        assert_eq!(!hidden(&page.body, "data-filter-clear")?, shown, "{query}");
+    }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn status_shortcuts_hide_when_nothing_is_closed() -> TestResult<()> {
+    // An empty list falls back to the default, so a list naming no known
+    // status is what closes nothing: every status is then the default, and
+    // Open only and All would both do nothing.
+    let server = start_full(
+        |config| config.documents.closed_statuses = vec!["no-such-status".to_owned()],
+        board_fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let page = server.get("/admin/board", Some(&cookie)).await?;
+    for attribute in ["data-pills-tools", "data-pills-default", "data-pills-every"] {
+        let tag = tags(&page.body)
+            .into_iter()
+            .find(|t| t.get(attribute).is_some())
+            .ok_or(attribute)?;
+        assert!(tag.get("hidden").is_some(), "{attribute} hidden");
+    }
     server.stop().await
 }
 
@@ -5673,6 +5748,8 @@ async fn the_board_refuses_unknown_filter_values() -> TestResult<()> {
         "{}",
         page.body
     );
+    // askama escapes the apostrophe.
+    assert!(page.body.contains(">Reset the Board&#39;s view</a>"));
     // Empty parts and unknown fold keys are not refusals.
     for query in [
         "project=",

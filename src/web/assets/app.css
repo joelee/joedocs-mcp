@@ -550,7 +550,6 @@ main:has(.board-page) { max-width: none; }
 .fview { display: grid; gap: var(--space-1); justify-items: start; min-width: 0; margin: 0; padding: 0; border: 0; }
 .fview-cap { padding: 0; color: var(--muted); font-size: var(--text-sm); font-weight: 600; }
 .fview select { min-width: 12rem; min-height: 2rem; padding: var(--space-1) var(--space-2); font-size: var(--text-sm); }
-.fbar-reset { padding: var(--space-1) var(--space-3); min-height: 2rem; font-size: var(--text-sm); }
 .fpanel { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); }
 .fpanel[hidden] { display: none; }
 .frow { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: var(--space-2); align-items: start; }

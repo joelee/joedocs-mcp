@@ -40,7 +40,7 @@
   <div class="fbar" data-filter-bar>
     <button type="button" class="fbar-toggle" aria-expanded="{% if view.filters_closed %}false{% else %}true{% endif %}" aria-controls="board-filter-panel" data-filter-toggle><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"/></svg> <span class="fbar-title">Filters</span> <span class="fbar-count" data-filter-count{% if panel.active == 0 %} hidden{% endif %}>{{ panel.active }}</span></button>
     <div class="fbar-chips" role="group" aria-label="Active filters" data-filter-chips></div>
-    <button type="button" class="link" data-filter-clear{% if panel.active == 0 %} hidden{% endif %}>Clear all</button>
+    <button type="button" class="link" data-filter-clear{% if panel.active < 2 %} hidden{% endif %}>Clear all</button>
     <div class="fbar-view" data-view-menu>
       <button type="button" class="fbtn" aria-expanded="false" aria-controls="bf-view" data-view-open><span class="fbtn-facet">View</span> <span class="fbtn-value" data-view-summary>{% if view.group == "none" %}No rows{% else %}Rows by {{ view.group }}{% endif %} · {% if view.sort == "created" %}Created{% else if view.sort == "id" %}Document ID{% else %}Last updated{% endif %} {% if view.dir == "asc" %}↑{% else %}↓{% endif %}</span><span class="caret" aria-hidden="true"></span></button>
       <div class="picker-pop view-pop" id="bf-view" popover role="dialog" aria-label="View" data-view-pop>
@@ -68,7 +68,6 @@
         </div>
         <div class="picker-foot"><button type="button" data-view-done>Done</button></div>
       </div>
-      <button type="button" class="secondary fbar-reset" data-reset-view="board">Reset filters</button>
     </div>
   </div>
   <div class="fpanel" id="board-filter-panel" data-filter-panel{% if view.filters_closed %} hidden{% endif %}>
@@ -90,7 +89,7 @@
       <div class="fbody">{% if panel.statuses.picker %}{% call picker("status", "statuses", panel.statuses.choices, true, "Open statuses", panel.status_default) %}{% endcall %}{% else %}
         <div class="pills" data-filter-pills>
           {% for choice in panel.statuses.choices %}<label class="pill st-{{ choice.value }}" for="bf-status-{{ choice.value }}"><input type="checkbox" name="status" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="bf-status-{{ choice.value }}">{{ choice.label }}</label>{% endfor %}
-          <span class="pills-tools"><button type="button" class="link" data-pills-default>Open only</button> <button type="button" class="link" data-pills-every>All</button></span>
+          <span class="pills-tools" data-pills-tools{% if panel.statuses_at_default && panel.statuses_all_lit %} hidden{% endif %}><button type="button" class="link" data-pills-default{% if panel.statuses_at_default %} hidden{% endif %}>Open only</button> <button type="button" class="link" data-pills-every{% if panel.statuses_all_lit %} hidden{% endif %}>All</button></span>
         </div>{% endif %}
       </div>
     </div>
@@ -122,7 +121,7 @@
 </div>
 <div class="board-menu" id="board-actions-menu" popover role="menu" aria-label="Board actions" data-board-actions-menu>
   <button type="button" role="menuitem" data-board-act="copy-link">Copy link to this board (with its filters)</button>
-  <a role="menuitem" href="/admin/board" data-reset-view="board">Reset the filters</a>
+  <a role="menuitem" href="/admin/board" data-reset-view="board">Reset view</a>
 </div>
 <div class="board-preview" id="board-preview" popover="manual" data-board-preview></div>
 </div>

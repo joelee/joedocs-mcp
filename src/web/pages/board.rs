@@ -68,8 +68,13 @@ struct Panel {
     statuses: Group,
     /// The statuses lit by default (the open ones), comma-separated.
     status_default: String,
-    /// How many filters differ from their defaults.
+    /// How many filters differ from their defaults: the header line's
+    /// chips (Clear all shows from two, JD-71 amendment 03).
     active: usize,
+    /// The lit statuses are the default, so Open only would do nothing.
+    statuses_at_default: bool,
+    /// Every status is lit, so All would do nothing.
+    statuses_all_lit: bool,
 }
 
 /// One group of the filter panel: projects, types or statuses.
@@ -262,6 +267,8 @@ pub(crate) fn page(
             + usize::from(!named("type", &settings.types).is_empty())
             + usize::from(statuses != status_default)
             + usize::from(view.attention_only),
+        statuses_at_default: statuses == status_default,
+        statuses_all_lit: statuses.len() == settings.statuses.len(),
         status_default: status_default.join(","),
     };
     let page = BoardPage {
@@ -323,7 +330,7 @@ fn unknown_refusal(unknown: &[String]) -> WebError {
         assets: assets::urls(),
         status: StatusCode::BAD_REQUEST.as_u16(),
         message: &message,
-        link: Some(("/admin/board", "Reset the Board's filters")),
+        link: Some(("/admin/board", "Reset the Board's view")),
         reset_view: Some("board"),
     };
     let page = render(StatusCode::BAD_REQUEST, &page);
