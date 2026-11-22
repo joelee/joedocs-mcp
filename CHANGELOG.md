@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.6-rc.2] - 2026-11-22
+
+**Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-rc.1, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. It comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474); tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, or build it from its tag.
+
+A modern Filters panel for the Board: a searchable project picker, pills for types and statuses, a compact View menu and shorter addresses. Unknown filter values are refused, and a refused address no longer replaces a remembered view. The configuration, MCP tools, admin API and database are unchanged.
+
 ### Changed
 
 - **A new Board Filters panel.** The rows of checkboxes are replaced. Projects are picked from a list with a search box, **Select all**, **Clear** and **Only**, and show as chips. Types and statuses are pills, with an **All** pill for types and **Open only** and **All** for statuses, each shown only while it would change something. "Only needing attention" is a switch that counts the documents needing attention. The panel's header line shows the filters in force as chips you can remove, **Clear all** (with two or more chips), and the grouping, sort and order, whether the panel is open or folded. Nothing chosen means all, so projects created later appear unless you chose projects by name. A type or status list longer than 12 values uses the searchable list instead of pills.
@@ -337,7 +343,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.1...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.2...HEAD
+[0.5.6-rc.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.1...v0.5.6-rc.2
 [0.5.6-rc.1]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-dev...v0.5.6-rc.1
 [0.5.6-dev]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...v0.5.6-dev
 [0.5.5]: https://github.com/joelee/joedocs-mcp/compare/v0.5.4...v0.5.5
