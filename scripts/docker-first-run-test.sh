@@ -100,7 +100,10 @@ check_image() {
     docker run -d --label "$run" --name "$name-alice" -e JOEDOCS_INITIAL_ADMIN=alice "$image" >/dev/null
     wait_healthy "$name-alice"
     [ "$(users "$name-alice")" = alice ] || fail "JOEDOCS_INITIAL_ADMIN=alice did not create alice alone"
-    docker logs "$name-alice" 2>/dev/null | grep -q '^   User:      alice$' || fail "the banner does not name alice"
+    # Read the logs whole first: `docker logs | grep -q` fails under
+    # pipefail when grep exits before docker logs finishes (SIGPIPE, 141).
+    logs="$(docker logs "$name-alice" 2>/dev/null)"
+    grep -q '^   User:      alice$' <<<"$logs" || fail "the banner does not name alice"
     echo "ok: JOEDOCS_INITIAL_ADMIN=alice creates alice"
 
     docker rm -f -v "$name" "$name-off" "$name-alice" >/dev/null

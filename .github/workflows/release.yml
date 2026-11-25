@@ -447,8 +447,9 @@ jobs:
             sleep 1
           done
           [ "$status" = healthy ] || fail "the container is $status after 60 s, not healthy"
-          docker logs smoke 2>/dev/null | grep -q 'JoeDocs is ready' || fail "no first-run banner"
-          docker logs smoke 2>/dev/null | grep -q '^   User:      admin$' || fail "the banner names no user admin"
+          logs="$(docker logs smoke 2>/dev/null)"
+          grep -q 'JoeDocs is ready' <<<"$logs" || fail "no first-run banner"
+          grep -q '^   User:      admin$' <<<"$logs" || fail "the banner names no user admin"
           docker rm -f -v smoke
 
       - name: Build both platforms (not pushed)
