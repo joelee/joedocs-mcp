@@ -1,7 +1,11 @@
-# Only Cargo.toml, Cargo.lock, src/ and templates/ (the web interface's
-# Askama templates) are needed to build the image.
+# An allow-list. The source build (the default `local` target) needs
+# Cargo.toml, Cargo.lock, src/ and templates/ (the web interface's Askama
+# templates); the `release` target needs the prebuilt binaries in
+# dist/linux/<arch>/; both need docker/ (the entrypoint script).
 *
 !Cargo.toml
 !Cargo.lock
 !src/
 !templates/
+!dist/linux/
+!docker/

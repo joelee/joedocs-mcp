@@ -81,6 +81,23 @@ async fn health_needs_no_key() {
     );
 }
 
+/// The image turns the web interface on (`JOEDOCS__ADMIN__WEB_UI=true`),
+/// so its sign-in page answers.
+#[tokio::test]
+#[ignore = "needs a running server; run `just docker-test`"]
+async fn the_web_interface_sign_in_page_answers() {
+    let t = target().unwrap();
+    let request = format!(
+        "GET /admin/login HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        t.authority
+    );
+    assert_eq!(
+        status(&t.authority, &request).await.unwrap(),
+        200,
+        "{IGNORED}"
+    );
+}
+
 #[tokio::test]
 #[ignore = "needs a running server; run `just docker-test`"]
 async fn requests_without_a_valid_key_are_refused() {

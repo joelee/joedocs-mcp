@@ -23,6 +23,9 @@ JOEDOCS() { joedocs "$@"; }
 
 # Docker Compose: in the container (use `docker compose run --rm joedocs joedocs "$@"` while it is stopped)
 JOEDOCS() { docker compose exec joedocs joedocs "$@"; }
+
+# Docker, a container named joedocs (docs/docker.md)
+JOEDOCS() { docker exec joedocs joedocs "$@"; }
 ```
 
 A systemd unit written by `joedocs systemd install` pins its configuration in `Environment=` lines: the config file in use (`JOEDOCS_CONFIG_FILE`), every override given at install time, and the absolute storage paths (`JOEDOCS__STORAGE__HOME`, `JOEDOCS__STORAGE__STATE_DIR`). Overrides take precedence over any config file, so a plain `joedocs` (or one with `--config`) can read a different store than the service does, and back up the wrong one. `systemctl show` works whether the unit is running or stopped. It prints the values separated by spaces, so a value that holds a space makes `env` fail (`No such file or directory`); then copy the `Environment=` lines from `systemctl cat joedocs` (`--user` for a user unit) into the `env` command by hand. Check the result with `JOEDOCS config show`: `storage.home` and `storage.state_dir` must come from the environment and match the unit.
@@ -32,7 +35,8 @@ A systemd unit written by `joedocs systemd install` pins its configuration in `E
 | systemd user unit | `JOEDOCS config show`, or the `JOEDOCS__STORAGE__*` lines in `systemctl --user cat joedocs` | `systemctl --user stop joedocs` | `systemctl --user is-active joedocs` prints `inactive` | `systemctl --user start joedocs` |
 | systemd system unit | `JOEDOCS config show`, or the `JOEDOCS__STORAGE__*` and `ReadWritePaths=` lines in `systemctl cat joedocs` | `sudo systemctl stop joedocs` | `systemctl is-active joedocs` prints `inactive` | `sudo systemctl start joedocs` |
 | Homebrew | `joedocs config show` | `brew services stop joedocs` | `brew services info joedocs` shows it is not running | `brew services start joedocs` |
-| Docker Compose | on the host, `$JOEDOCS_DATA/vault` and `$JOEDOCS_DATA/state` (default `./.local/data`), mounted at `/data/vault` and `/data/state` | `docker compose stop joedocs` | `docker compose ps joedocs` shows no running container | `docker compose up -d` |
+| Docker Compose | the volumes or directories mounted at `/data/vault` and `/data/state` (`$JOEDOCS_DATA/vault` and `$JOEDOCS_DATA/state` for this repository's `compose.yaml`, default `./.local/data`) | `docker compose stop joedocs` | `docker compose ps joedocs` shows no running container | `docker compose up -d` |
+| Docker | the volumes or directories mounted at `/data/vault` and `/data/state` (`docker inspect -f '{{json .Mounts}}' joedocs`) | `docker stop joedocs` | `docker ps --filter name=joedocs` lists nothing | `docker start joedocs` |
 
 Below, `<storage.home>` and `<storage.state_dir>` are the service's directories from the table.
 
@@ -46,7 +50,7 @@ Some versions add a database migration, and an older JoeDocs refuses a database 
 JOEDOCS backup ~/joedocs-before-upgrade-$(date +%F).tgz
 ```
 
-The file is written by the account the service runs as, so with a system unit or Docker, `~` (your home) is the wrong place. For a system unit, write it into the service's state directory (`JOEDOCS backup <storage.state_dir>/before-upgrade.tgz`) and move it out with `sudo mv`. With Docker, write it under the mounted state directory (`JOEDOCS backup /data/state/before-upgrade.tgz`), then move it out of `$JOEDOCS_DATA/state` on the host.
+The file is written by the account the service runs as, so with a system unit or Docker, `~` (your home) is the wrong place. For a system unit, write it into the service's state directory (`JOEDOCS backup <storage.state_dir>/before-upgrade.tgz`) and move it out with `sudo mv`. With Docker, write it in the container and copy it out: `JOEDOCS backup /tmp/before-upgrade.tgz && docker cp joedocs:/tmp/before-upgrade.tgz .` (with Compose, `docker compose cp`), or under a bind-mounted state directory (`JOEDOCS backup /data/state/before-upgrade.tgz`), then move it out on the host.
 
 **On 0.2.x and older**, which have no `backup` command, the service must be stopped first, or the database, history and vault in the archive may come from different moments. Stop it with the command for your install, check that it has stopped, then archive both of the service's directories:
 
@@ -65,7 +69,8 @@ For a system unit, run `tar` with `sudo` so it can read the service account's fi
 | Prebuilt binary (0.4.3 or later) | Download and check the new archive as in the [install guide](deployment.md#1-install), then install it over the old file (`install -m 0755 joedocs <the old path>`). Rerun `joedocs systemd install` only if the path changed, for example when moving from `~/.cargo/bin` to `~/.local/bin`. |
 | `cargo install`, systemd system unit | `sudo cargo install joedocs --locked --root /usr/local` (or wherever the unit's `ExecStart` points) |
 | Homebrew | `brew update && brew upgrade joedocs` |
-| Docker Compose | `docker compose pull` (or `docker compose build` for a local image) |
+| Docker Compose | Set the new tag in `image:`, then `docker compose pull && docker compose up -d` (this repository's `compose.yaml`: `docker compose build`, then `docker compose up -d`) |
+| Docker | `docker pull joeworks/joedocs:NEW`, `docker rm -f joedocs`, then `docker run` the new tag with the same volumes and options ([Docker installation](docker.md#12-tags-and-upgrades)); a container with anonymous volumes needs a backup and restore instead |
 
 Then start the service again with the command in the table (or restart it, if you did not stop it for the backup). `cargo install` builds from source and needs the Rust version in the [install guide](deployment.md#1-install). The unit does not need reinstalling: `joedocs systemd install` pins the configuration, and `cargo install` replaces the binary at the same path. Rerun `joedocs systemd install` only if the binary moved.
 
@@ -108,6 +113,7 @@ Changes made after the backup are lost, so go back soon or not at all.
 - **A second stream through a reverse proxy (0.5.6-rc.1):** a document's latest revision keeps a stream open at `/admin/documents/{id}/stream`, sent like the Board's (`X-Accel-Buffering: no`, a comment line every 15 seconds), so the proxy rule for `/admin/board/stream` in 0.5.5 applies to it too. Board and document pages share the 32 open streams.
 - **The Board** also shows 🏗️ for plans whose `implementation_status` is `waiting-for-user` or `fixing`.
 - **Board addresses (0.5.6-rc.2):** several values of `project`, `type`, `status` or `collapse` are now one comma-separated key, and values at their defaults are left out. Links and remembered views in the old repeated-key form still work, and are rewritten at your next change. An address naming an unknown project, type or status, or an unknown `group`, `sort` or `dir`, is now refused with `400`, and its page offers **Reset the Board's view**. Going back to an older version reads a comma-separated value as one name, so a Board link with several values written by 0.5.6-rc.2 filters to nothing there; open the bare `/admin/board`. The Board's **Reset filters** button is now **Reset view** in its actions menu.
+- **Container images (0.5.6-rc.3):** each release now publishes `joeworks/joedocs` and `ghcr.io/joelee/joedocs` ([Docker installation](docker.md)); a pre-release gets only its exact version tag, never `latest`. The image's defaults are new, and apply to this repository's `compose.yaml` too: the admin API and web interface are on (`JOEDOCS__ADMIN__ENABLED` and `JOEDOCS__ADMIN__WEB_UI`, still reachable only through the loopback port it publishes), and on a store with **no users** the first start creates the user `admin` and prints its one-time password in the logs (`JOEDOCS_INITIAL_ADMIN=` turns that off). A store that has users is left as it is. The container's command is now the entrypoint `docker-entrypoint.sh` with `serve`; a `command:` or `docker run` arguments of your own that started `sh -c "joedocs ..."` now run as given, without the first-run steps.
 - **Agent skills:** if you installed the skills from `docs/skills/`, copy them again. New plans are multi-file documents (the plan, `builder/steps.md`, `builder/log.md`, and amendments); plans written before stay single-file and keep working as before. The four research skills (`joedocs-research-coordinator`, `-scout`, `-writer`, `-critic`) are new and beta; install them only if you want to try the research workflow.
 
 ### 0.5.4 to 0.5.5

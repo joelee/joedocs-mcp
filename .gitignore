@@ -8,6 +8,9 @@
 # Local Docker Compose data (vault, database, history)
 /.local/
 
+# Release binaries unpacked for the Dockerfile's `release` target
+/dist/
+
 # Coverage output
 *.profraw
 *.profdata

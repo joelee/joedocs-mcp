@@ -15,3 +15,12 @@ updates:
     groups:
       cargo:
         update-types: [minor, patch]
+  # The runtime base (debian:trixie-slim) is pinned by digest in the
+  # Dockerfile. The build stage's rust image follows rust-toolchain.toml,
+  # which changes only in a toolchain bump, so it is left out.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: rust
