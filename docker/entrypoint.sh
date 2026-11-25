@@ -9,7 +9,9 @@
 # 2. On a store with no users (`joedocs user list` prints `No users.`), it
 #    creates the user named by JOEDOCS_INITIAL_ADMIN (default `admin`; set it
 #    empty to create none) and prints how to sign in, once. A store that has
-#    users, removed ones included, is left as it is.
+#    users, removed ones included, is left as it is. If listing the users
+#    or creating the user fails (a bad name, say), the script stops with
+#    the command's error and a non-zero exit, before any banner or server.
 # 3. `exec joedocs serve ...`.
 #
 # Any other arguments run as a command instead of the server, for example
@@ -24,9 +26,20 @@ fi
 joedocs init
 
 name="${JOEDOCS_INITIAL_ADMIN-admin}"
-if [ -n "$name" ] && [ "$(joedocs user list)" = "No users." ]; then
+# Each command runs in an assignment of its own, so a failure stops the
+# script (set -e): never a banner, or a server, after a failed setup.
+users=""
+if [ -n "$name" ]; then
+    users="$(joedocs user list)"
+fi
+if [ -n "$name" ] && [ "$users" = "No users." ]; then
+    created="$(joedocs user create "$name")"
     # The one-time password is alone on the last line.
-    password="$(joedocs user create "$name" | tail -n 1)"
+    password="$(printf '%s\n' "$created" | tail -n 1)"
+    if [ -z "$password" ]; then
+        echo "docker-entrypoint: joedocs user create $name printed no one-time password" >&2
+        exit 1
+    fi
     version="$(joedocs --version | cut -d ' ' -f 2)"
     cat <<EOF
 

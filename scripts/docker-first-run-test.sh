@@ -11,6 +11,9 @@
 # - a restart prints no second banner and keeps the one user;
 # - JOEDOCS_INITIAL_ADMIN= (empty) creates no user and prints no banner,
 #   and JOEDOCS_INITIAL_ADMIN=alice creates `alice`;
+# - a failed first-user setup stops the container with no banner: a bad
+#   name (JOEDOCS_INITIAL_ADMIN=Alice), and a failing `joedocs user list`
+#   (a fake `joedocs` earlier on the image's PATH);
 # - other arguments run as a command: `joedocs --version`.
 #
 # Usage: scripts/docker-first-run-test.sh [RELEASE], where RELEASE is the
@@ -48,6 +51,25 @@ wait_healthy() {
     done
     docker logs "$1" >&2 || true
     fail "$1 is $status after 60 s, not healthy"
+}
+
+# Waits until container $1 has exited, or fails with its logs.
+wait_exited() {
+    local status=""
+    for _ in $(seq 60); do
+        status="$(docker inspect -f '{{.State.Status}}' "$1")"
+        [ "$status" = exited ] && return 0
+        sleep 1
+    done
+    docker logs "$1" >&2 || true
+    fail "$1 is $status after 60 s, not exited"
+}
+
+# Checks container $1 stopped with a non-zero exit and printed no banner.
+stopped_without_banner() {
+    wait_exited "$1"
+    [ "$(docker inspect -f '{{.State.ExitCode}}' "$1")" != 0 ] || fail "$1 exited 0"
+    [ "$(banners "$1")" = 0 ] || fail "$1 printed a banner"
 }
 
 banners() {
@@ -106,8 +128,34 @@ check_image() {
     grep -q '^   User:      alice$' <<<"$logs" || fail "the banner does not name alice"
     echo "ok: JOEDOCS_INITIAL_ADMIN=alice creates alice"
 
-    docker rm -f -v "$name" "$name-off" "$name-alice" >/dev/null
+    docker run -d --label "$run" --name "$name-bad" -e JOEDOCS_INITIAL_ADMIN=Alice "$image" >/dev/null
+    stopped_without_banner "$name-bad"
+    logs="$(docker logs "$name-bad" 2>&1)"
+    grep -q 'must be lower-case' <<<"$logs" || fail "the logs do not give the name error:"$'\n'"$logs"
+    echo "ok: JOEDOCS_INITIAL_ADMIN=Alice stops the container with the name error and no banner"
+
+    docker run -d --label "$run" --name "$name-nolist" \
+        -v "$work/fake-joedocs:/usr/local/sbin/joedocs:ro" "$image" >/dev/null
+    stopped_without_banner "$name-nolist"
+    logs="$(docker logs "$name-nolist" 2>&1)"
+    grep -q 'fake: user list failed' <<<"$logs" || fail "the fake joedocs did not run:"$'\n'"$logs"
+    echo "ok: a failing joedocs user list stops the container with no banner"
+
+    docker rm -f -v "$name" "$name-off" "$name-alice" "$name-bad" "$name-nolist" >/dev/null
 }
+
+# A `joedocs` that fails `user list` and runs every other command. Mounted
+# at /usr/local/sbin/joedocs, it comes before /usr/local/bin on the
+# image's PATH.
+cat >"$work/fake-joedocs" <<'EOF'
+#!/bin/sh
+if [ "${1-}" = user ] && [ "${2-}" = list ]; then
+    echo "fake: user list failed" >&2
+    exit 1
+fi
+exec /usr/local/bin/joedocs "$@"
+EOF
+chmod 0755 "$work/fake-joedocs"
 
 # The source build, as `docker build .` gives it.
 docker build -q -t "$local_image" . >/dev/null

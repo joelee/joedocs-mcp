@@ -50,6 +50,8 @@ On every start the image's entrypoint runs `joedocs init`, which creates the vau
 | `-e JOEDOCS_INITIAL_ADMIN=alice` | Creates the user `alice` instead. |
 | `-e JOEDOCS_INITIAL_ADMIN=` (empty) | Creates no user; create one yourself with `docker exec joedocs joedocs user create NAME`, which prints its one-time password on the last line. |
 
+A user name is lower-case letters, digits and `-`, starting with a letter or digit. With a name that breaks this rule, such as `Alice`, or if the user cannot be created for another reason, the container stops before the banner, with a non-zero exit, and `docker logs joedocs` shows why. Fix the variable and start it again. Under a restart policy such as `--restart unless-stopped`, it keeps restarting and logs the same error each time.
+
 The one-time password stays in `docker logs`, but it works only once and only for 72 hours, and signing in still needs the authenticator you set up. If you lose it before signing in, or it runs out, make a new one:
 
 ```bash
