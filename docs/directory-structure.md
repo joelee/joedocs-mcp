@@ -27,6 +27,8 @@
 ├── scripts/scratch-lib.sh     Shell functions the scratch scripts share (sourced)
 ├── scripts/sync-plugin-skills.sh  Regenerates plugins/joedocs/skills from docs/skills (--check fails on drift)
 ├── scripts/docker-first-run-test.sh  just docker-first-run-test: the image's first run without Compose
+├── scripts/image-smoke-test.sh  The release workflow's smoke test of a built image (image, image-publish)
+├── scripts/image-layers-match.sh  image-publish: the pushed amd64 layers are the smoke-tested ones
 ├── .claude-plugin/marketplace.json  Claude Code plugin marketplace catalog (/plugin marketplace add)
 ├── plugins/joedocs/        The Claude Code plugin: .claude-plugin/plugin.json, .mcp.json, and skills/ (generated, do not edit)
 ├── examples/scratch_seed.rs   The scratch server's sample data, written over MCP (not published)

@@ -265,6 +265,7 @@ No production release while a RustSec advisory is active: `just advisories` (`ca
 - **After publishing:** the version is on crates.io and cannot be replaced, so never rerun the Publish job: `cargo publish` fails for a version that already exists.
   - If the GitHub release failed (including its checksums or attestations), rerun only the GitHub release job: it takes the binaries from the run's artifacts. Creating the release by hand (below) leaves out the binaries.
   - If `image-publish` failed (for example the Docker Hub credentials were missing), rerun only that job; the tags it pushes are the same each time.
+  - If `image-publish` failed at "Check the pushed amd64 image is the tested one", its tags are already pushed, but no attestation was made for them. Rerun only that job: it builds, smoke-tests and pushes the same tags again, and checks again. If it fails again, the pushed images are not the tested ones: investigate before announcing the release.
   - If the Homebrew dispatch failed, the tap's daily check bumps the formula by itself; to bump it now, run `gh workflow run bump-formula.yml -R joelee/homebrew-oss -f formula=joedocs -f version=X.Y.Z`.
   - Fix anything else forward with a new patch version.
 
@@ -276,7 +277,7 @@ Merge it to `main` and tag it as in Each release (`git tag -s vX.Y.Z-dev -m "Joe
 
 ### Container images
 
-The `image` job builds the Dockerfile's `release` target from the run's Linux musl binaries (nothing is compiled for the image) and smoke-tests the amd64 image: no volumes, healthy, the first-run banner. It runs in dry runs too, where it also builds both platforms without pushing. On a tag push, `image-publish` runs after the GitHub release: it checks the binaries against the release's `SHA256SUMS`, then pushes `linux/amd64` and `linux/arm64` to `docker.io/joeworks/joedocs` and `ghcr.io/joelee/joedocs`, with BuildKit SBOM and provenance attestations, and a GitHub build-provenance attestation of the image digest, stored with the GHCR image. Tags:
+The `image` job builds the Dockerfile's `release` target from the run's Linux musl binaries (nothing is compiled for the image) and smoke-tests the amd64 image: no volumes, healthy, the first-run banner. It runs in dry runs too, where it also builds both platforms without pushing. Both jobs run the same smoke test, `scripts/image-smoke-test.sh`. On a tag push, `image-publish` runs after the GitHub release. It checks the binaries against the release's `SHA256SUMS`, then builds the amd64 image and smoke-tests it again, so the image it pushes is a tested one, not the `image` job's earlier build. It then pushes `linux/amd64` and `linux/arm64` from the same builder, which reuses the tested amd64 layers. After the push, `scripts/image-layers-match.sh` checks that the pushed amd64 layers are the tested ones, before the GitHub attestation. It pushes to `docker.io/joeworks/joedocs` and `ghcr.io/joelee/joedocs`, with BuildKit SBOM and provenance attestations, and a GitHub build-provenance attestation of the image digest, stored with the GHCR image. Tags:
 
 | Release | Tags |
 | --- | --- |
