@@ -107,7 +107,7 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ### 0.5.5 to 0.5.6
 
-0.5.6 is not released yet: `0.5.6-dev`, `0.5.6-rc.1` and `0.5.6-rc.2` are pre-releases, on GitHub only (not crates.io or Homebrew) and not for production use, until `rmcp` drops `chrono`, which RustSec advisory RUSTSEC-2026-0543 reports as unmaintained (see `CHANGELOG.md`). Install one from the binaries of its GitHub release. What follows applies to all of them; `0.5.6-rc.1` adds the web interface changes, and `0.5.6-rc.2` the Board's Filters panel.
+0.5.6 is not released yet: `0.5.6-dev`, `0.5.6-rc.1`, `0.5.6-rc.2` and `0.5.6-rc.3` are pre-releases, on GitHub only (not crates.io or Homebrew) and not for production use, until `rmcp` drops `chrono`, which RustSec advisory RUSTSEC-2026-0543 reports as unmaintained (see `CHANGELOG.md`). Install one from the binaries of its GitHub release, or, from `0.5.6-rc.3`, its container image. What follows applies to all of them; `0.5.6-rc.1` adds the web interface changes, `0.5.6-rc.2` the Board's Filters panel, and `0.5.6-rc.3` the container images.
 
 - **Nothing changes for a server's data:** no migration; the database stays at version 8, so going back to 0.5.5 needs only the older binary. No configuration key, MCP tool or admin API route changed. The bundled SQLite is now 3.54.1, which reads the same database files.
 - **A second stream through a reverse proxy (0.5.6-rc.1):** a document's latest revision keeps a stream open at `/admin/documents/{id}/stream`, sent like the Board's (`X-Accel-Buffering: no`, a comment line every 15 seconds), so the proxy rule for `/admin/board/stream` in 0.5.5 applies to it too. Board and document pages share the 32 open streams.
