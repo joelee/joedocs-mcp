@@ -18,7 +18,7 @@
 #
 # Usage: scripts/docker-first-run-test.sh [RELEASE], where RELEASE is the
 # GitHub release whose archive the `release` target uses (default below).
-# Needs Docker and curl; downloads the archive and its SHA256SUMS from
+# Needs Docker, curl and shasum; downloads the archive and its SHA256SUMS from
 # GitHub. Everything it creates is labelled and removed on exit.
 set -euo pipefail
 
@@ -174,7 +174,7 @@ archive="joedocs-$release-$target.tar.gz"
 base="https://github.com/$repo/releases/download/v$release"
 curl -fsSL -o "$work/$archive" "$base/$archive"
 curl -fsSL -o "$work/SHA256SUMS" "$base/SHA256SUMS"
-(cd "$work" && grep " $archive\$" SHA256SUMS | sha256sum --check --quiet) || fail "$archive does not match SHA256SUMS"
+(cd "$work" && grep " $archive\$" SHA256SUMS | shasum -a 256 --check --quiet) || fail "$archive does not match SHA256SUMS"
 mkdir -p "$work/context/dist/linux/$arch" "$work/context/docker"
 tar -xzf "$work/$archive" -C "$work/context/dist/linux/$arch" joedocs
 cp docker/entrypoint.sh "$work/context/docker/"

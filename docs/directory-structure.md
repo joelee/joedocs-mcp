@@ -43,6 +43,7 @@
 ├── templates/              Askama templates of the admin web interface (compiled into the binary)
 ├── docs/                   Maintained documentation (rules in docs/AGENTS.md)
 │   ├── deployment.md       Running a server: systemd, brew services, Tailscale, operations
+│   ├── docker.md           Docker installation: the published image, volumes, configuration, backups
 │   ├── upgrading.md        Upgrading a server, going back, notes for each version
 │   ├── reference.md        Commands, MCP tools, search, front matter, errors
 │   ├── plan.md             JoeDocs design decisions and phased plan
