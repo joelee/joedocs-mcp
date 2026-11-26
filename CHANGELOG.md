@@ -4,12 +4,22 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.6-rc.3] - 2026-11-25
+
+**Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-rc.2, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. It comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474), still open; tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, build it from its tag, or pull its container image, `joeworks/joedocs:0.5.6-rc.3` or `ghcr.io/joelee/joedocs:0.5.6-rc.3`.
+
+Container images on Docker Hub and GHCR, with a first run that sets up a server and its first user on its own, a Docker installation guide, and a Claude Code plugin. The configuration, MCP tools, admin API and database are unchanged.
+
 ### Added
 
 - **Claude Code plugin.** The repository is now a Claude Code plugin marketplace: `/plugin marketplace add joelee/joedocs-mcp`, then `/plugin install joedocs@joedocs`. The plugin connects Claude Code to a JoeDocs server (`JOEDOCS_URL`, default `http://127.0.0.1:8750/mcp`, and `JOEDOCS_API_KEY`) and bundles the `docs/skills` skills. `scripts/sync-plugin-skills.sh` regenerates the bundled copy; `--check` fails when it is stale. The plugin has no version of its own, so installed copies pick up each change on `main` when Claude Code updates the marketplace. Use the plugin or a manual setup (`claude mcp add` and copied skill folders), not both.
 - **Container images on Docker Hub and GHCR.** Each release publishes `joeworks/joedocs` (`docker.io`) and `ghcr.io/joelee/joedocs` for `linux/amd64` and `linux/arm64`, holding the release's own static Linux binary on Debian slim with `git` (no compiling, so the image runs the binary the GitHub release attests). A pre-release is tagged with its exact version only; a production release with `X.Y.Z`, `X.Y` and `latest`, and only when no RustSec advisory is active, like the rest of a production release. Each image carries an SBOM and build provenance, and a GitHub attestation (`gh attestation verify oci://ghcr.io/joelee/joedocs:<tag> --repo joelee/joedocs-mcp`).
 - **A standalone first run.** `docker run -d -p 127.0.0.1:8750:8750 joeworks/joedocs:<tag>` sets up a server on its own: it creates the store, turns the web interface on, creates the user `admin` (`JOEDOCS_INITIAL_ADMIN` names another, or none when empty) on a store with no users, and prints the sign-in address, the user and a one-time password, which leads to choosing a password and setting up an authenticator as before. It warns that without a volume of your own the data lives in an anonymous Docker volume. Later starts, and stores that have users, are left as they are. Other `docker run` arguments run as a command (`docker run --rm IMAGE joedocs --version`). This also applies to the repository's `compose.yaml`.
 - **A Docker installation guide,** `docs/docker.md`: the first sign-in, named volumes, local directories for the vault and state (as your own user), configuration, ports and HTTPS, a Compose file for the published image, keys and Claude Code, commands, backups, tags and upgrades, and verifying an image.
+
+### Changed
+
+- **Dependencies:** `jiff` 1.0 (dates and times), `rusqlite` 0.43, `qrcode` 0.15 (the authenticator QR code), `rmcp` 3.11, and patch and minor updates of `clap`, `serde-saphyr`, `toml` and `toml_edit`. The bundled SQLite stays 3.54.1. Timestamps, front matter and the database are written as before.
 
 ## [0.5.6-rc.2] - 2026-11-22
 
@@ -350,7 +360,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.2...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.3...HEAD
+[0.5.6-rc.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.2...v0.5.6-rc.3
 [0.5.6-rc.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.1...v0.5.6-rc.2
 [0.5.6-rc.1]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-dev...v0.5.6-rc.1
 [0.5.6-dev]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...v0.5.6-dev
