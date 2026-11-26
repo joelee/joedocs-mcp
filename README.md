@@ -85,7 +85,7 @@ brew install joelee/oss/joedocs
 **Linux or macOS** (a prebuilt binary from [GitHub Releases](https://github.com/joelee/joedocs-mcp/releases), from 0.4.3: static for Linux x86_64 and aarch64, and for Apple silicon Macs):
 
 ```bash
-V=0.5.0 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
+V=0.5.6 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
 A="joedocs-$V-$T.tar.gz"
 gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber &&
   shasum -a 256 -c --ignore-missing SHA256SUMS &&
@@ -96,12 +96,12 @@ gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber 
 
 Each step runs only if the one before it succeeded, so a failed download, checksum or attestation stops before anything is installed. `gh attestation verify` checks that the archive was built by this repository's release workflow. `~/.local/bin` must be on your `PATH`. Without `gh`, download the archive and `SHA256SUMS` from the release page and run the `shasum` line; if it reports anything but `OK`, do not install the archive.
 
-**Docker** (from 0.5.6-rc.3; `linux/amd64` and `linux/arm64`, on Docker Hub and GHCR):
+**Docker** (from 0.5.6; `linux/amd64` and `linux/arm64`, on Docker Hub and GHCR):
 
 ```bash
 docker run -d --name joedocs -p 127.0.0.1:8750:8750 \
   -v joedocs-vault:/data/vault -v joedocs-state:/data/state \
-  joeworks/joedocs:0.5.6-rc.3
+  joeworks/joedocs:0.5.6
 docker logs joedocs      # the web interface's address, the user admin and a one-time password
 ```
 
