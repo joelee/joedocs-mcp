@@ -5,14 +5,14 @@ Run a JoeDocs server with Docker alone: no Rust toolchain, `git` or other depend
 - Docker Hub: `joeworks/joedocs` (`docker.io/joeworks/joedocs`)
 - GitHub Container Registry: `ghcr.io/joelee/joedocs`
 
-Both hold the same image. It contains the static `joedocs` binary of the GitHub release with the same version, on Debian slim with `git`, and runs as the user `joedocs` (uid 10001). The examples use `joeworks/joedocs:0.5.6-rc.3`; use the newest tag (see [Tags and upgrades](#12-tags-and-upgrades)).
+Both hold the same image. It contains the static `joedocs` binary of the GitHub release with the same version, on Debian slim with `git`, and runs as the user `joedocs` (uid 10001). The examples use `joeworks/joedocs:0.5.6`; use the newest tag (see [Tags and upgrades](#12-tags-and-upgrades)).
 
 For installing without Docker, running as a service, and remote access in general, see the [deployment guide](deployment.md).
 
 ## 1. Quick start
 
 ```bash
-docker run -d --name joedocs -p 127.0.0.1:8750:8750 joeworks/joedocs:0.5.6-rc.3
+docker run -d --name joedocs -p 127.0.0.1:8750:8750 joeworks/joedocs:0.5.6
 docker logs joedocs
 ```
 
@@ -79,7 +79,7 @@ Named volumes are kept until you remove them, by name:
 docker run -d --name joedocs -p 127.0.0.1:8750:8750 \
   -v joedocs-vault:/data/vault -v joedocs-state:/data/state \
   --restart unless-stopped \
-  joeworks/joedocs:0.5.6-rc.3
+  joeworks/joedocs:0.5.6
 ```
 
 `docker rm -f joedocs` removes the container and keeps `joedocs-vault` and `joedocs-state`; the next `docker run` with the same `-v` options carries on with the same data. `docker volume ls` lists them, and `docker volume rm joedocs-vault joedocs-state` deletes them.
@@ -94,7 +94,7 @@ docker run -d --name joedocs -p 127.0.0.1:8750:8750 \
   --user "$(id -u):$(id -g)" \
   -v ~/joedocs/vault:/data/vault -v ~/joedocs/state:/data/state \
   --restart unless-stopped \
-  joeworks/joedocs:0.5.6-rc.3
+  joeworks/joedocs:0.5.6
 ```
 
 - The directories must be empty the first time (or hold a JoeDocs store from earlier).
@@ -111,13 +111,13 @@ Every setting can be given as an environment variable `JOEDOCS__SECTION__KEY`; [
 docker run ... \
   -e JOEDOCS__LOG__LEVEL=debug \
   -e JOEDOCS__SERVER__ALLOWED_HOSTS='["localhost", "127.0.0.1", "::1", "docs.example.ts.net"]' \
-  joeworks/joedocs:0.5.6-rc.3
+  joeworks/joedocs:0.5.6
 ```
 
 Or mount a configuration file at `/etc/joedocs/config.toml`, which the server finds on its own:
 
 ```bash
-docker run ... -v ~/joedocs/config.toml:/etc/joedocs/config.toml:ro joeworks/joedocs:0.5.6-rc.3
+docker run ... -v ~/joedocs/config.toml:/etc/joedocs/config.toml:ro joeworks/joedocs:0.5.6
 ```
 
 The image sets these variables, and a variable overrides the file, so change them with `-e`, not in the file:
@@ -155,7 +155,7 @@ A `compose.yaml` for the published image, with the data in local directories nex
 ```yaml
 services:
   joedocs:
-    image: joeworks/joedocs:0.5.6-rc.3
+    image: joeworks/joedocs:0.5.6
     # Forwards SIGTERM, so `docker compose stop` shuts the server down cleanly.
     init: true
     # Your `id -u`:`id -g`, so the files in ./data belong to you.
@@ -213,8 +213,8 @@ docker exec joedocs joedocs key list
 Arguments given to `docker run` after the image name run as a command instead of the server (only no arguments, or `serve`, start the server):
 
 ```bash
-docker run --rm joeworks/joedocs:0.5.6-rc.3 joedocs --version
-docker run --rm --volumes-from joedocs joeworks/joedocs:0.5.6-rc.3 joedocs check   # on a stopped container's volumes
+docker run --rm joeworks/joedocs:0.5.6 joedocs --version
+docker run --rm --volumes-from joedocs joeworks/joedocs:0.5.6 joedocs check   # on a stopped container's volumes
 ```
 
 ## 11. Backups
@@ -233,7 +233,7 @@ To restore, start from empty volumes or directories, with the server not running
 
 ```bash
 docker run --rm -i -v joedocs-vault:/data/vault -v joedocs-state:/data/state \
-  joeworks/joedocs:0.5.6-rc.3 \
+  joeworks/joedocs:0.5.6 \
   sh -c 'cat > /tmp/joedocs-backup.tgz && joedocs backup --restore /tmp/joedocs-backup.tgz' \
   < joedocs-2026-11-22.tgz
 ```
@@ -270,9 +270,9 @@ On its first start the new version migrates the database and rebuilds the index 
 Each image carries an SBOM and build provenance (BuildKit attestations, in both registries), and a GitHub build-provenance attestation that it was built by this repository's release workflow:
 
 ```bash
-gh attestation verify oci://ghcr.io/joelee/joedocs:0.5.6-rc.3 --repo joelee/joedocs-mcp
-docker buildx imagetools inspect joeworks/joedocs:0.5.6-rc.3      # the platforms and attestation manifests
-docker buildx imagetools inspect joeworks/joedocs:0.5.6-rc.3 --format '{{json .SBOM}}' | head -c 300
+gh attestation verify oci://ghcr.io/joelee/joedocs:0.5.6 --repo joelee/joedocs-mcp
+docker buildx imagetools inspect joeworks/joedocs:0.5.6      # the platforms and attestation manifests
+docker buildx imagetools inspect joeworks/joedocs:0.5.6 --format '{{json .SBOM}}' | head -c 300
 ```
 
 Docker Hub and GHCR hold the same image, with the same digest: compare the `Digest:` line of `docker buildx imagetools inspect` for both names. The binary inside is the one in the GitHub release's `joedocs-X.Y.Z-<arch>-unknown-linux-musl.tar.gz`, which has its own attestation ([deployment guide](deployment.md#1-install)).

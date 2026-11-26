@@ -4,9 +4,105 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-26
+
+Everything since 0.5.5, which the pre-releases 0.5.6-dev to 0.5.6-rc.3 brought first:
+
+- container images on Docker Hub and GHCR that set up a server on their first start;
+- a web interface that keeps up with you: live document pages, a new Board Filters panel, and remembered views;
+- agent skills with plan amendments, and a research workflow (beta);
+- a Claude Code plugin.
+
+`rmcp` 3.12 takes `chrono` out of the dependency tree, so no RustSec advisory is active, and 0.5.6 is published to crates.io and Homebrew. The configuration, MCP tools, admin API and database are unchanged: no migration, and the database stays at version 8. The pre-release sections below record the steps in between.
+
+### Added
+
+- **Container images on Docker Hub and GHCR.** Each release publishes `joeworks/joedocs` (`docker.io`) and `ghcr.io/joelee/joedocs` for `linux/amd64` and `linux/arm64`. They hold the release's own static Linux binary on Debian slim with `git`, with nothing compiled for the image, so the image runs the binary the GitHub release attests.
+  - **Tags:** a release is tagged `X.Y.Z`, `X.Y` and `latest`, and a pre-release only its exact version.
+  - **Verification:** each image carries an SBOM and build provenance, and a GitHub attestation (`gh attestation verify oci://ghcr.io/joelee/joedocs:<tag> --repo joelee/joedocs-mcp`).
+- **A standalone first run.** `docker run -d -p 127.0.0.1:8750:8750 joeworks/joedocs:<tag>` sets up a server on its own.
+  - It creates the store, turns the web interface on, and creates the user `admin` on a store with no users. `JOEDOCS_INITIAL_ADMIN` names another user, or none when empty.
+  - It prints the sign-in address, the user and a one-time password, which leads to choosing a password and setting up an authenticator as before.
+  - It warns that without a volume of your own, the data lives in an anonymous Docker volume.
+  - Later starts, and stores that have users, are left as they are.
+  - Other `docker run` arguments run as a command (`docker run --rm IMAGE joedocs --version`).
+  - This also applies to the repository's `compose.yaml`.
+- **A Docker installation guide,** `docs/docker.md`. It covers:
+  - the first sign-in and named volumes;
+  - local directories for the vault and state, as your own user;
+  - configuration, ports and HTTPS;
+  - a Compose file for the published image;
+  - keys and Claude Code, and commands;
+  - backups, tags and upgrades, and verifying an image.
+- **Claude Code plugin.** The repository is now a Claude Code plugin marketplace: `/plugin marketplace add joelee/joedocs-mcp`, then `/plugin install joedocs@joedocs`.
+  - The plugin connects Claude Code to a JoeDocs server (`JOEDOCS_URL`, default `http://127.0.0.1:8750/mcp`, and `JOEDOCS_API_KEY`) and bundles the `docs/skills` skills.
+  - It has no version of its own, so installed copies pick up each change on `main` when Claude Code updates the marketplace.
+  - Use the plugin or a manual setup (`claude mcp add` and copied skill folders), not both.
+- **Live documents in the web interface.** A document's latest revision updates in place when it changes, whoever writes it: MCP, the admin API, or a local `joedocs` command.
+  - It keeps your place and announces the new revision.
+  - It waits while a dialog, menu or selection is open, and retries a refresh that fails.
+  - It shows when the document was archived or you were signed out, even while the tab was hidden.
+  - An older revision stays as it is.
+  - The server pushes the change on a new stream, `GET /admin/documents/{id}/stream`. It sends events only for that document, and shares the Board stream's 32 places. It is audited as `admin:documents.stream`, with one row per document page opened.
+- **Folding Board groups.** Grouped by type or project, each Board row's title folds the row to one line, with each status's count. The fold is kept in the address (`collapse=`), so live refreshes and copied links keep it. The Filters panel's open or shut state is kept the same way (`filters=closed`).
+- **Remembered Board and Documents views.** The Board and Documents remember their last filters and order in the browser, and the menu's links lead back to them.
+  - To forget a view: **Reset view** in the Board's actions menu, or the **Reset filters** button on Documents.
+  - Only the page itself remembers its view, so an address the server refuses is never remembered.
+- **Folders in the Files panel.** A multi-file document's Files panel lists the main file and the top-level files, then each folder, with its file count.
+  - Folders fold. The shown file's folders start open, and your folds are kept while you move between the document's files.
+  - A line now sets each section of the side panel apart.
+- **Back to top.** A round 🔝 button at the bottom right returns a long page to the top.
+- **Research workflow agent skills (beta).** Four new skills in `docs/skills/`:
+  - `joedocs-research-coordinator`, your one contact. It turns a request into a brief and a research plan, and carries it to an approved report through seven checkpoints.
+  - `joedocs-research-scout` and `joedocs-research-writer`, which the coordinator dispatches. They are hidden from the `/` menu.
+  - `joedocs-research-critic`, which critiques a report through one lens. The `citations` lens checks every claim against its source. It also runs on its own, from any session or agent.
+
+  A research is one multi-file `research` document. The coordinator keeps its state, task ledger and log there, so any session on any computer can resume it. Beta: it is subject to a live trial, and the workflow and document layout may change. See `docs/skills/README.md`.
+- **Developers:**
+  - `just board-drive-showcase` stages the Board for recording, on a store of its own (`.local/showcase`).
+  - `SCRATCH_DIR` makes `just scratch-server` serve another seeded store under `.local/`.
+  - `just docker-first-run-test` checks the image's first run without Compose.
+
+### Changed
+
+- **A new Board Filters panel.** The rows of checkboxes are replaced.
+  - **Projects** are picked from a list with a search box, **Select all**, **Clear** and **Only**, and show as chips.
+  - **Types and statuses** are pills, with an **All** pill for types, and **Open only** and **All** for statuses. Each shortcut is shown only while it would change something. A type or status list longer than 12 values uses the searchable list instead of pills.
+  - **"Only needing attention"** is a switch, with a count of the documents needing attention.
+  - **The panel's header line** shows the filters in force as chips you can remove, **Clear all** (with two or more chips), and the grouping, sort and order, whether the panel is open or folded.
+  - **Nothing chosen means all,** so projects created later appear unless you chose projects by name.
+- **Shorter Board addresses.** Several values are one key, separated by commas (`/admin/board?project=joedocs,omibot&type=plans,ideas`), and values at their defaults are left out, so a Board with nothing filtered is `/admin/board`.
+  - Links with repeated keys (`project=a&project=b`) still work, and are rewritten in the new form at your next change.
+  - An address naming an unknown project, type or status, or an unknown grouping, sort or order, is now refused with 400 and a link that resets the Board's view, instead of showing an empty Board.
+  - An older JoeDocs reads a comma-separated value as one name.
+- **The Board's 🏗️ mark** also shows for an approved plan whose `implementation_status` is `waiting-for-user` (paused for you) or `fixing` (building an amendment's steps). Its label and tooltip name the state ("Being built, waiting for you, STEP-02").
+- **The side menu stays in view** as a page scrolls, on screens wider than 720 px.
+- **The Board's busy message** for the 33rd open stream is now "Too many open live pages; close one and reload", since document pages share the places.
+- **Agent skills: plans with amendments.** `joedocs-planner` now writes a plan as a multi-file document: the plan, fixed once approved, and `builder/steps.md` and `builder/log.md`, which only `joedocs-builder` writes.
+  - After a build, the planner records the reviews you name (`reviews`, `implementation_status: in-review`).
+  - The fixes or additions you agree go into an **amendment** of the plan (`amendments/NN-<slug>`, steps `AMD01-01`, ...). Each amendment is approved on its own, and the builder builds it on the same branch (`fixing`) without touching the plan's approval.
+  - Your sign-off closes the plan with its amendments.
+  - `implementation_status` gains `waiting-for-user`, `in-review` and `fixing`, and `joedocs-code-review` reviews against a plan's approved amendments too.
+  - Plans written before keep working as before. See `docs/skills/README.md`.
+- **Releases** (developers):
+  - Advisories have their own check. `just ci` and `just deny` no longer check advisories; `just advisories` does, in a CI workflow of its own (`advisories.yml`) that does not block a merge. An active advisory still blocks a production release.
+  - A pre-release tag (`vX.Y.Z-<pre>`) makes a GitHub pre-release only, with any active advisories listed in its notes.
+  - The release workflow builds, smoke-tests and publishes the container images after a second approval.
+- **Scratch and drive scripts** (developers):
+  - `just scratch-server` locks its store for one run at a time.
+  - A new scratch store also gets a multi-file research document with nested folders.
+  - `just board-drive` with `DRIVE_PAUSE_MS=0` waits for a keystroke before each step.
+- **Dependencies:**
+  - `rmcp` 3.12 and `jiff` 1.0;
+  - `rusqlite` 0.43, which bundles SQLite 3.54.1, and `qrcode` 0.15 (the authenticator QR code);
+  - patch and minor updates of `clap`, `serde-saphyr`, `toml` and `toml_edit`.
+
+  Timestamps, front matter and the database are written as before, and SQLite 3.54.1 reads the same database files.
+
 ### Security
 
-- **`rmcp` 3.12, without `chrono`.** `rmcp` 3.12.0 makes `chrono` an optional feature, which JoeDocs leaves off ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474)). `chrono` is gone from the dependency tree, and so is [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543), the advisory that held 0.5.6 back as pre-releases. `cargo deny check advisories` now reports no advisory, with none ignored. The MCP tools and their wire format are unchanged.
+- **`rmcp` 3.12, without `chrono`.** `rmcp` 3.12.0 makes `chrono` an optional feature, which JoeDocs leaves off ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474)). `chrono` is gone from the dependency tree, and so is [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543) (`chrono` is unmaintained), which held 0.5.6 back as pre-releases. `cargo deny check advisories` reports no advisory, with none ignored. The MCP tools and their wire format are unchanged.
+- **`url` 2.5.9** (with `form_urlencoded` 1.2.3), for [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592): `url` 2.5.8 could overflow the stack in `Url::origin()` on a URL with deeply nested `blob:` prefixes.
 
 ## [0.5.6-rc.3] - 2026-11-25
 
@@ -364,7 +460,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.3...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...v0.5.6
 [0.5.6-rc.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.2...v0.5.6-rc.3
 [0.5.6-rc.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.1...v0.5.6-rc.2
 [0.5.6-rc.1]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-dev...v0.5.6-rc.1
