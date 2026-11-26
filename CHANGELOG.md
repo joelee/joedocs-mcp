@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Security
+
+- **`rmcp` 3.12, without `chrono`.** `rmcp` 3.12.0 makes `chrono` an optional feature, which JoeDocs leaves off ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474)). `chrono` is gone from the dependency tree, and so is [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543), the advisory that held 0.5.6 back as pre-releases. `cargo deny check advisories` now reports no advisory, with none ignored. The MCP tools and their wire format are unchanged.
+
 ## [0.5.6-rc.3] - 2026-11-25
 
 **Pre-release, on GitHub only: not for production use, and not published to crates.io or Homebrew.** As with 0.5.6-rc.2, `cargo deny` reports the RustSec advisory [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543): `chrono` is unmaintained, with no patched version. It comes in only through `rmcp`, the MCP SDK, which is making it optional ([modelcontextprotocol/rust-sdk#1474](https://github.com/modelcontextprotocol/rust-sdk/pull/1474), still open; tracked in the project's JoeDocs as JD-64). 0.5.6 follows when an `rmcp` release drops it. To try this pre-release, take the binaries from its GitHub release, build it from its tag, or pull its container image, `joeworks/joedocs:0.5.6-rc.3` or `ghcr.io/joelee/joedocs:0.5.6-rc.3`.
