@@ -53,7 +53,7 @@ server; status, tags and aliases are validated; other keys are yours. Values are
 numbers, booleans or lists of those.
 - A multi-file document (new_document with multifile: true) is a folder: its main file plus \
 files such as backlog/item-1 that new_document_file adds, each with its own front matter; \
-adding a file to a single-file document makes it multi-file first. list_document_files lists them; get_document with file reads one. Pass file to \
+adding files to a single-file document makes it multi-file first. list_document_files lists them; get_document with file reads one. Pass file to \
 update_document, edit_document, append_to_document, change_document_front_matter or \
 rename_document (with new_file) to change one file; write_document_files writes several in one \
 revision. Every change to any file raises the document's one revision number, and a change \
@@ -449,7 +449,8 @@ pub struct FileWriteParam {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WriteDocumentFilesParams {
-    /// Document ID of a multi-file document, e.g. JD-42.
+    /// Document ID, e.g. JD-42. A single-file document is made multi-file
+    /// first.
     pub document_id: String,
     /// The files to create or replace, each path at most once.
     pub files: Vec<FileWriteParam>,
@@ -1258,7 +1259,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Create or replace several files of a multi-file document in one revision and one commit, e.g. a whole backlog. All or nothing: every path, limit and conflict is checked first, and one bad entry changes nothing. A file given with the content and front matter it already has is left alone; a call that changes no file is refused. front_matter is merged into an existing file's. expected_revision (the document revision you last read) makes a file that changed after it a conflict.",
+        description = "Create or replace several files of a multi-file document in one revision and one commit, e.g. a whole backlog. All or nothing: every path, limit and conflict is checked first, and one bad entry changes nothing. On a single-file document it first converts it to multi-file (revision `convert`, then the files': two revisions), once every entry has passed. A file given with the content and front matter it already has is left alone; a call that changes no file is refused. front_matter is merged into an existing file's. expected_revision (the document revision you last read) makes a file that changed after it a conflict.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
