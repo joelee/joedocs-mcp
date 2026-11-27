@@ -145,7 +145,7 @@ docker-test port="18750":
     JOEDOCS_TEST_PHASE=after-restart cargo nextest run --locked --test deployment --run-ignored only
 
 # The image's first run without Compose, for the source build and the `release` target from a GitHub release archive (arg: that release's version), then remove what it made
-docker-first-run-test release="0.5.6-rc.3":
+docker-first-run-test release="0.5.6":
     scripts/docker-first-run-test.sh {{release}}
 
 # A throwaway server from the working tree with sample data, kept in .local/scratch, for trying the web interface on other devices (args: fresh, --port N, --https-port N, --no-tailscale)
