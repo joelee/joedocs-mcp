@@ -13,6 +13,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use super::admin_files::{convert_locked, converted_row};
 use super::documents::{
     Action, Change, Changed, Fetched, FileTouch, document_info, finish, integrity, live_row,
     parse_id, revision_with_content, sha256, tidy_line,
@@ -199,10 +200,10 @@ pub(super) fn live_paths_at(
     Ok(paths)
 }
 
-/// Checks a new file for `row` before anything is written: the document
-/// is multi-file and not behind `expected_revision`, the path is valid and
-/// free (ignoring case, in the index and on disk), the document has room,
-/// and none of its files was changed by hand.
+/// Checks a new file for `row`, a multi-file document, before anything is
+/// written: the document is not behind `expected_revision`, the path is
+/// valid and free (ignoring case, in the index and on disk), the document
+/// has room, and none of its files was changed by hand.
 fn check_new_file(
     conn: &Connection,
     home: &Path,
@@ -210,15 +211,23 @@ fn check_new_file(
     row: &DocumentRow,
     request: &NewFile,
 ) -> Result<FilePath, Error> {
-    if !row.multifile {
-        return Err(Error::invalid(
-            "document_id",
-            format!(
-                "{0} is a single-file document; an administrator can make it multi-file with `joedocs document convert {0}`",
-                row.id
-            ),
-        ));
+    let path = check_new_path(conn, home, max_files, row, request)?;
+    super::documents::read_verified(home, row)?;
+    for file in &db::live_files(conn, &row.id)? {
+        read_verified_file(home, row, file)?;
     }
+    Ok(path)
+}
+
+/// The checks of [`check_new_file`] but the files' integrity, so they can
+/// run against the row a single-file document would have once converted.
+fn check_new_path(
+    conn: &Connection,
+    home: &Path,
+    max_files: u64,
+    row: &DocumentRow,
+    request: &NewFile,
+) -> Result<FilePath, Error> {
     if let Some(expected) = request.expected_revision
         && expected > row.revision
     {
@@ -246,11 +255,35 @@ fn check_new_file(
     }
     let vault = vault_path(row, &path.as_str());
     super::vault::refuse_unknown(home, &vault)?;
-    super::documents::read_verified(home, row)?;
-    for file in &live {
-        read_verified_file(home, row, file)?;
-    }
     Ok(path)
+}
+
+/// The text of a new sub-file of `row` at `revision`, with its size checked.
+fn new_file_text(
+    row: &DocumentRow,
+    revision: u64,
+    now: &str,
+    request: &NewFile,
+    max_document_bytes: u64,
+) -> Result<String, Error> {
+    let mut extra = Fields::new();
+    front_matter::apply_file(&mut extra, &request.front_matter, &[])
+        .map_err(|e| Error::invalid("front_matter", e.0))?;
+    let header = FileHeader {
+        document: row.id.clone(),
+        revision,
+        updated: now.to_owned(),
+    };
+    let text = front_matter::render_file(&header, &extra, &request.content)
+        .map_err(|e| Error::invalid("front_matter", e.0))?;
+    let size = text.len() as u64;
+    if size > max_document_bytes {
+        return Err(Error::TooLarge {
+            size,
+            limit: max_document_bytes,
+        });
+    }
+    Ok(text)
 }
 
 /// Whether `file` names `row`'s main file (its stem, with or without
@@ -293,12 +326,15 @@ impl Store {
         document_info(&self.conn, &row)
     }
 
-    /// Adds a sub-file to a multi-file document as a new revision.
+    /// Adds a sub-file to a multi-file document as a new revision. A
+    /// single-file document is first converted, as [`Store::convert`] does,
+    /// under the same write lock and only once every check has passed: two
+    /// revisions, `convert` then `create_file`.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] for a single-file document, a bad path or
-    /// front matter, or too many files; [`Error::AlreadyExists`] when the
+    /// Returns [`Error::Invalid`] for a bad path or front matter, or too
+    /// many files; [`Error::AlreadyExists`] when the
     /// path is taken (ignoring case) by a live file or by a file the index
     /// does not know; [`Error::Conflict`] when `expected_revision` is ahead
     /// of the document; [`Error::Integrity`] when a file of the document was
@@ -315,32 +351,39 @@ impl Store {
             ..
         } = self;
         let _lock = begin_write(paths, conn, history.as_ref())?;
-        let tx = conn.transaction()?;
+        let mut tx = conn.transaction()?;
         let mut row = live_row(&tx, &id)?;
+        if !row.multifile {
+            // Every check first, against the row it would have once
+            // converted; then the convert revision, then the file's.
+            let future = converted_row(&tx, &paths.home, &row)?;
+            check_new_path(&tx, &paths.home, settings.max_files, &future, request)?;
+            new_file_text(
+                &future,
+                future.revision + 2,
+                &now,
+                request,
+                settings.max_document_bytes,
+            )?;
+            drop(tx);
+            convert_locked(conn, paths, settings, history.as_ref(), actor, at, &id)?;
+            tx = conn.transaction()?;
+            row = live_row(&tx, &id)?;
+        }
         let path = check_new_file(&tx, &paths.home, settings.max_files, &row, request)?;
         let vault = vault_path(&row, &path.as_str());
-        let mut extra = Fields::new();
-        front_matter::apply_file(&mut extra, &request.front_matter, &[])
-            .map_err(|e| Error::invalid("front_matter", e.0))?;
 
         row.revision += 1;
         row.updated_at.clone_from(&now);
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);
-        let header = FileHeader {
-            document: row.id.clone(),
-            revision: row.revision,
-            updated: now.clone(),
-        };
-        let text = front_matter::render_file(&header, &extra, &request.content)
-            .map_err(|e| Error::invalid("front_matter", e.0))?;
-        let size = text.len() as u64;
-        if size > settings.max_document_bytes {
-            return Err(Error::TooLarge {
-                size,
-                limit: settings.max_document_bytes,
-            });
-        }
+        let text = new_file_text(
+            &row,
+            row.revision,
+            &now,
+            request,
+            settings.max_document_bytes,
+        )?;
         db::save_document(&tx, &row)?;
         let mut file = FileRow {
             id: 0,

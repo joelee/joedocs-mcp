@@ -20,7 +20,7 @@ use super::folders::clean_after_move;
 use super::journal::Journal;
 use super::{Actor, Error, Store, begin_write, index_file};
 use crate::db::{self, DocumentRow, FileChange, FileRow, RevisionFileRow, RevisionRow};
-use crate::document::front_matter;
+use crate::document::{DocumentId, front_matter};
 use crate::history::{Commit, History};
 
 /// The trailer naming the document a file moved to.
@@ -47,6 +47,109 @@ pub struct MovedFile {
     pub path: String,
 }
 
+/// The row `row` (a single-file document) would have once converted: the
+/// folder path [`Store::convert`] would choose, and `multifile`; its
+/// revision is unchanged. Checks its file was not changed by hand, so a
+/// file tool can run every check before it converts.
+pub(super) fn converted_row(
+    conn: &rusqlite::Connection,
+    home: &std::path::Path,
+    row: &DocumentRow,
+) -> Result<DocumentRow, Error> {
+    let text = read_verified(home, row)?;
+    front_matter::parse(&text).map_err(|_| integrity(row))?;
+    let mut future = row.clone();
+    future.path = choose_path(
+        conn,
+        home,
+        &row.project,
+        &row.doc_type,
+        &row.title,
+        &row.id,
+        None,
+        &Layout::Folder(&[]),
+    )?;
+    future.multifile = true;
+    Ok(future)
+}
+
+/// [`Store::convert`] with the write lock already held, so a file tool can
+/// convert a document and then add its files under the same lock.
+pub(super) fn convert_locked(
+    conn: &mut rusqlite::Connection,
+    paths: &super::Paths,
+    settings: &super::Settings,
+    history: &dyn History,
+    actor: &Actor,
+    at: jiff::Timestamp,
+    id: &DocumentId,
+) -> Result<Changed, Error> {
+    let now = crate::clock::format_timestamp(at);
+    let tx = conn.transaction()?;
+    let mut row = live_row(&tx, id)?;
+    if row.multifile {
+        return Err(Error::invalid(
+            "document_id",
+            format!("{} is already a multi-file document", row.id),
+        ));
+    }
+    let text = read_verified(&paths.home, &row)?;
+    let parsed = front_matter::parse(&text).map_err(|_| integrity(&row))?;
+    let extra = front_matter::extras(&parsed.fields);
+    let old_path = row.path.clone();
+    row.path = choose_path(
+        &tx,
+        &paths.home,
+        &row.project,
+        &row.doc_type,
+        &row.title,
+        &row.id,
+        None,
+        &Layout::Folder(&[]),
+    )?;
+    row.multifile = true;
+    row.revision += 1;
+    row.main_revision = row.revision;
+    now.clone_into(&mut row.updated_at);
+    actor.name().clone_into(&mut row.updated_by);
+    actor.client().clone_into(&mut row.client);
+    let (row, fields, journal) = write_revision(
+        &tx,
+        &paths.home,
+        settings,
+        row,
+        &extra,
+        parsed.body,
+        Some(&old_path),
+    )?;
+    // Its file history covers the revisions before it became multi-file.
+    let mut earlier = db::list_revisions(&tx, &row.id, 0, row.revision)?;
+    earlier.reverse();
+    for change in super::files::backfill_main(&earlier) {
+        db::insert_revision_file(&tx, &change)?;
+    }
+    let touched = main_touch(&row, FileChange::Added);
+    let commit = Change {
+        row: &row,
+        at,
+        action: Action::Convert,
+        summary: "single file → folder",
+        actor,
+        paths: &[&old_path, &row.path],
+        files: &touched,
+    };
+    finish(tx, history, journal, &commit)?;
+    clean_after_move(&paths.home, &old_path, Some(&row.path));
+    index_file::refresh_document(conn, &paths.home, settings, &row);
+    Ok(Changed {
+        id: row.id.clone(),
+        revision: row.revision,
+        path: row.path.clone(),
+        file: None,
+        front_matter: fields,
+    })
+}
+
 impl Store {
     /// Turns a single-file document into a multi-file one: its file moves
     /// from `<type>/<stem>.md` to `<type>/<stem>/<stem>.md` as one new
@@ -61,7 +164,6 @@ impl Store {
     pub fn convert(&mut self, actor: &Actor, id: &str) -> Result<Changed, Error> {
         let id = parse_id(id)?;
         let at = self.clock.now();
-        let now = crate::clock::format_timestamp(at);
         let Self {
             paths,
             settings,
@@ -70,71 +172,8 @@ impl Store {
             ..
         } = self;
         let _lock = begin_write(paths, conn, history.as_ref())?;
-        let tx = conn.transaction()?;
-        let mut row = live_row(&tx, &id)?;
-        if row.multifile {
-            return Err(Error::invalid(
-                "document_id",
-                format!("{} is already a multi-file document", row.id),
-            ));
-        }
-        let text = read_verified(&paths.home, &row)?;
-        let parsed = front_matter::parse(&text).map_err(|_| integrity(&row))?;
-        let extra = front_matter::extras(&parsed.fields);
-        let old_path = row.path.clone();
-        row.path = choose_path(
-            &tx,
-            &paths.home,
-            &row.project,
-            &row.doc_type,
-            &row.title,
-            &row.id,
-            None,
-            &Layout::Folder(&[]),
-        )?;
-        row.multifile = true;
-        row.revision += 1;
-        row.main_revision = row.revision;
-        now.clone_into(&mut row.updated_at);
-        actor.name().clone_into(&mut row.updated_by);
-        actor.client().clone_into(&mut row.client);
-        let (row, fields, journal) = write_revision(
-            &tx,
-            &paths.home,
-            settings,
-            row,
-            &extra,
-            parsed.body,
-            Some(&old_path),
-        )?;
-        // Its file history covers the revisions before it became multi-file.
-        let mut earlier = db::list_revisions(&tx, &row.id, 0, row.revision)?;
-        earlier.reverse();
-        for change in super::files::backfill_main(&earlier) {
-            db::insert_revision_file(&tx, &change)?;
-        }
-        let touched = main_touch(&row, FileChange::Added);
-        let commit = Change {
-            row: &row,
-            at,
-            action: Action::Convert,
-            summary: "single file → folder",
-            actor,
-            paths: &[&old_path, &row.path],
-            files: &touched,
-        };
-        finish(tx, history.as_ref(), journal, &commit)?;
-        clean_after_move(&paths.home, &old_path, Some(&row.path));
-        index_file::refresh_document(conn, &paths.home, settings, &row);
-        Ok(Changed {
-            id: row.id.clone(),
-            revision: row.revision,
-            path: row.path.clone(),
-            file: None,
-            front_matter: fields,
-        })
+        convert_locked(conn, paths, settings, history.as_ref(), actor, at, &id)
     }
-
     /// Moves a sub-file to another multi-file document, as `as_file` or
     /// under its own path, in one commit that raises both documents'
     /// revisions. The file's front matter then names the target.

@@ -52,8 +52,8 @@ a new one.
 server; status, tags and aliases are validated; other keys are yours. Values are strings, \
 numbers, booleans or lists of those.
 - A multi-file document (new_document with multifile: true) is a folder: its main file plus \
-files such as backlog/item-1 that new_document_file adds, each with its own front matter. \
-list_document_files lists them; get_document with file reads one. Pass file to \
+files such as backlog/item-1 that new_document_file adds, each with its own front matter; \
+adding a file to a single-file document makes it multi-file first. list_document_files lists them; get_document with file reads one. Pass file to \
 update_document, edit_document, append_to_document, change_document_front_matter or \
 rename_document (with new_file) to change one file; write_document_files writes several in one \
 revision. Every change to any file raises the document's one revision number, and a change \
@@ -324,7 +324,8 @@ pub struct GetDocumentParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewDocumentFileParams {
-    /// Document ID of a multi-file document, e.g. JD-42.
+    /// Document ID, e.g. JD-42. A single-file document is made multi-file
+    /// first.
     pub document_id: String,
     /// Path of the new file inside the document's folder, e.g.
     /// backlog/item-1 (with or without .md).
@@ -1220,7 +1221,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Add a file to a multi-file document (one made with new_document multifile: true), e.g. backlog/item-1, with its own front matter. Raises the document's revision by one; give expected_revision (the document revision you last read) to be refused if the document moved past it. Returns the new revision.",
+        description = "Add a file to a multi-file document (one made with new_document multifile: true), e.g. backlog/item-1, with its own front matter. Raises the document's revision by one. On a single-file document it first converts it to multi-file (revision `convert`, then the file's: two revisions), once every check has passed; give expected_revision (the document revision you last read) to be refused if the document moved past it. Returns the new revision.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,

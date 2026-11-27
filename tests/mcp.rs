@@ -417,6 +417,8 @@ async fn multi_file_documents_round_trip() {
     assert_eq!(hit["id"], single["document_id"], "{found}");
     assert_eq!((hit.get("multifile"), hit.get("files")), (None, None));
 
+    single_file_conversion(&client, &viewer).await.unwrap();
+
     client.cancel().await.unwrap();
     viewer.cancel().await.unwrap();
     let audit = audit_log(&server.root).unwrap();
@@ -428,6 +430,7 @@ async fn multi_file_documents_round_trip() {
             "new_document_file JD-1 permission_denied",
             "new_document_file JD-1 invalid_argument",
             "new_document JD-2 ok",
+            "new_document_file JD-2 ok",
         ]
     );
     server.stop().await.unwrap();
@@ -751,6 +754,33 @@ async fn file_refusals(client: &Client) -> TestResult<()> {
     )
     .await?;
     assert_eq!(both["code"], "invalid_argument");
+    Ok(())
+}
+
+/// Adding a file to the single-file JD-2 converts it first: two revisions.
+async fn single_file_conversion(client: &Client, viewer: &Client) -> TestResult<()> {
+    let converted = ok(
+        client,
+        "new_document_file",
+        json!({"document_id": "JD-2", "file": "notes", "content": "n\n",
+               "expected_revision": 1}),
+    )
+    .await?;
+    assert_eq!(converted["revision"], 3);
+    assert_eq!(converted["path"], "joedocs/home/Plain/notes.md");
+    let history = ok(
+        viewer,
+        "get_document_history",
+        json!({"document_id": "JD-2"}),
+    )
+    .await?;
+    let actions: Vec<&str> = history["revisions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["action"].as_str())
+        .collect();
+    assert_eq!(actions, ["create_file", "convert", "create"]);
     Ok(())
 }
 
