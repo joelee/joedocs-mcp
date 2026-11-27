@@ -75,7 +75,7 @@ mod assets;
 mod board_signal;
 pub(crate) mod markdown;
 mod pages;
-mod plantuml;
+pub mod plantuml;
 mod session;
 
 use std::sync::Arc;
@@ -100,8 +100,9 @@ pub const CLIENT: &str = "joedocs-web";
 pub struct WebOptions {
     /// `admin.session_hours`.
     pub session_hours: u32,
-    /// `admin.web_plantuml_url`, or empty.
-    pub plantuml_url: String,
+    /// How `PlantUML` diagrams are drawn: from `admin.web_plantuml_url`
+    /// and `admin.use_plantuml_cli`, chosen when the server starts.
+    pub diagrams: plantuml::Diagrams,
     /// The Board's settings.
     pub board: BoardOptions,
 }
@@ -151,7 +152,7 @@ pub(crate) fn routes(
     server: &ServerOptions,
     shutdown: &tokio_util::sync::CancellationToken,
 ) -> Router {
-    let csp = HeaderValue::from_str(&content_security_policy(&web.plantuml_url))
+    let csp = HeaderValue::from_str(&content_security_policy(web.diagrams.server_url()))
         .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'"));
     let state = Arc::new(WebState {
         shared: Arc::clone(shared),

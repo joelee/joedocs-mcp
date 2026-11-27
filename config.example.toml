@@ -65,6 +65,11 @@ web_ui = false
 # "https://www.plantuml.com/plantuml". The admin's browser sends the diagram
 # text to it. Empty shows PlantUML diagrams as source.
 web_plantuml_url = ""
+# Draw PlantUML diagrams on this server with the `plantuml` command found on
+# PATH (0.5.7), instead of web_plantuml_url: no diagram text leaves the
+# server. When no `plantuml` is on PATH, serve logs a warning and uses
+# web_plantuml_url, or shows the source.
+use_plantuml_cli = false
 # How many days a device credential from `joedocs auth login` lasts without
 # use (1 to 365). After that the user signs in with the password again.
 device_days = 30

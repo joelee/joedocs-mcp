@@ -273,6 +273,10 @@ impl Default for DocumentsConfig {
 /// The remote admin API, served by `joedocs serve` under `/admin/v1/`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is an independent on/off configuration key"
+)]
 pub struct AdminConfig {
     /// Whether to serve the admin API. Off by default.
     pub enabled: bool,
@@ -286,6 +290,11 @@ pub struct AdminConfig {
     /// `https://www.plantuml.com/plantuml`. Empty shows diagrams as source.
     /// The admin's browser sends the diagram text to it.
     pub web_plantuml_url: String,
+    /// Whether the web interface draws `PlantUML` diagrams on the server with
+    /// the `plantuml` command on `PATH`, keeping the images in a cache under
+    /// the state directory. No diagram text leaves the server. When no
+    /// `plantuml` is found, `web_plantuml_url` (or source) is used instead.
+    pub use_plantuml_cli: bool,
     /// How many days a device credential issued by `joedocs auth login`
     /// lasts without use (1 to 365).
     pub device_days: u32,
@@ -309,6 +318,7 @@ impl Default for AdminConfig {
             session_hours: 8,
             web_ui: false,
             web_plantuml_url: String::new(),
+            use_plantuml_cli: false,
             device_days: 30,
             token_login: true,
             board_refresh_ms: 1000,

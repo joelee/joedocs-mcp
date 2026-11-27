@@ -1123,6 +1123,45 @@ async fn plantuml_diagrams_come_from_the_configured_server_only() -> TestResult<
     server.stop().await
 }
 
+#[tokio::test]
+async fn with_the_plantuml_cli_no_diagram_goes_to_the_server() -> TestResult<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = TempDir::new()?;
+    let tool = bin.path().join("plantuml");
+    std::fs::write(&tool, "#!/bin/sh\n")?;
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))?;
+    let path = bin.path().display().to_string();
+    let server = start_options(
+        |c| {
+            c.admin.web_plantuml_url = "https://plantuml.example.net/plantuml".into();
+            c.admin.use_plantuml_cli = true;
+        },
+        |options| {
+            let mut config = Config::default();
+            config.admin.web_plantuml_url = "https://plantuml.example.net/plantuml".into();
+            config.admin.use_plantuml_cli = true;
+            options.choose_diagrams(
+                &config,
+                &joedocs::env::MapEnv::new().with("PATH", path),
+                &joedocs::fs::RealFs,
+            );
+            assert_eq!(
+                options.web.as_ref().map(|w| w.diagrams.clone()),
+                Some(joedocs::web::plantuml::Diagrams::Cli(tool.clone()))
+            );
+        },
+        fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let view = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert_eq!(view.status, 200);
+    assert!(!view.body.contains("plantuml.example.net"), "{}", view.body);
+    let csp = view.header("content-security-policy").ok_or("no policy")?;
+    assert!(csp.contains("img-src 'self' data:;"), "{csp}");
+    server.stop().await
+}
+
 // --- STEP-07: search -------------------------------------------------------------
 
 /// The STEP-06 vault, plus a note in `notes` whose body needs escaping.

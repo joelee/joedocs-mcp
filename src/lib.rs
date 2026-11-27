@@ -236,12 +236,7 @@ pub fn execute(
             let outcome = Store::init(&paths, &GitCli::new(paths.git_dir(), &paths.home))?;
             admin::report_init(&paths, outcome, out)?;
         }
-        Command::Serve => {
-            let mut store = open_store(loaded, ctx)?;
-            catch_up(&mut store)?;
-            store.refresh_index_files();
-            mcp::run(store, loaded.config(), loaded.resolved.file.as_deref(), out)?;
-        }
+        Command::Serve => serve(loaded, ctx, out)?,
         Command::Reindex => admin::reindex(&mut open_store(loaded, ctx)?, out)?,
         Command::Archive { command } => {
             admin::archive(&mut open_store(loaded, ctx)?, command, out)?;
@@ -292,7 +287,7 @@ pub fn execute(
         )?,
         Command::Status => {
             let store = open_store(loaded, ctx)?;
-            let report = status::collect(&store, loaded, ctx.services)?;
+            let report = status::collect(&store, loaded, ctx.services, ctx.env, ctx.fs)?;
             status::render(&report, out)?;
         }
         Command::Login { .. } | Command::Logout | Command::Auth { .. } => {}
@@ -342,6 +337,22 @@ fn local_browse(
         }
         _ => Ok(()),
     }
+}
+
+/// `joedocs serve`: catches the index up, refreshes the `INDEX.md` files,
+/// then serves until stopped.
+fn serve(loaded: &Loaded, ctx: &Context<'_>, out: &mut dyn Write) -> Result<(), Error> {
+    let mut store = open_store(loaded, ctx)?;
+    catch_up(&mut store)?;
+    store.refresh_index_files();
+    mcp::run(
+        store,
+        loaded.config(),
+        loaded.resolved.file.as_deref(),
+        (ctx.env, ctx.fs),
+        out,
+    )?;
+    Ok(())
 }
 
 /// Runs `cli` against the admin API of `client.server`, or returns `None`

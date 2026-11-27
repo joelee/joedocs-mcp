@@ -107,7 +107,7 @@
 │   │   ├── assets.rs       Static files under content-hashed paths
 │   │   ├── assets/         app.css, app.js, board.js (the Board), filters.js (the filter parts: pills, picker, chips), document.js (a live document page), the icons (favicon.svg and the .ico and touch .png drawn from it), and vendor/ (htmx, Pele and their licences)
 │   │   ├── markdown.rs     Obsidian-style Markdown to safe HTML (tests in markdown_tests.rs)
-│   │   ├── plantuml.rs     PlantUML text encoding for the configured server
+│   │   ├── plantuml.rs     How PlantUML diagrams are drawn (CLI, server or source) and the server URL encoding
 │   │   └── pages/          One module per workspace: login, setup, overview, documents, document, history, search, projects, keys, users (and Account), audit, archive, maintenance
 │   ├── search/
 │   │   ├── mod.rs          Re-exports and the Invalid error

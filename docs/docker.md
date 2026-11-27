@@ -130,7 +130,7 @@ The image sets these variables, and a variable overrides the file, so change the
 | `JOEDOCS__ADMIN__ENABLED` | `true` | The admin API, which the web interface needs |
 | `JOEDOCS__ADMIN__WEB_UI` | `true` | The web interface at `/admin/` |
 
-To run without the web interface and admin API: `-e JOEDOCS__ADMIN__WEB_UI=false -e JOEDOCS__ADMIN__ENABLED=false`. `docker exec joedocs joedocs config show` prints every value and where it came from.
+To run without the web interface and admin API: `-e JOEDOCS__ADMIN__WEB_UI=false -e JOEDOCS__ADMIN__ENABLED=false`. The image has no PlantUML command (it would need Java), so `admin.use_plantuml_cli` finds nothing there: PlantUML diagrams are drawn by `JOEDOCS__ADMIN__WEB_PLANTUML_URL` when it is set, and shown as source otherwise. `docker exec joedocs joedocs config show` prints every value and where it came from.
 
 ## 7. Ports, host names and HTTPS
 

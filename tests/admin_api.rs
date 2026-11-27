@@ -265,6 +265,53 @@ async fn configuration_warnings_are_logged_and_reported_by_check_and_status() ->
 }
 
 #[tokio::test]
+async fn a_missing_plantuml_cli_is_logged_and_status_shows_the_mode() -> TestResult<()> {
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let _guard = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let mut config = Config::default();
+    config.admin.enabled = true;
+    config.admin.web_ui = true;
+    config.admin.use_plantuml_cli = true;
+    let empty = TempDir::new()?;
+    let mut options = ServerOptions::from_config(&config);
+    options.choose_diagrams(
+        &config,
+        &joedocs::env::MapEnv::new().with("PATH", empty.path().display().to_string()),
+        &joedocs::fs::RealFs,
+    );
+    assert_eq!(
+        options.web.as_ref().map(|w| w.diagrams.clone()),
+        Some(joedocs::web::plantuml::Diagrams::Source)
+    );
+    let logged = String::from_utf8(logs.0.lock().map(|l| l.clone()).unwrap_or_default())?;
+    assert!(
+        logged.contains("WARN")
+            && logged.contains(
+                "admin.use_plantuml_cli is on, but no plantuml command is on PATH; PlantUML diagrams are shown as source"
+            ),
+        "{logged}"
+    );
+
+    let server = start_with(true, config).await?;
+    let session = server.login().await?;
+    let status = server
+        .send("GET", "/admin/v1/status", &server.auth(Some(&session)), "")
+        .await?;
+    assert_eq!(
+        status.json["diagrams"], "shown as source",
+        "{:?}",
+        status.json
+    );
+    server.stop().await
+}
+
+#[tokio::test]
 async fn login_opens_a_session_that_reads_status_until_it_expires() -> TestResult<()> {
     let logs = Logs::default();
     let writer = logs.clone();

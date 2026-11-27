@@ -43,6 +43,10 @@ pub struct StatusReport {
     /// `admin.enabled`). Absent from a 0.4.x server's report: off.
     #[serde(default)]
     pub web_ui_enabled: bool,
+    /// How the web interface draws `PlantUML` diagrams, in words, when it is
+    /// served. Absent from a 0.5.6 or older server's report: not shown.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diagrams: String,
     /// `storage.home`.
     pub vault: DirSize,
     /// `storage.state_dir`.
@@ -107,16 +111,34 @@ pub fn collect(
     store: &Store,
     loaded: &Loaded,
     services: &dyn ServiceManager,
+    env: &dyn crate::env::Env,
+    fs: &dyn crate::fs::FileSystem,
 ) -> Result<StatusReport, Error> {
+    let config = loaded.config();
+    let web_ui = config.admin.enabled && config.admin.web_ui;
     let mut report = collect_parts(
         store,
         loaded.resolved.file.clone(),
-        loaded.config().server.bind,
-        loaded.config().admin.enabled,
-        loaded.config().admin.enabled && loaded.config().admin.web_ui,
+        config.server.bind,
+        config.admin.enabled,
+        web_ui,
         services,
     )?;
-    report.config_warnings = crate::config::warning_lines(loaded.config());
+    report.config_warnings = crate::config::warning_lines(config);
+    if web_ui {
+        let (diagrams, missing) = crate::web::plantuml::Diagrams::choose(
+            config.admin.use_plantuml_cli,
+            &config.admin.web_plantuml_url,
+            env,
+            fs,
+        );
+        report.diagrams = diagrams.describe();
+        if missing.is_some() {
+            report
+                .diagrams
+                .push_str(" (admin.use_plantuml_cli is on, but no plantuml command is on PATH)");
+        }
+    }
     Ok(report)
 }
 
@@ -154,6 +176,7 @@ pub fn collect_parts(
         system_unit: unit_state(services, false),
         admin_enabled,
         web_ui_enabled,
+        diagrams: String::new(),
         vault: dir_size(&paths.home),
         state: dir_size(&paths.state_dir),
         database_bytes,
@@ -357,6 +380,9 @@ pub fn render(report: &StatusReport, out: &mut dyn Write) -> Result<(), Error> {
         "disabled ([admin] web_ui = false)"
     };
     let _ = writeln!(text, "  web interface: {web}");
+    if report.web_ui_enabled && !report.diagrams.is_empty() {
+        let _ = writeln!(text, "  PlantUML diagrams: {}", report.diagrams);
+    }
     let _ = writeln!(text, "\nStorage");
     let _ = writeln!(text, "  vault: {}", describe_dir(&report.vault));
     let _ = writeln!(text, "  state: {}", describe_dir(&report.state));
@@ -582,6 +608,7 @@ mod tests {
             system_unit: UnitState::NotInstalled,
             admin_enabled: false,
             web_ui_enabled: false,
+            diagrams: String::new(),
             vault: DirSize {
                 path: "/v".into(),
                 bytes: 2048,
@@ -660,6 +687,7 @@ mod tests {
             system_unit: UnitState::Unavailable,
             admin_enabled: true,
             web_ui_enabled: true,
+            diagrams: "drawn on the server by /usr/bin/plantuml".into(),
             vault: DirSize {
                 path: "/v".into(),
                 bytes: 0,
@@ -694,6 +722,10 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(
             text.contains("  web interface: enabled, under /admin/\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  PlantUML diagrams: drawn on the server by /usr/bin/plantuml\n"),
             "{text}"
         );
         let json = serde_json::to_value(&report).unwrap();

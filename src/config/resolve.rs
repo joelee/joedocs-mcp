@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(resolved.config, Config::default());
         assert_eq!(resolved.file, None);
         assert!(resolved.sources.values().all(|s| *s == Source::Default));
-        assert_eq!(resolved.sources.len(), 24);
+        assert_eq!(resolved.sources.len(), 25);
     }
 
     #[test]
@@ -596,9 +596,19 @@ mod tests {
             .with(
                 "MY_APP__ADMIN__WEB_PLANTUML_URL",
                 "https://plantuml.example.net/plantuml",
-            );
+            )
+            .with("MY_APP__ADMIN__USE_PLANTUML_CLI", "true");
         let resolved = resolve_with(&env, &MemFs::new()).unwrap();
         assert!(resolved.config.admin.web_ui);
+        assert!(resolved.config.admin.use_plantuml_cli);
+        assert!(
+            !resolve_with(&MapEnv::new(), &MemFs::new())
+                .unwrap()
+                .config
+                .admin
+                .use_plantuml_cli,
+            "off by default"
+        );
         assert_eq!(
             resolved.config.admin.web_plantuml_url,
             "https://plantuml.example.net/plantuml"

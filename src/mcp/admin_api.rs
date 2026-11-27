@@ -61,6 +61,8 @@ struct ApiState {
     allowed_hosts: Vec<String>,
     allowed_origins: Vec<String>,
     web_ui: bool,
+    /// How the web interface draws `PlantUML` diagrams, for `status`.
+    diagrams: String,
     /// `ServerOptions::config_warnings`, for `check` and `status`.
     config_warnings: Vec<String>,
 }
@@ -85,6 +87,11 @@ pub(super) fn routes(
         allowed_hosts: options.allowed_hosts.clone(),
         allowed_origins: options.allowed_origins.clone(),
         web_ui: options.web.is_some(),
+        diagrams: options
+            .web
+            .as_ref()
+            .map(|web| web.diagrams.describe())
+            .unwrap_or_default(),
         config_warnings: options.config_warnings.clone(),
     });
     Router::new()
@@ -800,6 +807,7 @@ async fn status(state: Arc<ApiState>, call: Call) -> Response {
             ),
         })?;
         report.config_warnings.clone_from(&state.config_warnings);
+        report.diagrams.clone_from(&state.diagrams);
         Ok(axum::Json(report).into_response())
     })
     .await
@@ -1444,6 +1452,7 @@ mod tests {
             allowed_hosts: vec!["127.0.0.1".into()],
             allowed_origins: Vec::new(),
             web_ui: false,
+            diagrams: String::new(),
             config_warnings: Vec::new(),
         };
         let mut headers = HeaderMap::new();
@@ -1601,6 +1610,7 @@ mod tests {
             allowed_hosts: vec!["127.0.0.1".into()],
             allowed_origins: Vec::new(),
             web_ui: false,
+            diagrams: String::new(),
             config_warnings: Vec::new(),
         });
         (dir, state, password.expose_secret().to_owned(), clock)

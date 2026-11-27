@@ -235,7 +235,11 @@ pub(crate) fn view(
     let rendered = if source {
         markdown::Rendered::default()
     } else {
-        markdown::render(&fetched.markdown, &resolver, &state.options.plantuml_url)
+        markdown::render(
+            &fetched.markdown,
+            &resolver,
+            state.options.diagrams.server_url(),
+        )
     };
     let fields = front_matter::parse(&fetched.markdown)
         .map(|parsed| parsed.fields)
