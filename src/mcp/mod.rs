@@ -95,7 +95,11 @@ impl ServerOptions {
             }),
             web: (config.admin.enabled && config.admin.web_ui).then(|| crate::web::WebOptions {
                 session_hours: config.admin.session_hours,
-                plantuml_url: config.admin.web_plantuml_url.clone(),
+                // `run` looks for the `plantuml` command (`choose_diagrams`).
+                diagrams: crate::web::plantuml::Diagrams::server_or_source(
+                    &config.admin.web_plantuml_url,
+                ),
+                diagram_timeout: crate::web::plantuml::DRAW_TIMEOUT,
                 board: crate::web::BoardOptions {
                     closed_statuses: config.documents.closed_statuses(),
                     refresh_ms: config.admin.board_refresh_ms,
@@ -105,6 +109,32 @@ impl ServerOptions {
             }),
             config_warnings: crate::config::warning_lines(config),
         }
+    }
+}
+
+impl ServerOptions {
+    /// Chooses how the web interface draws `PlantUML` diagrams (see
+    /// [`crate::web::plantuml::Diagrams::choose`]), logging a warning when
+    /// `admin.use_plantuml_cli` is on but no `plantuml` is on `PATH`.
+    pub fn choose_diagrams(
+        &mut self,
+        config: &Config,
+        env: &dyn crate::env::Env,
+        fs: &dyn crate::fs::FileSystem,
+    ) {
+        let Some(web) = &mut self.web else {
+            return;
+        };
+        let (diagrams, warning) = crate::web::plantuml::Diagrams::choose(
+            config.admin.use_plantuml_cli,
+            &config.admin.web_plantuml_url,
+            env,
+            fs,
+        );
+        if let Some(warning) = warning {
+            tracing::warn!("configuration: {warning}");
+        }
+        web.diagrams = diagrams;
     }
 }
 
@@ -263,12 +293,14 @@ pub fn run(
     store: Store,
     config: &Config,
     config_file: Option<&std::path::Path>,
+    (env, fs): (&dyn crate::env::Env, &dyn crate::fs::FileSystem),
     out: &mut dyn Write,
 ) -> Result<(), crate::Error> {
     let mut options = ServerOptions::from_config(config);
     if let Some(admin) = &mut options.admin {
         admin.config_file = config_file.map(std::path::Path::to_path_buf);
     }
+    options.choose_diagrams(config, env, fs);
     let addr = options.bind;
     let failed = |source| crate::Error::Serve { addr, source };
     let runtime = tokio::runtime::Builder::new_multi_thread()

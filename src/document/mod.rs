@@ -6,6 +6,7 @@
 mod file;
 pub mod front_matter;
 mod id;
+pub mod links;
 mod title;
 
 pub use file::{FilePath, INDEX_STEM, MAX_FILE_DEPTH, folder_case_clash};

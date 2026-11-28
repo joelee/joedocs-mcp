@@ -354,6 +354,39 @@ fn mermaid_blocks_become_diagram_placeholders() {
 }
 
 #[test]
+fn drawn_on_the_server_each_block_is_a_cached_image_by_its_key() {
+    let cli = plantuml::Diagrams::Cli("/usr/bin/plantuml".into());
+    let source = "```plantuml\n@startuml\nBob -> Alice : hello\n@enduml\n```\n\n```puml\nA -> B\n```\n\n```plantuml\n@startuml\nBob -> Alice : hello\n@enduml\n```\n";
+    let rendered = render_with(source, &Fixed, &cli);
+    let first = plantuml::Diagram::of("@startuml\nBob -> Alice : hello\n@enduml\n");
+    let second = plantuml::Diagram::of("A -> B\n");
+    assert_eq!(second.source, "@startuml\nA -> B\n@enduml\n", "wrapped");
+    assert_eq!(
+        rendered.diagrams,
+        [first.clone(), second.clone()],
+        "each once"
+    );
+    let images: Vec<&str> = tags(&rendered.html)
+        .into_iter()
+        .filter(|t| t.starts_with("img "))
+        .collect();
+    assert_eq!(images.len(), 3, "{}", rendered.html);
+    assert!(
+        images[0].contains(&format!("src=\"/admin/diagrams/{}.svg\"", first.key)),
+        "{}",
+        images[0]
+    );
+    assert!(images[1].contains(&second.key), "{}", images[1]);
+    assert!(images[0].contains("alt=\"PlantUML diagram\""));
+    assert!(rendered.html.contains("Show source"));
+    assert!(rendered.html.contains("Bob -&gt; Alice"));
+    // The server and source modes list nothing.
+    let none: Vec<plantuml::Diagram> = Vec::new();
+    assert_eq!(render(source, &Fixed, "https://p.example").diagrams, none);
+    assert_eq!(render(source, &Fixed, "").diagrams, none);
+}
+
+#[test]
 fn plantuml_blocks_are_images_only_with_a_server() {
     let source = "```plantuml\n@startuml\nBob -> Alice : hello\n@enduml\n```\n";
     let without = render(source, &Fixed, "");

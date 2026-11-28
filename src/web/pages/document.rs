@@ -235,7 +235,12 @@ pub(crate) fn view(
     let rendered = if source {
         markdown::Rendered::default()
     } else {
-        markdown::render(&fetched.markdown, &resolver, &state.options.plantuml_url)
+        let rendered = markdown::render_with(&fetched.markdown, &resolver, &state.options.diagrams);
+        let cache = super::super::plantuml::Cache::new(&store.paths().state_dir);
+        if let Err(error) = cache.save_sources(&rendered.diagrams) {
+            tracing::warn!(%error, "cannot save PlantUML sources to the image cache");
+        }
+        rendered
     };
     let fields = front_matter::parse(&fetched.markdown)
         .map(|parsed| parsed.fields)

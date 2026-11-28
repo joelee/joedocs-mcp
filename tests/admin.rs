@@ -1195,6 +1195,50 @@ fn status_describes_the_installation_without_secrets() {
 }
 
 #[test]
+fn status_says_how_plantuml_diagrams_are_drawn() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = TempDir::new().unwrap();
+    cmd(root.path()).arg("init").assert().success();
+    // PATH holds `bin` and a directory with only git, so the plantuml
+    // this machine may have is not found.
+    let bin = root.path().join("bin");
+    let git_bin = root.path().join("git-bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::create_dir(&git_bin).unwrap();
+    let git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap();
+    std::os::unix::fs::symlink(git, git_bin.join("git")).unwrap();
+    let path = std::env::join_paths([&bin, &git_bin]).unwrap();
+    let web = |cmd: &mut Command| {
+        cmd.env("JOEDOCS__ADMIN__ENABLED", "true")
+            .env("JOEDOCS__ADMIN__WEB_UI", "true")
+            .env("JOEDOCS__ADMIN__USE_PLANTUML_CLI", "true")
+            .env("PATH", &path)
+            .arg("status");
+    };
+    // The key is on, but no plantuml is on PATH: source.
+    let mut missing = cmd(root.path());
+    web(&mut missing);
+    missing.assert().success().stdout(predicate::str::contains(
+        "PlantUML diagrams: shown as source (admin.use_plantuml_cli is on, but no plantuml command is on PATH)",
+    ));
+    let tool = bin.join("plantuml");
+    std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut found = cmd(root.path());
+    web(&mut found);
+    found
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "PlantUML diagrams: drawn on the server by {}\n",
+            tool.display()
+        )));
+}
+
+#[test]
 fn agents_prints_the_guide_for_this_installation() {
     let root = TempDir::new().unwrap();
     cmd(root.path()).arg("init").assert().success();

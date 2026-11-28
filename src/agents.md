@@ -61,7 +61,7 @@ These change the store or what clients can do. Explain what you intend and why, 
 1. `joedocs backup ~/joedocs-backup-$(date +%F).tgz`.
 2. Install the new version the way this one was installed (`cargo install joedocs --locked`, `brew upgrade joedocs`, or a new container image).
 3. Restart the service, then check `joedocs status`, `joedocs check` and the health endpoint.
-4. If something is wrong, reinstall the old version and restore the backup into empty directories.
+4. If something is wrong, reinstall the old version and restore the backup into empty directories. Going back to a version before 0.5.7 after a rename that rewrote links (`rewrite_links`), do not run the old version's `joedocs reindex`: it cannot replay that commit (see the upgrading notes).
 
 The full procedure, with notes for each version: <https://github.com/joelee/joedocs-mcp/blob/main/docs/upgrading.md>.
 

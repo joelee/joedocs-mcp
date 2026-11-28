@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::Path;
 
+use super::admin_files::{convert_locked, converted_row};
 use super::documents::{
     Action, Change, Changed, FileTouch, finish, live_row, parse_id, read_verified, sha256,
     tidy_line,
@@ -527,6 +528,9 @@ impl Store {
     /// Creates or replaces several sub-files of a multi-file document in
     /// one revision and one commit. Every path, limit, size and conflict is
     /// checked before anything is written; on any error nothing changes. A
+    /// single-file document is first converted, as [`Store::convert`] does,
+    /// under the same write lock once every entry has passed: two
+    /// revisions, `convert` then `write_files`. A
     /// file given with the content and front matter it already has is not a
     /// change, and a call that changes no file is refused.
     ///
@@ -554,9 +558,22 @@ impl Store {
             ..
         } = self;
         let _lock = begin_write(paths, conn, history.as_ref())?;
-        let tx = conn.transaction()?;
+        let mut tx = conn.transaction()?;
         let mut row = live_row(&tx, &id)?;
-        require_multifile(&row, "document_id")?;
+        if !row.multifile {
+            // Every entry is checked first, against the row it would have
+            // once converted; then the convert revision, then the files'.
+            let mut future = converted_row(&tx, &paths.home, &row)?;
+            let planned = plan_writes(&paths.home, settings, &future, &[], request)?;
+            future.revision += 2;
+            for (_, draft) in &planned {
+                render(&future, &now, draft, settings)?;
+            }
+            drop(tx);
+            convert_locked(conn, paths, settings, history.as_ref(), actor, at, &id)?;
+            tx = conn.transaction()?;
+            row = live_row(&tx, &id)?;
+        }
         let live = db::live_files(&tx, &row.id)?;
         let planned = plan_writes(&paths.home, settings, &row, &live, request)?;
         verify_all(&paths.home, &row, &live)?;

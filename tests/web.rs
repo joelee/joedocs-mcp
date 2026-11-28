@@ -899,11 +899,14 @@ async fn the_library_lists_filters_sorts_and_pages_documents() -> TestResult<()>
         "archived documents are not listed"
     );
     assert!(all.body.contains("href=\"/admin/documents/JD-1\""));
-    // The default project is the first, and the picker lists them all.
+    // The bare page lists every project (JD-81), and the picker lists
+    // them all.
     let default = server.get("/admin/documents", Some(&cookie)).await?;
     assert!(default.body.contains("Rollout plan"), "{}", default.body);
     assert!(
-        default.body.contains("<option value=\"notes\""),
+        default
+            .body
+            .contains("type=\"checkbox\" name=\"project\" value=\"notes\""),
         "{}",
         default.body
     );
@@ -946,7 +949,7 @@ async fn the_library_lists_filters_sorts_and_pages_documents() -> TestResult<()>
     let unknown = server
         .get("/admin/documents?project=nope", Some(&cookie))
         .await?;
-    assert_eq!(unknown.status, 404);
+    assert_eq!(unknown.status, 400, "refused as the Board refuses (JD-81)");
     assert!(unknown.body.contains("nope"), "{}", unknown.body);
     let bad_sort = server
         .get(
@@ -1120,6 +1123,412 @@ async fn plantuml_diagrams_come_from_the_configured_server_only() -> TestResult<
         "{tools:?}"
     );
     assert_eq!(list.status, 200);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn with_the_plantuml_cli_no_diagram_goes_to_the_server() -> TestResult<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = TempDir::new()?;
+    let tool = bin.path().join("plantuml");
+    std::fs::write(&tool, "#!/bin/sh\n")?;
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))?;
+    let path = bin.path().display().to_string();
+    let server = start_options(
+        |c| {
+            c.admin.web_plantuml_url = "https://plantuml.example.net/plantuml".into();
+            c.admin.use_plantuml_cli = true;
+        },
+        |options| {
+            let mut config = Config::default();
+            config.admin.web_plantuml_url = "https://plantuml.example.net/plantuml".into();
+            config.admin.use_plantuml_cli = true;
+            options.choose_diagrams(
+                &config,
+                &joedocs::env::MapEnv::new().with("PATH", path),
+                &joedocs::fs::RealFs,
+            );
+            assert_eq!(
+                options.web.as_ref().map(|w| w.diagrams.clone()),
+                Some(joedocs::web::plantuml::Diagrams::Cli(tool.clone()))
+            );
+        },
+        fixture,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let view = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert_eq!(view.status, 200);
+    assert!(!view.body.contains("plantuml.example.net"), "{}", view.body);
+    let csp = view.header("content-security-policy").ok_or("no policy")?;
+    assert!(csp.contains("img-src 'self' data:;"), "{csp}");
+    server.stop().await
+}
+
+/// A fake `plantuml` in its own directory: it records its arguments,
+/// environment and stdin, counts its runs in `runs`, tracks how many run at
+/// once in `most`, then prints `<svg>` (or runs `extra` first).
+fn fake_plantuml(extra: &str) -> TestResult<(TempDir, std::path::PathBuf)> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = TempDir::new()?;
+    let d = dir.path().display();
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" > '{d}/args'\nenv > '{d}/env'\ncat > '{d}/stdin'\nmkdir -p '{d}/active'\ntouch \"{d}/active/$$\"\nls '{d}/active' | wc -l >> '{d}/most'\necho run >> '{d}/runs'\n{extra}\nrm -f \"{d}/active/$$\"\nprintf '<svg xmlns=\"http://www.w3.org/2000/svg\"><text>drawn</text></svg>'\n"
+    );
+    let tool = dir.path().join("plantuml");
+    std::fs::write(&tool, script)?;
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))?;
+    Ok((dir, tool))
+}
+
+fn runs(tool_dir: &std::path::Path) -> usize {
+    std::fs::read_to_string(tool_dir.join("runs")).map_or(0, |text| text.lines().count())
+}
+
+/// A document JD-1 with `blocks` `PlantUML` diagrams (`A -> B1`, ...).
+fn diagram_fixture(blocks: usize) -> impl FnOnce(&mut Store) -> TestResult<()> {
+    move |store: &mut Store| {
+        use joedocs::store::{Actor, NewDocument};
+        store.add_project("joedocs", "JD", None)?;
+        let mut body = String::new();
+        for n in 1..=blocks {
+            body.push_str("```plantuml\nA -> B");
+            body.push_str(&n.to_string());
+            body.push_str("\n```\n\n");
+        }
+        store.create(
+            &Actor::new("laptop-key", "claude-code"),
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Diagrams".into(),
+                content: body,
+                ..NewDocument::default()
+            },
+        )?;
+        Ok(())
+    }
+}
+
+async fn start_drawing(
+    tool: &std::path::Path,
+    timeout: std::time::Duration,
+    setup: impl FnOnce(&mut Store) -> TestResult<()>,
+) -> TestResult<Server> {
+    let tool = tool.to_path_buf();
+    start_options(
+        |c| c.admin.use_plantuml_cli = true,
+        move |options| {
+            if let Some(web) = options.web.as_mut() {
+                web.diagrams = joedocs::web::plantuml::Diagrams::Cli(tool);
+                web.diagram_timeout = timeout;
+            }
+        },
+        setup,
+    )
+    .await
+}
+
+/// From another store on the same files: appends `A -> C` to JD-1, then
+/// checks a backup leaves the image cache out and `check` ignores it.
+fn append_a_diagram_and_back_up(root: &std::path::Path) -> TestResult<()> {
+    let paths = joedocs::store::Paths {
+        home: root.join("vault"),
+        state_dir: root.join("state"),
+    };
+    let mut other = Store::open(
+        paths.clone(),
+        Settings::from_config(&Config::default()),
+        Box::new(GitCli::new(paths.git_dir(), &paths.home)),
+        Arc::new(FixedClock::at(1_793_000_100)),
+    )?;
+    other.append(
+        &joedocs::store::Actor::new("laptop-key", "claude-code"),
+        "JD-1",
+        "```plantuml\nA -> C\n```\n",
+        None,
+        None,
+    )?;
+    // A backup leaves the cache out; check ignores it.
+    let backup = root.join("backup.tgz");
+    joedocs::backup::create(&other, &backup)?;
+    let mut archive =
+        tar::Archive::new(flate2::read::GzDecoder::new(std::fs::File::open(&backup)?));
+    let mut names = Vec::new();
+    for entry in archive.entries()? {
+        names.push(entry?.path()?.display().to_string());
+    }
+    assert!(names.iter().any(|n| n.contains("history")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("cache")), "{names:?}");
+    assert_eq!(other.check()?.problems(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn diagrams_are_drawn_once_by_the_cli_and_cached_by_their_source() -> TestResult<()> {
+    use joedocs::web::plantuml::Diagram;
+    let (tool_dir, tool) = fake_plantuml("")?;
+    let server = start_drawing(
+        &tool,
+        std::time::Duration::from_secs(10),
+        diagram_fixture(1),
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let first = Diagram::of("A -> B1\n");
+    let page = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    let src = format!("/admin/diagrams/{}.svg", first.key);
+    assert!(
+        page.body.contains(&format!("<img src=\"{src}\"")),
+        "{}",
+        page.body
+    );
+    let csp = page.header("content-security-policy").ok_or("no policy")?;
+    assert!(csp.contains("img-src 'self' data:;"), "{csp}");
+    let cache = server.dir.path().join("state/cache/plantuml");
+    assert_eq!(
+        std::fs::read_to_string(cache.join(format!("{}.puml", first.key)))?,
+        "@startuml\nA -> B1\n@enduml\n"
+    );
+    assert_eq!(
+        runs(tool_dir.path()),
+        0,
+        "drawn only when the image is asked for"
+    );
+
+    let image = server.get(&src, Some(&cookie)).await?;
+    assert_eq!(image.status, 200, "{}", image.body);
+    assert_eq!(image.header("content-type"), Some("image/svg+xml"));
+    assert_eq!(image.header("x-content-type-options"), Some("nosniff"));
+    assert_eq!(
+        image.header("content-security-policy"),
+        Some("default-src 'none'; style-src 'unsafe-inline'; sandbox")
+    );
+    assert_eq!(
+        image.header("cache-control"),
+        Some("private, max-age=31536000, immutable")
+    );
+    assert!(image.body.contains("<text>drawn</text>"), "{}", image.body);
+    assert!(cache.join(format!("{}.svg", first.key)).is_file());
+    // The command line, the sandbox and the cleared environment.
+    assert_eq!(
+        std::fs::read_to_string(tool_dir.path().join("args"))?,
+        "-tsvg -pipe\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tool_dir.path().join("stdin"))?,
+        "@startuml\nA -> B1\n@enduml\n"
+    );
+    let env = std::fs::read_to_string(tool_dir.path().join("env"))?;
+    assert!(env.contains("PLANTUML_SECURITY_PROFILE=SANDBOX\n"), "{env}");
+    assert!(
+        env.contains(&format!("HOME={}\n", cache.display())),
+        "{env}"
+    );
+    assert!(!env.contains("CARGO"), "the environment is cleared: {env}");
+
+    // Viewed again, nothing is drawn again.
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert_eq!(server.get(&src, Some(&cookie)).await?.status, 200);
+    assert_eq!(runs(tool_dir.path()), 1);
+
+    // A changed diagram has a new key and is drawn once more.
+    append_a_diagram_and_back_up(server.dir.path())?;
+    let second = Diagram::of("A -> C\n");
+    let page = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert!(page.body.contains(&second.key), "{}", page.body);
+    let src2 = format!("/admin/diagrams/{}.svg", second.key);
+    assert_eq!(server.get(&src2, Some(&cookie)).await?.status, 200);
+    assert_eq!(runs(tool_dir.path()), 2);
+
+    // Not a key, or a key with no saved source: 404. No session: refused.
+    for path in [
+        "/admin/diagrams/nothex.svg",
+        "/admin/diagrams/0000000000000000000000000000000000000000.svg",
+        &format!("/admin/diagrams/{}.png", first.key),
+    ] {
+        assert_eq!(server.get(path, Some(&cookie)).await?.status, 404, "{path}");
+    }
+    let anonymous = server.get(&src, None).await?;
+    assert!(
+        anonymous.status >= 300 && anonymous.status != 200,
+        "{}",
+        anonymous.status
+    );
+    assert!(!anonymous.body.contains("drawn"));
+    assert_eq!(runs(tool_dir.path()), 2);
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    assert!(tools.iter().any(|t| t == "admin:web.diagram"), "{tools:?}");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn a_diagram_that_takes_too_long_is_a_502_and_not_cached() -> TestResult<()> {
+    use joedocs::web::plantuml::Diagram;
+    let (tool_dir, tool) = fake_plantuml("sleep 5")?;
+    let server = start_drawing(
+        &tool,
+        std::time::Duration::from_millis(300),
+        diagram_fixture(1),
+    )
+    .await?;
+    let cookie = server.login().await?;
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let key = Diagram::of("A -> B1\n").key;
+    let started = std::time::Instant::now();
+    let image = server
+        .get(&format!("/admin/diagrams/{key}.svg"), Some(&cookie))
+        .await?;
+    assert_eq!(image.status, 502, "{}", image.body);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "killed"
+    );
+    let cache = server.dir.path().join("state/cache/plantuml");
+    assert!(!cache.join(format!("{key}.svg")).exists());
+    assert_eq!(runs(tool_dir.path()), 1);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn an_error_image_with_a_failing_exit_is_still_served_and_cached() -> TestResult<()> {
+    use joedocs::web::plantuml::Diagram;
+    // PlantUML draws a syntax error as an image and exits 200.
+    let (tool_dir, tool) = fake_plantuml("trap 'exit 200' EXIT")?;
+    let server = start_drawing(
+        &tool,
+        std::time::Duration::from_secs(10),
+        diagram_fixture(1),
+    )
+    .await?;
+    let cookie = server.login().await?;
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let path = format!("/admin/diagrams/{}.svg", Diagram::of("A -> B1\n").key);
+    let image = server.get(&path, Some(&cookie)).await?;
+    assert_eq!(image.status, 200, "{}", image.body);
+    assert!(image.body.contains("drawn"));
+    assert_eq!(server.get(&path, Some(&cookie)).await?.status, 200);
+    assert_eq!(runs(tool_dir.path()), 1);
+    server.stop().await
+}
+
+#[tokio::test]
+#[ignore = "needs the real plantuml on PATH; run with --run-ignored"]
+async fn the_real_plantuml_draws_in_its_sandbox() -> TestResult<()> {
+    use joedocs::web::plantuml::{Diagram, Diagrams};
+    let mut config = Config::default();
+    config.admin.use_plantuml_cli = true;
+    let path = std::env::var("PATH").unwrap_or_default();
+    let (diagrams, missing) = Diagrams::choose(
+        true,
+        "",
+        &joedocs::env::MapEnv::new().with("PATH", path),
+        &joedocs::fs::RealFs,
+    );
+    assert_eq!(missing, None, "no plantuml on PATH");
+    let host = std::fs::read_to_string("/etc/hostname")?.trim().to_owned();
+    let setup = |store: &mut Store| -> TestResult<()> {
+        use joedocs::store::{Actor, NewDocument};
+        store.add_project("joedocs", "JD", None)?;
+        store.create(
+            &Actor::new("laptop-key", "claude-code"),
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Real".into(),
+                content: "```plantuml\n@startuml\nBob -> Alice : hello\n@enduml\n```\n\n```plantuml\n@startuml\n!include /etc/hostname\nA -> B\n@enduml\n```\n".into(),
+                ..NewDocument::default()
+            },
+        )?;
+        Ok(())
+    };
+    let server = start_options(
+        |c| c.admin.use_plantuml_cli = true,
+        move |options| {
+            if let Some(web) = options.web.as_mut() {
+                web.diagrams = diagrams;
+            }
+        },
+        setup,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let hello = Diagram::of("@startuml\nBob -> Alice : hello\n@enduml\n");
+    let image = server
+        .get(&format!("/admin/diagrams/{}.svg", hello.key), Some(&cookie))
+        .await?;
+    assert_eq!(image.status, 200, "{}", image.body);
+    assert!(
+        image.body.contains("<svg") && image.body.contains("Alice"),
+        "{}",
+        image.body
+    );
+    assert!(!image.body.contains("<script"), "{}", image.body);
+    println!(
+        "hello: {} bytes, {:?}",
+        image.bytes.len(),
+        image.header("content-security-policy")
+    );
+    let include = Diagram::of("@startuml\n!include /etc/hostname\nA -> B\n@enduml\n");
+    let refused = server
+        .get(
+            &format!("/admin/diagrams/{}.svg", include.key),
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(
+        refused.status, 200,
+        "PlantUML draws the error: {}",
+        refused.body
+    );
+    println!(
+        "include: {} bytes, error text: {}",
+        refused.bytes.len(),
+        refused.body.contains("cannot include")
+    );
+    assert!(
+        !host.is_empty() && !refused.body.contains(&host),
+        "{}",
+        refused.body
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn at_most_two_diagrams_are_drawn_at_once() -> TestResult<()> {
+    use joedocs::web::plantuml::Diagram;
+    let (tool_dir, tool) = fake_plantuml("sleep 0.4")?;
+    let server = start_drawing(
+        &tool,
+        std::time::Duration::from_secs(10),
+        diagram_fixture(4),
+    )
+    .await?;
+    let cookie = server.login().await?;
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let path = |n: u32| {
+        format!(
+            "/admin/diagrams/{}.svg",
+            Diagram::of(&format!("A -> B{n}\n")).key
+        )
+    };
+    let (p1, p2, p3, p4) = (path(1), path(2), path(3), path(4));
+    let replies = tokio::join!(
+        server.get(&p1, Some(&cookie)),
+        server.get(&p2, Some(&cookie)),
+        server.get(&p3, Some(&cookie)),
+        server.get(&p4, Some(&cookie)),
+    );
+    for reply in [replies.0, replies.1, replies.2, replies.3] {
+        assert_eq!(reply?.status, 200);
+    }
+    assert_eq!(runs(tool_dir.path()), 4);
+    let most = std::fs::read_to_string(tool_dir.path().join("most"))?;
+    let most = most
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .max();
+    assert_eq!(most, Some(2), "two at once, not more");
     server.stop().await
 }
 
@@ -2422,7 +2831,10 @@ async fn every_route_writes_one_audit_row_with_its_documented_tool() -> TestResu
     let mut cookie = server.login().await?;
     let mut csrf = server.csrf(&cookie).await?;
     for (method, path, tool) in &routes {
-        let path = path.replace("{id}", "JD-1").replace("{name}", "ci");
+        let path = path
+            .replace("{id}", "JD-1")
+            .replace("{name}", "ci")
+            .replace("{key}", &"0".repeat(40));
         let before = server.audit()?.len();
         let reply = match (method.as_str(), path.as_str()) {
             ("POST", "/admin/login") => server.post_login(&server.code(), "/admin/").await?,
@@ -4224,11 +4636,9 @@ async fn documents_sort_by_their_column_headers_across_pages() -> TestResult<()>
         "{}",
         ascending.body
     );
-    // The filter form keeps the order through a hidden field it owns.
+    // The filter form keeps the order in its View menu (JD-81).
     assert!(
-        ascending
-            .body
-            .contains("name=\"sort\" value=\"title\" form=\"documents-filters\""),
+        ascending.body.contains("<option value=\"title\" selected"),
         "{}",
         ascending.body
     );
@@ -4241,6 +4651,7 @@ async fn documents_sort_by_their_column_headers_across_pages() -> TestResult<()>
     let title_header = descending
         .body
         .split("<th")
+        .skip(1)
         .find(|th| th.contains(">Title<"))
         .ok_or("no Title header")?;
     assert!(
@@ -6587,11 +6998,9 @@ async fn only_the_board_loads_its_script_which_is_a_cached_asset() -> TestResult
     for other in ["/admin/", "/admin/documents", "/admin/audit"] {
         let page = server.get(other, Some(&cookie)).await?;
         assert!(!page.body.contains("board.js"), "{other} does not load it");
-        assert!(
-            !page.body.contains("filters.js"),
-            "{other} does not load it"
-        );
     }
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    assert!(!home.body.contains("filters.js"), "the overview does not");
     // The filter parts (JD-71) are their own cached script, loaded before
     // the Board's.
     let parts = board
@@ -6658,5 +7067,397 @@ async fn the_board_works_when_plans_is_not_a_type() -> TestResult<()> {
         assert_eq!(board_cards(&page.body), ["AL-1"], "{path}");
         assert!(!page.body.contains("data-building"), "{path}");
     }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn documents_search_and_archive_choose_a_project_with_the_picker() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    for (path, prefix, all) in [
+        ("/admin/search?project=beta", "s-project", true),
+        ("/admin/archive?project=beta", "ar-project", true),
+    ] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}");
+        let body = &page.body;
+        assert!(
+            body.contains("/filters.js\""),
+            "{path} loads the filter parts"
+        );
+        let page_tags = tags(body);
+        let form = page_tags
+            .iter()
+            .find(|t| t.name == "form" && t.get("data-filter-form").is_some())
+            .ok_or("no filter form")?;
+        assert!(
+            form.get("hx-get").is_some(),
+            "{path} still refreshes its results"
+        );
+        let picker = page_tags
+            .iter()
+            .find(|t| t.get("data-filter-picker").is_some())
+            .ok_or("no picker")?;
+        assert_eq!(picker.get("data-filter-picker"), Some("project"), "{path}");
+        assert!(
+            picker.get("data-picker-single").is_some(),
+            "{path}: one choice"
+        );
+        assert!(
+            !page_tags
+                .iter()
+                .any(|t| t.name == "select" && t.get("name") == Some("project")),
+            "{path}: no project select"
+        );
+        // One radio button per choice, the current one checked, with the
+        // same `project` values the select had.
+        let radios: Vec<&Tag> = page_tags
+            .iter()
+            .filter(|t| t.name == "input" && t.get("name") == Some("project"))
+            .collect();
+        assert!(
+            radios.iter().all(|r| r.get("type") == Some("radio")),
+            "{path}"
+        );
+        let values: Vec<&str> = radios.iter().filter_map(|r| r.get("value")).collect();
+        let expected: &[&str] = if all {
+            &["", "alpha", "beta"]
+        } else {
+            &["alpha", "beta"]
+        };
+        assert_eq!(values, expected, "{path}");
+        let checked: Vec<&str> = radios
+            .iter()
+            .filter(|r| r.get("checked").is_some())
+            .filter_map(|r| r.get("value"))
+            .collect();
+        assert_eq!(checked, ["beta"], "{path}");
+        assert!(
+            radios
+                .iter()
+                .all(|r| r.get("id").is_some_and(|id| id.starts_with(prefix))),
+            "{path}"
+        );
+        let opener = page_tags
+            .iter()
+            .find(|t| t.get("data-picker-open").is_some())
+            .ok_or("no picker button")?;
+        assert_eq!(opener.get("aria-expanded"), Some("false"), "{path}");
+        assert!(body.contains("aria-label=\"Search "), "{path}");
+        // Many choices are no part of choosing one.
+        for many in ["data-picker-all", "data-picker-only", "data-picker-clear"] {
+            assert!(!body.contains(many), "{path}: {many}");
+        }
+        // The address is as before: choosing a project still sends
+        // `project`.
+        let chosen = server
+            .get(&path.replace("beta", "alpha"), Some(&cookie))
+            .await?;
+        assert_eq!(chosen.status, 200);
+        let chosen_tags = tags(&chosen.body);
+        let checked: Vec<&str> = chosen_tags
+            .iter()
+            .filter(|t| t.name == "input" && t.get("name") == Some("project"))
+            .filter(|r| r.get("checked").is_some())
+            .filter_map(|r| r.get("value"))
+            .collect();
+        assert_eq!(checked, ["alpha"], "{path}");
+    }
+    // "All projects" is the default where there is one.
+    let page = server.get("/admin/search", Some(&cookie)).await?;
+    assert!(page.body.contains("value=\"\" checked"), "all projects");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn audit_quick_filters_are_pills_and_its_negations_are_chips() -> TestResult<()> {
+    let server = start().await?;
+    let cookie = server.login().await?;
+    let pills = |body: &str| -> Vec<(String, bool)> {
+        tags(body)
+            .into_iter()
+            .filter(|t| t.name == "a" && t.get("class") == Some("pill"))
+            .map(|t| {
+                (
+                    t.get("href").unwrap_or("").to_owned(),
+                    t.get("aria-current") == Some("true"),
+                )
+            })
+            .collect()
+    };
+    let current = |body: &str| -> Vec<String> {
+        pills(body)
+            .into_iter()
+            .filter(|(_, on)| *on)
+            .map(|(href, _)| href)
+            .collect()
+    };
+    let all = server.get("/admin/audit", Some(&cookie)).await?;
+    assert_eq!(all.status, 200);
+    let hrefs: Vec<String> = pills(&all.body).into_iter().map(|(h, _)| h).collect();
+    assert_eq!(hrefs.len(), 5, "{hrefs:?}");
+    assert_eq!(hrefs[0], "/admin/audit");
+    for quick in [
+        "/admin/audit?tool=admin%3A*",
+        "/admin/audit?outcome_not=ok",
+        "/admin/audit?tool_not=admin%3Adocuments.board*",
+    ] {
+        assert!(hrefs.iter().any(|h| h == quick), "{quick} in {hrefs:?}");
+    }
+    assert_eq!(current(&all.body), ["/admin/audit"], "All is lit");
+    assert!(
+        !all.body.contains("class=\"fchip\""),
+        "no chips without filters"
+    );
+
+    // Refusals: its pill is lit, and the hint is a chip whose removal
+    // leads where the hint's "Show all" did.
+    let refusals = server
+        .get("/admin/audit?outcome_not=ok", Some(&cookie))
+        .await?;
+    assert_eq!(current(&refusals.body), ["/admin/audit?outcome_not=ok"]);
+    assert!(!refusals.body.contains("Showing outcomes other than"));
+    let removers: Vec<Tag> = tags(&refusals.body)
+        .into_iter()
+        .filter(|t| t.get("data-chip-remove").is_some())
+        .collect();
+    assert_eq!(removers.len(), 1);
+    assert_eq!(removers[0].get("href"), Some("/admin/audit"));
+    assert_eq!(
+        removers[0].get("aria-label"),
+        Some("Remove the filter: outcomes other than ok")
+    );
+    assert!(
+        refusals
+            .body
+            .contains("<span class=\"fchip-facet\">Outcome:</span>")
+    );
+    // The form still carries the value, so the results keep it.
+    assert!(
+        refusals
+            .body
+            .contains("type=\"hidden\" name=\"outcome_not\" value=\"ok\"")
+    );
+
+    // Two chips: each removal drops its own parameter only.
+    let both = server
+        .get(
+            "/admin/audit?key=ci-bot&outcome_not=ok&tool_not=admin%3Adocuments.board*&limit=20",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(both.status, 200);
+    assert_eq!(
+        current(&both.body),
+        Vec::<String>::new(),
+        "no preset matches"
+    );
+    let removers: Vec<String> = tags(&both.body)
+        .into_iter()
+        .filter(|t| t.get("data-chip-remove").is_some())
+        .filter_map(|t| t.get("href").map(|h| h.replace("&#38;", "&")))
+        .collect();
+    assert_eq!(
+        removers,
+        [
+            "/admin/audit?key=ci-bot&tool_not=admin%3Adocuments.board*&limit=20",
+            "/admin/audit?key=ci-bot&outcome_not=ok&limit=20",
+        ]
+    );
+    for href in &removers {
+        let page = server.get(href, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{href}");
+    }
+    server.stop().await
+}
+
+/// Two projects, four documents of several types and statuses.
+fn documents_filter_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewDocument};
+    let actor = Actor::new("laptop-key", "claude-code");
+    store.add_project("alpha", "AL", Some("Alpha"))?;
+    store.add_project("beta", "BE", None)?;
+    for (project, doc_type, status, title) in [
+        ("alpha", "plans", "draft", "Alpha plan"),
+        ("alpha", "notes", "approved", "Alpha note"),
+        ("beta", "plans", "review", "Beta plan"),
+        ("beta", "ideas", "draft", "Beta idea"),
+    ] {
+        store.create(
+            &actor,
+            NewDocument {
+                project: project.into(),
+                doc_type: Some(doc_type.into()),
+                status: Some(status.into()),
+                title: title.into(),
+                content: "x\n".into(),
+                ..NewDocument::default()
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// The document IDs a Documents page lists, in order.
+fn listed_ids(body: &str) -> Vec<String> {
+    tags(body)
+        .into_iter()
+        .filter(|t| t.name == "a")
+        .filter_map(|t| t.get("href").map(str::to_owned))
+        .filter_map(|href| href.strip_prefix("/admin/documents/").map(str::to_owned))
+        .filter(|id| !id.contains('/') && !id.contains('?'))
+        .fold(Vec::new(), |mut ids, id| {
+            if ids.last() != Some(&id) {
+                ids.push(id);
+            }
+            ids
+        })
+}
+
+/// The Documents page's filter bar, panel and View menu, on a page of the
+/// two projects of `documents_filter_fixture` (JD-81).
+fn documents_bar_markup(body: &str) -> TestResult<()> {
+    let page_tags = tags(body);
+    let form = page_tags
+        .iter()
+        .find(|t| t.get("id") == Some("documents-filters"))
+        .ok_or("no form")?;
+    for attribute in ["data-filter-form", "data-filter-address", "hx-get"] {
+        assert!(form.get(attribute).is_some(), "{attribute}");
+    }
+    for part in [
+        "data-filter-toggle",
+        "data-filter-count",
+        "data-filter-chips",
+        "data-filter-clear",
+        "data-view-menu",
+        "data-filter-panel",
+    ] {
+        assert!(page_tags.iter().any(|t| t.get(part).is_some()), "{part}");
+    }
+    let picker = page_tags
+        .iter()
+        .find(|t| t.get("data-filter-picker") == Some("project"))
+        .ok_or("no project picker")?;
+    assert!(
+        picker.get("data-picker-single").is_none(),
+        "several projects"
+    );
+    let values = |name: &str| -> Vec<String> {
+        page_tags
+            .iter()
+            .filter(|t| t.name == "input" && t.get("name") == Some(name))
+            .filter(|t| t.get("type") == Some("checkbox"))
+            .filter_map(|t| t.get("value").map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(values("project"), ["alpha", "beta"]);
+    assert!(values("type").contains(&"plans".to_owned()));
+    assert!(values("status").contains(&"draft".to_owned()));
+    assert!(
+        page_tags
+            .iter()
+            .filter(|t| t.get("data-filter-pills").is_some())
+            .count()
+            >= 2,
+        "types and statuses are pills"
+    );
+    let sorts: Vec<&str> = page_tags
+        .iter()
+        .skip_while(|t| !(t.name == "select" && t.get("name") == Some("sort")))
+        .take_while(|t| t.name != "fieldset")
+        .filter(|t| t.name == "option")
+        .filter_map(|t| t.get("value"))
+        .collect();
+    assert_eq!(
+        sorts,
+        ["updated", "id", "title", "type", "status", "revision"]
+    );
+    assert!(body.contains("name=\"dir\" value=\"desc\" checked"));
+    assert!(body.contains(">Project</th>"), "a Project column");
+    Ok(())
+}
+
+#[tokio::test]
+async fn documents_have_the_boards_filters_bar_and_view_menu() -> TestResult<()> {
+    let server = start_full(|_| {}, documents_filter_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &str| {
+        let path = format!("/admin/documents{query}");
+        let server = &server;
+        let cookie = &cookie;
+        async move { server.get(&path, Some(cookie)).await }
+    };
+
+    // The bare page: every project, the bar, the panel and the View menu.
+    let bare = get("").await?;
+    assert_eq!(bare.status, 200, "{}", bare.body);
+    let mut ids = listed_ids(&bare.body);
+    ids.sort();
+    assert_eq!(ids, ["AL-1", "AL-2", "BE-1", "BE-2"]);
+    documents_bar_markup(&bare.body)?;
+
+    // Several values, as comma lists or repeated keys.
+    for query in [
+        "?project=alpha,beta&type=plans,ideas&status=draft,review",
+        "?project=alpha&project=beta&type=plans&type=ideas&status=draft&status=review",
+    ] {
+        let page = get(query).await?;
+        assert_eq!(page.status, 200, "{query}");
+        let mut ids = listed_ids(&page.body);
+        ids.sort();
+        assert_eq!(ids, ["AL-1", "BE-1", "BE-2"], "{query}");
+        assert!(
+            page.body.contains("data-filter-count>2<"),
+            "{query}: two filters in force"
+        );
+    }
+
+    // A 0.5.6 address keeps its meaning, with the View menu showing its order.
+    let old = get("?project=alpha&type=plans&sort=title&dir=desc").await?;
+    assert_eq!(listed_ids(&old.body), ["AL-1"]);
+    assert!(
+        !old.body.contains(">Project</th>"),
+        "one project: no Project column"
+    );
+    assert!(old.body.contains("<code>AL</code>"), "the project line");
+    assert!(old.body.contains("<option value=\"title\" selected"));
+    assert!(old.body.contains("name=\"dir\" value=\"desc\" checked"));
+    // Headers and paging keep the filters, in the comma form.
+    let paged = get("?project=alpha,beta&type=plans,ideas&limit=1&filters=closed").await?;
+    assert!(
+        paged.body.contains(
+            "href=\"/admin/documents?type=plans,ideas&#38;filters=closed&#38;start=2&#38;limit=1\""
+        ),
+        "{}",
+        paged.body
+    );
+    let panel = tags(&paged.body)
+        .into_iter()
+        .find(|t| t.get("data-filter-panel").is_some())
+        .ok_or("no panel")?;
+    assert!(
+        panel.get("hidden").is_some(),
+        "filters=closed shuts the panel"
+    );
+
+    // Unknown values are refused, with a way back.
+    for (query, named) in [
+        ("?project=nope", "nope"),
+        ("?type=plans,memo", "memo"),
+        ("?status=open", "open"),
+        ("?sort=sideways", "sideways"),
+        ("?dir=up", "up"),
+    ] {
+        let refused = get(query).await?;
+        assert_eq!(refused.status, 400, "{query}");
+        assert!(refused.body.contains(named), "{query}: {}", refused.body);
+    }
+    let refused = get("?project=nope").await?;
+    assert!(
+        refused.body.contains("Reset the Documents view"),
+        "{}",
+        refused.body
+    );
     server.stop().await
 }

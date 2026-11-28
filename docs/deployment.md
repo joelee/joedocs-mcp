@@ -22,7 +22,8 @@ flowchart LR
 | macOS | `brew trust joelee/oss && brew tap joelee/oss && brew install joelee/oss/joedocs` |
 | Linux or macOS | A prebuilt binary from [GitHub Releases](https://github.com/joelee/joedocs-mcp/releases) (0.4.3 or later; below) |
 | Linux or macOS | `cargo install joedocs --locked` (Rust 1.99 or newer and a C compiler; installs to `~/.cargo/bin`) |
-| Docker | `docker run -d --name joedocs -p 127.0.0.1:8750:8750 -v joedocs-vault:/data/vault -v joedocs-state:/data/state joeworks/joedocs:0.5.6` (from 0.5.6, on Docker Hub and `ghcr.io/joelee/joedocs`; see the [Docker installation guide](docker.md)) |
+| Linux or macOS | `cargo binstall joedocs` (with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall)): downloads the release archive for Linux x86_64 and aarch64 and Apple silicon Macs into `~/.cargo/bin` instead of compiling (the metadata is in `Cargo.toml` from 0.5.7). Intel Macs and other targets have no archive and build from source. It does not check the attestation |
+| Docker | `docker run -d --name joedocs -p 127.0.0.1:8750:8750 -v joedocs-vault:/data/vault -v joedocs-state:/data/state joeworks/joedocs:0.5.7` (from 0.5.6, on Docker Hub and `ghcr.io/joelee/joedocs`; see the [Docker installation guide](docker.md)) |
 
 JoeDocs needs `git` at run time (`sudo pacman -S git`, `sudo apt install git`, or the Xcode Command Line Tools on macOS).
 
@@ -275,7 +276,7 @@ The admin API can also serve pages for a browser under `/admin/`: browse, search
 - Add the public name to `server.allowed_hosts` and let the proxy pass the `Host` through. `tailscale serve` and Caddy's `reverse_proxy` do; with nginx, set `proxy_set_header Host $host;`.
 - If your proxy rewrites `Host` to the backend address instead, add the public origin to `server.allowed_origins`, for example `allowed_origins = ["https://docs.example.net"]`, or every sign-in is refused as "not sent from this site".
 
-**PlantUML diagrams.** The bundled renderer draws Mermaid diagrams in the browser. PlantUML diagrams are shown as source unless `admin.web_plantuml_url` names a PlantUML server, such as `https://www.plantuml.com/plantuml`. The admin's browser then fetches each diagram from `<url>/svg/<encoded diagram text>`, so **that server receives the text of every diagram you view**; JoeDocs itself sends nothing. For private diagrams run your own server, for example the `plantuml/plantuml-server` container on the same machine, and set its address (`http://127.0.0.1:8080` is allowed only on loopback; use `https://` otherwise).
+**PlantUML diagrams.** The bundled renderer draws Mermaid diagrams in the browser. With `admin.use_plantuml_cli = true` (0.5.7) and the `plantuml` command installed on the server (for example `pacman -S plantuml`, `apt install plantuml` or `brew install plantuml`; it needs Java), JoeDocs draws PlantUML diagrams itself and no diagram text leaves the server. `serve` looks for `plantuml` on its own `PATH` when it starts: a systemd unit gets systemd's default `PATH` (`/usr/local/bin` and `/usr/bin`, among others), so a `plantuml` installed elsewhere needs a symlink in one of those, or an `Environment=PATH=...` line in a drop-in (`systemctl --user edit joedocs`). When it is not found, `serve` logs a warning and uses the next mode below; `joedocs status` shows the mode in use (`PlantUML diagrams: ...`). Otherwise, PlantUML diagrams are shown as source unless `admin.web_plantuml_url` names a PlantUML server, such as `https://www.plantuml.com/plantuml`. The admin's browser then fetches each diagram from `<url>/svg/<encoded diagram text>`, so **that server receives the text of every diagram you view**; JoeDocs itself sends nothing. For private diagrams run your own server, for example the `plantuml/plantuml-server` container on the same machine, and set its address (`http://127.0.0.1:8080` is allowed only on loopback; use `https://` otherwise).
 
 ## 7. Operate
 
@@ -290,7 +291,7 @@ The admin API can also serve pages for a browser under `/admin/`: browse, search
 | Permissions | The state directory is private (`0700`, the database `0600`): it holds API key hashes and admin TOTP secrets. `serve` tightens an older install's permissions on start and logs it. Run admin commands as the account that owns it. |
 | Restore a backup | Stop the service, then `joedocs backup --restore --state-dir NEW_STATE --content-dir NEW_VAULT FILE.tgz` into empty or new directories. It checks the result and prints the `[storage]` settings to point the configuration at; set them (or move the directories into place), then start the service. |
 | Check consistency | `joedocs check` (exits `1` if it finds problems, and says how to fix each). `joedocs reindex` rebuilds the index from the history. |
-| Back up | Back up `state_dir` (the database holds the projects and keys; `history.git` holds every revision) and the vault. The document index can be rebuilt from `history.git` alone. |
+| Back up | Back up `state_dir` (the database holds the projects and keys; `history.git` holds every revision) and the vault. The document index can be rebuilt from `history.git` alone. `state_dir/cache/` (the PlantUML image cache) need not be backed up: `joedocs backup` leaves it out, and it fills again on its own. |
 | Browse in Obsidian | Copy the vault one way into an Obsidian vault on a schedule, for example `rsync -a --delete <home>/ <obsidian-vault>/JoeDocs/`. Edit through JoeDocs, not in the vault: JoeDocs refuses to overwrite files changed behind its back. |
 
 ## Troubleshooting

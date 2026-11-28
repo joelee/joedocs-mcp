@@ -21,8 +21,8 @@ use super::{Caller, Shared, ToolError};
 use crate::auth::Permission;
 use crate::document::front_matter::Fields;
 use crate::store::{
-    self, Actor, Changed, DocumentInfo, FileInfo, FileWrite, ListRequest, NewDocument, NewFile,
-    Replacement, RevisionInfo, SearchHit, SearchRequest, Sort, Store, Update, WriteFiles,
+    self, Actor, Changed, DocumentInfo, FileInfo, FileWrite, NewDocument, NewFile, Replacement,
+    RevisionInfo, SearchHit, SearchRequest, Sort, Store, Update, WriteFiles,
 };
 
 /// A tool's result. Tool signatures spell this out, because rmcp's macro
@@ -52,11 +52,12 @@ a new one.
 server; status, tags and aliases are validated; other keys are yours. Values are strings, \
 numbers, booleans or lists of those.
 - A multi-file document (new_document with multifile: true) is a folder: its main file plus \
-files such as backlog/item-1 that new_document_file adds, each with its own front matter. \
-list_document_files lists them; get_document with file reads one. Pass file to \
+files such as backlog/item-1 that new_document_file adds, each with its own front matter; \
+adding files to a single-file document makes it multi-file first. list_document_files lists them; get_document with file reads one. Pass file to \
 update_document, edit_document, append_to_document, change_document_front_matter or \
 rename_document (with new_file) to change one file; write_document_files writes several in one \
-revision. Every change to any file raises the document's one revision number, and a change \
+revision. rename_document with rewrite_links: true also rewrites the wiki links to the old \
+title in the project's other documents. Every change to any file raises the document's one revision number, and a change \
 conflicts only when that file changed after the revision you read.";
 
 /// The MCP server: one instance per session, sharing the store.
@@ -131,8 +132,9 @@ fn three() -> u32 {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListDocumentsParams {
-    /// Project name, from `list_projects`.
-    pub project: String,
+    /// Project name from `list_projects`; several, as a list or names
+    /// joined by commas; or "*" for every project this key can read.
+    pub project: ProjectsParam,
     /// Document type, or "all".
     #[serde(rename = "type", default = "all")]
     pub doc_type: String,
@@ -148,6 +150,59 @@ pub struct ListDocumentsParams {
     /// Order of the items.
     #[serde(default)]
     pub sort: SortParam,
+}
+
+/// One project name, several (a list, or names joined by commas), or
+/// "*" for every project the key can read.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ProjectsParam {
+    /// One name, names joined by commas, or "*".
+    One(String),
+    /// Several names.
+    Many(Vec<String>),
+}
+
+impl ProjectsParam {
+    /// The names given, trimmed, each once, in order. `None` for "*".
+    ///
+    /// # Errors
+    ///
+    /// No name at all, or "*" with names, is `invalid_argument` on
+    /// `project`.
+    fn names(&self) -> Result<Option<Vec<String>>, store::Error> {
+        let given: Vec<&str> = match self {
+            Self::One(text) => text.split(',').collect(),
+            Self::Many(names) => names.iter().flat_map(|n| n.split(',')).collect(),
+        };
+        let mut names: Vec<String> = Vec::new();
+        for name in given.into_iter().map(str::trim).filter(|n| !n.is_empty()) {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_owned());
+            }
+        }
+        match names.as_slice() {
+            [] => Err(store::Error::invalid("project", "names no project")),
+            [only] if only == "*" => Ok(None),
+            _ if names.iter().any(|n| n == "*") => Err(store::Error::invalid(
+                "project",
+                "\"*\" (every project you can read) stands alone",
+            )),
+            _ => Ok(Some(names)),
+        }
+    }
+}
+
+/// The projects `caller` can read: what "*" means in `list_documents` and
+/// `search_documents`.
+fn readable_projects(caller: &Caller) -> Vec<String> {
+    let mut projects: Vec<String> = Vec::new();
+    for grant in &caller.grants {
+        if !projects.contains(&grant.project) {
+            projects.push(grant.project.clone());
+        }
+    }
+    projects
 }
 
 /// Arguments of `search_documents`.
@@ -324,7 +379,8 @@ pub struct GetDocumentParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewDocumentFileParams {
-    /// Document ID of a multi-file document, e.g. JD-42.
+    /// Document ID, e.g. JD-42. A single-file document is made multi-file
+    /// first.
     pub document_id: String,
     /// Path of the new file inside the document's folder, e.g.
     /// backlog/item-1 (with or without .md).
@@ -428,6 +484,11 @@ pub struct RenameDocumentParams {
     /// The file's new path inside the document's folder, with file.
     #[serde(default)]
     pub new_file: Option<String>,
+    /// With title: also rewrite the wiki links to the old title
+    /// ([[Old]], [[Old|label]], [[Old#heading]], ![[Old]]) in the
+    /// project's other live documents, in the same commit. Default false.
+    #[serde(default)]
+    pub rewrite_links: Option<bool>,
 }
 
 /// One file of `write_document_files`.
@@ -448,7 +509,8 @@ pub struct FileWriteParam {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WriteDocumentFilesParams {
-    /// Document ID of a multi-file document, e.g. JD-42.
+    /// Document ID, e.g. JD-42. A single-file document is made multi-file
+    /// first.
     pub document_id: String,
     /// The files to create or replace, each path at most once.
     pub files: Vec<FileWriteParam>,
@@ -793,6 +855,26 @@ pub struct ChangedOut {
     pub front_matter: Fields,
 }
 
+/// Result of `rename_document`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RenamedOut {
+    #[serde(flatten)]
+    pub changed: ChangedOut,
+    /// With `rewrite_links`: each document whose links were rewritten, with
+    /// its new revision (empty when no link was found).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relinked: Option<Vec<RelinkedOut>>,
+}
+
+/// A document whose links a rename rewrote.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RelinkedOut {
+    /// Document ID.
+    pub document_id: String,
+    /// Its new revision.
+    pub revision: u64,
+}
+
 impl From<Changed> for ChangedOut {
     fn from(changed: Changed) -> Self {
         Self {
@@ -990,6 +1072,12 @@ impl AuditId for ChangedOut {
     }
 }
 
+impl AuditId for RenamedOut {
+    fn audit_id(&self) -> Option<String> {
+        self.changed.audit_id()
+    }
+}
+
 impl AuditId for ArchivedOut {
     fn audit_id(&self) -> Option<String> {
         Some(self.document_id.clone())
@@ -1034,7 +1122,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "List a project's documents (metadata only, no content), optionally filtered by type and status, one page at a time.",
+        description = "List documents (metadata only, no content) of a project, of several projects (a list, or names joined by commas), or of every project you can read (\"*\"), optionally filtered by type and status, one page at a time.",
         annotations(read_only_hint = true)
     )]
     async fn list_documents(
@@ -1043,15 +1131,35 @@ impl JoeDocsServer {
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<ListDocumentsOut>, CallToolResult> {
         self.read(&ctx, move |store, caller| {
-            require_project(caller, &params.project, Permission::Read)?;
-            let listing = store.list(&ListRequest {
-                project: params.project,
-                doc_type: Some(params.doc_type),
-                status: params.status,
-                sort: params.sort.into(),
-                start: params.start,
-                limit: params.limit,
-            })?;
+            let projects = match params.project.names()? {
+                Some(names) => {
+                    for name in &names {
+                        require_project(caller, name, Permission::Read)?;
+                    }
+                    names
+                }
+                None => readable_projects(caller),
+            };
+            let listing = if projects.is_empty() {
+                // "*" for a key with no grant.
+                store::Listing {
+                    items: Vec::new(),
+                    total: 0,
+                    next_start: None,
+                }
+            } else {
+                store.list_across(&store::ListAcross {
+                    projects,
+                    doc_types: Some(params.doc_type)
+                        .filter(|t| t != "all")
+                        .into_iter()
+                        .collect(),
+                    statuses: params.status.into_iter().collect(),
+                    sort: params.sort.into(),
+                    start: params.start,
+                    limit: params.limit,
+                })?
+            };
             Ok(ListDocumentsOut {
                 items: listing.items.into_iter().map(DocumentOut::from).collect(),
                 total: listing.total,
@@ -1075,7 +1183,7 @@ impl JoeDocsServer {
                 require_document(store, caller, id, Permission::Read)?;
             }
             let projects = if params.project == "*" {
-                caller.grants.iter().map(|g| g.project.clone()).collect()
+                readable_projects(caller)
             } else {
                 require_project(caller, &params.project, Permission::Read)?;
                 vec![params.project]
@@ -1220,7 +1328,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Add a file to a multi-file document (one made with new_document multifile: true), e.g. backlog/item-1, with its own front matter. Raises the document's revision by one; give expected_revision (the document revision you last read) to be refused if the document moved past it. Returns the new revision.",
+        description = "Add a file to a multi-file document (one made with new_document multifile: true), e.g. backlog/item-1, with its own front matter. Raises the document's revision by one. On a single-file document it first converts it to multi-file (revision `convert`, then the file's: two revisions), once every check has passed; give expected_revision (the document revision you last read) to be refused if the document moved past it. Returns the new revision.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1257,7 +1365,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Create or replace several files of a multi-file document in one revision and one commit, e.g. a whole backlog. All or nothing: every path, limit and conflict is checked first, and one bad entry changes nothing. A file given with the content and front matter it already has is left alone; a call that changes no file is refused. front_matter is merged into an existing file's. expected_revision (the document revision you last read) makes a file that changed after it a conflict.",
+        description = "Create or replace several files of a multi-file document in one revision and one commit, e.g. a whole backlog. All or nothing: every path, limit and conflict is checked first, and one bad entry changes nothing. On a single-file document it first converts it to multi-file (revision `convert`, then the files': two revisions), once every entry has passed. A file given with the content and front matter it already has is left alone; a call that changes no file is refused. front_matter is merged into an existing file's. expected_revision (the document revision you last read) makes a file that changed after it a conflict.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1385,7 +1493,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Change a document's title. The file is renamed and the old title is kept in aliases.",
+        description = "Change a document's title. The file is renamed and the old title is kept in aliases. With rewrite_links: true, the wiki links to the old title in the project's other live documents are rewritten to the new title in the same commit (each such document gets one new revision, listed in relinked); links in code are left alone. With file and new_file, renames or moves that file within its multi-file document instead.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1396,7 +1504,7 @@ impl JoeDocsServer {
         &self,
         Parameters(params): Parameters<RenameDocumentParams>,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<Json<ChangedOut>, CallToolResult> {
+    ) -> Result<Json<RenamedOut>, CallToolResult> {
         let id = params.document_id.clone();
         self.write(
             &ctx,
@@ -1404,29 +1512,56 @@ impl JoeDocsServer {
             Some(id),
             move |store, caller, actor| {
                 require_document(store, caller, &params.document_id, Permission::Write)?;
-                let changed = match (params.title, params.file, params.new_file) {
-                    (None, Some(file), Some(new_file)) => store.rename_file(
-                        actor,
-                        &params.document_id,
-                        &file,
-                        &new_file,
-                        params.expected_revision,
-                    )?,
-                    (Some(title), None, None) => store.rename(
-                        actor,
-                        &params.document_id,
-                        &title,
-                        params.expected_revision,
-                    )?,
-                    _ => {
-                        return Err(store::Error::invalid(
-                            "title",
-                            "give title to rename the document, or file and new_file to rename one of its files",
-                        )
-                        .into());
+                match (params.title, params.file, params.new_file) {
+                    (None, Some(file), Some(new_file)) => {
+                        if params.rewrite_links.is_some() {
+                            return Err(store::Error::invalid(
+                                "rewrite_links",
+                                "goes only with title: renaming a file rewrites no links",
+                            )
+                            .into());
+                        }
+                        let changed = store.rename_file(
+                            actor,
+                            &params.document_id,
+                            &file,
+                            &new_file,
+                            params.expected_revision,
+                        )?;
+                        Ok(RenamedOut {
+                            changed: changed.into(),
+                            relinked: None,
+                        })
                     }
-                };
-                Ok(changed.into())
+                    (Some(title), None, None) => {
+                        let rewrite_links = params.rewrite_links.unwrap_or(false);
+                        let renamed = store.rename_with(
+                            actor,
+                            &params.document_id,
+                            &title,
+                            params.expected_revision,
+                            store::RenameOptions { rewrite_links },
+                        )?;
+                        Ok(RenamedOut {
+                            changed: renamed.changed.into(),
+                            relinked: rewrite_links.then(|| {
+                                renamed
+                                    .relinked
+                                    .into_iter()
+                                    .map(|r| RelinkedOut {
+                                        document_id: r.document_id,
+                                        revision: r.revision,
+                                    })
+                                    .collect()
+                            }),
+                        })
+                    }
+                    _ => Err(store::Error::invalid(
+                        "title",
+                        "give title to rename the document, or file and new_file to rename one of its files",
+                    )
+                    .into()),
+                }
             },
         )
         .await

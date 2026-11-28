@@ -5,6 +5,7 @@ Documentation is part of the product. Update docs in the same change that makes 
 ## Maintained Documents
 
 - `README.md`: what JoeDocs is and why, features, use cases, install, quick start, and links to deeper docs. It is also the crates.io page, so links are absolute.
+- `DESIGN.md` (repository root): the admin web interface's design rules: JavaScript required, Chrome and Firefox checked, the filter parts, the address rule, themes and phone width.
 - `docs/upgrading.md`: upgrading a server: backing up, each install method, checking, going back, and notes for each version.
 - `docs/deployment.md`: installing and running a server (systemd, `brew services`, Docker), remote access, connecting clients, operations and troubleshooting.
 - `docs/reference.md`: the stable interfaces users rely on: commands, exit codes, MCP tools and parameters, error codes, search syntax, front matter and history trailers.

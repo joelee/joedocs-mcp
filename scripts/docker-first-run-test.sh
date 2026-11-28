@@ -22,7 +22,7 @@
 # GitHub. Everything it creates is labelled and removed on exit.
 set -euo pipefail
 
-release="${1:-0.5.6-rc.3}"
+release="${1:-0.5.6}"
 repo="joelee/joedocs-mcp"
 run="jd-first-run-$$"
 work="$(mktemp -d)"

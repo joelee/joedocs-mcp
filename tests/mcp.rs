@@ -417,6 +417,8 @@ async fn multi_file_documents_round_trip() {
     assert_eq!(hit["id"], single["document_id"], "{found}");
     assert_eq!((hit.get("multifile"), hit.get("files")), (None, None));
 
+    single_file_conversion(&client, &viewer).await.unwrap();
+
     client.cancel().await.unwrap();
     viewer.cancel().await.unwrap();
     let audit = audit_log(&server.root).unwrap();
@@ -428,6 +430,7 @@ async fn multi_file_documents_round_trip() {
             "new_document_file JD-1 permission_denied",
             "new_document_file JD-1 invalid_argument",
             "new_document JD-2 ok",
+            "new_document_file JD-2 ok",
         ]
     );
     server.stop().await.unwrap();
@@ -751,6 +754,33 @@ async fn file_refusals(client: &Client) -> TestResult<()> {
     )
     .await?;
     assert_eq!(both["code"], "invalid_argument");
+    Ok(())
+}
+
+/// Adding a file to the single-file JD-2 converts it first: two revisions.
+async fn single_file_conversion(client: &Client, viewer: &Client) -> TestResult<()> {
+    let converted = ok(
+        client,
+        "new_document_file",
+        json!({"document_id": "JD-2", "file": "notes", "content": "n\n",
+               "expected_revision": 1}),
+    )
+    .await?;
+    assert_eq!(converted["revision"], 3);
+    assert_eq!(converted["path"], "joedocs/home/Plain/notes.md");
+    let history = ok(
+        viewer,
+        "get_document_history",
+        json!({"document_id": "JD-2"}),
+    )
+    .await?;
+    let actions: Vec<&str> = history["revisions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["action"].as_str())
+        .collect();
+    assert_eq!(actions, ["create_file", "convert", "create"]);
     Ok(())
 }
 
@@ -1425,4 +1455,237 @@ fn serve_reports_an_unusable_address() {
         .assert()
         .code(69)
         .stderr(predicates::str::contains("cannot serve on 127.0.0.1:"));
+}
+
+#[tokio::test]
+async fn rename_document_can_rewrite_the_links_to_it() {
+    let server = start().await.unwrap();
+    let client = server.client(&server.writer).await.unwrap();
+    let tools = client.list_all_tools().await.unwrap();
+    let rename = tools.iter().find(|t| t.name == "rename_document").unwrap();
+    let input = Value::Object((*rename.input_schema).clone());
+    assert_eq!(
+        input["properties"]["rewrite_links"]["type"],
+        json!(["boolean", "null"]),
+        "{input}"
+    );
+    let output = Value::Object((*rename.output_schema.clone().unwrap()).clone());
+    assert!(output["properties"].get("relinked").is_some(), "{output}");
+    assert!(
+        !output["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("relinked")),
+        "{output}"
+    );
+
+    for (title, content) in [("Old", "Body\n"), ("Notes", "[[Old]] and [[Old|o]]\n")] {
+        ok(
+            &client,
+            "new_document",
+            json!({"project": "joedocs", "title": title, "content": content}),
+        )
+        .await
+        .unwrap();
+    }
+    let plain = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "Older"}),
+    )
+    .await
+    .unwrap();
+    assert!(plain.get("relinked").is_none(), "{plain}");
+
+    let renamed = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "New", "rewrite_links": true,
+               "expected_revision": 2}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(renamed["revision"], 3);
+    assert_eq!(
+        renamed["relinked"],
+        json!([]),
+        "the links name Old, not Older"
+    );
+
+    let back = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "Old", "rewrite_links": false}),
+    )
+    .await
+    .unwrap();
+    assert!(back.get("relinked").is_none(), "{back}");
+    let renamed = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "Newest", "rewrite_links": true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        renamed["relinked"],
+        json!([{"document_id": "JD-2", "revision": 2}])
+    );
+    let notes = ok(&client, "get_document", json!({"document_id": "JD-2"}))
+        .await
+        .unwrap();
+    assert!(
+        notes["markdown"]
+            .as_str()
+            .unwrap()
+            .ends_with("[[Newest]] and [[Newest|o]]\n"),
+        "{notes}"
+    );
+
+    let refused = error(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-2", "file": "a", "new_file": "b", "rewrite_links": true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refused["code"], "invalid_argument");
+    assert_eq!(refused["field"], "rewrite_links");
+
+    client.cancel().await.unwrap();
+    server.stop().await.unwrap();
+}
+
+/// Three projects with a document each, a key `two` granted `alpha` and
+/// `beta` only, and a key `none` with no grant; their tokens, then the
+/// server.
+async fn start_projects() -> TestResult<(Server, String, String)> {
+    let dir = TempDir::new()?;
+    let root = dir.path().to_owned();
+    let mut store = store(&root)?;
+    for (name, key) in [("alpha", "AL"), ("beta", "BE"), ("gamma", "GA")] {
+        store.add_project(name, key, None)?;
+        store.create(
+            &Actor::new("admin", "test"),
+            NewDocument {
+                project: name.into(),
+                title: format!("{name} home"),
+                content: "x".into(),
+                ..NewDocument::default()
+            },
+        )?;
+    }
+    let two = store.create_key(
+        "two",
+        &["alpha:read".parse()?, "beta:write".parse()?],
+        &CountingRandom(0),
+    )?;
+    let none = store.create_key("none", &[], &CountingRandom(100))?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let (stop, stopped) = oneshot::channel::<()>();
+    let options = ServerOptions::from_config(&Config::default());
+    let task = tokio::spawn(async move {
+        serve(listener, Shared::new(store), &options, async {
+            stopped.await.ok();
+        })
+        .await
+    });
+    let server = Server {
+        _dir: dir,
+        root,
+        addr,
+        writer: String::new(),
+        reader: String::new(),
+        stop: Some(stop),
+        task,
+    };
+    Ok((
+        server,
+        two.token.expose_secret().to_owned(),
+        none.token.expose_secret().to_owned(),
+    ))
+}
+
+fn ids(listing: &Value) -> Vec<String> {
+    listing["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn list_documents_takes_several_projects_or_every_readable_one() {
+    let (server, two, none) = start_projects().await.unwrap();
+    let client = server.client(&two).await.unwrap();
+    let tools = client.list_all_tools().await.unwrap();
+    let list = tools.iter().find(|t| t.name == "list_documents").unwrap();
+    let schema = Value::Object((*list.input_schema).clone()).to_string();
+    assert!(
+        schema.contains("\"array\"") && schema.contains("\"string\""),
+        "{schema}"
+    );
+
+    let listed = |args: Value| {
+        let client = &client;
+        async move { ok(client, "list_documents", args).await.unwrap() }
+    };
+    // One name: as before.
+    let one = listed(json!({"project": "alpha"})).await;
+    assert_eq!(ids(&one), ["AL-1"]);
+    assert_eq!(one["total"], 1);
+    // A list, a comma-separated string, spaces and a duplicate.
+    let sort = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    for project in [
+        json!(["alpha", "beta"]),
+        json!("alpha,beta"),
+        json!(" beta , alpha,alpha "),
+    ] {
+        let both = listed(json!({"project": project, "sort": "created_asc"})).await;
+        assert_eq!(sort(ids(&both)), ["AL-1", "BE-1"], "{project}");
+        assert_eq!(both["total"], 2, "{project}");
+    }
+    // Every project the key can read, and never another.
+    let every = listed(json!({"project": "*"})).await;
+    assert_eq!(sort(ids(&every)), ["AL-1", "BE-1"]);
+    assert_eq!(every["total"], 2);
+    // Paging across projects.
+    let first = listed(json!({"project": "*", "limit": 1, "sort": "created_asc"})).await;
+    assert_eq!(first["next_start"], 2);
+    let second =
+        listed(json!({"project": "*", "limit": 1, "start": 2, "sort": "created_asc"})).await;
+    assert_eq!(second["next_start"], Value::Null);
+    assert_eq!(sort([ids(&first), ids(&second)].concat()), ["AL-1", "BE-1"]);
+
+    // Refusals.
+    for (project, code, named) in [
+        (json!(["alpha", "gamma"]), "not_found", "gamma"),
+        (json!("alpha,nope"), "not_found", "nope"),
+        (json!(""), "invalid_argument", "project"),
+        (json!([]), "invalid_argument", "project"),
+        (json!(","), "invalid_argument", "project"),
+        (json!(["*", "alpha"]), "invalid_argument", "project"),
+        (json!("alpha,*"), "invalid_argument", "project"),
+    ] {
+        let refused = error(&client, "list_documents", json!({"project": project}))
+            .await
+            .unwrap();
+        assert_eq!(refused["code"], code, "{project}: {refused}");
+        assert!(refused.to_string().contains(named), "{project}: {refused}");
+    }
+    client.cancel().await.unwrap();
+
+    // A key with no grant: "*" lists nothing.
+    let nobody = server.client(&none).await.unwrap();
+    let empty = ok(&nobody, "list_documents", json!({"project": "*"}))
+        .await
+        .unwrap();
+    assert_eq!((ids(&empty).len(), empty["total"].clone()), (0, json!(0)));
+    nobody.cancel().await.unwrap();
+    server.stop().await.unwrap();
 }

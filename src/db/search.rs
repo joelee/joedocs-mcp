@@ -273,6 +273,51 @@ pub fn search_documents(
     Ok((rows, total))
 }
 
+/// The live files of the live documents in `project_id` other than
+/// `except` whose body holds `words` in a row (every live file when there
+/// are no words), as `(document ID, sub-file path)` with `None` for a main
+/// file, in document order: the candidates for links to a title.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn files_mentioning(
+    conn: &Connection,
+    project_id: i64,
+    except: &str,
+    words: &[&str],
+) -> rusqlite::Result<Vec<(String, Option<String>)>> {
+    let read = |row: &rusqlite::Row<'_>| Ok((row.get(1)?, row.get(2)?));
+    if words.is_empty() {
+        let mut stmt = conn.prepare(
+            "SELECT d.seq, d.id, NULL FROM documents d
+             WHERE d.project_id = ?1 AND d.archived_at IS NULL AND d.id <> ?2
+             UNION ALL
+             SELECT d.seq, d.id, df.path FROM documents d
+             JOIN document_files df ON df.document_id = d.id
+             WHERE d.project_id = ?1 AND d.archived_at IS NULL AND d.id <> ?2
+               AND df.archived_at IS NULL
+             ORDER BY 1, 3",
+        )?;
+        let rows = stmt.query_map(params![project_id, except], read)?;
+        return rows.collect();
+    }
+    // Every word is letters and digits only, so the phrase needs no quoting.
+    let phrase = format!("body : \"{}\"", words.join(" "));
+    let mut stmt = conn.prepare(
+        "SELECT d.seq, d.id, df.path FROM doc_fts
+         LEFT JOIN document_files df ON doc_fts.rowid < 0 AND df.id = -doc_fts.rowid
+         CROSS JOIN documents d ON d.id = CASE WHEN doc_fts.rowid < 0 THEN df.document_id
+             ELSE (SELECT m.id FROM documents m
+                   WHERE m.project_id = (doc_fts.rowid >> 32) AND m.seq = (doc_fts.rowid & 4294967295)) END
+         WHERE doc_fts MATCH ?1 AND d.project_id = ?2 AND d.archived_at IS NULL
+           AND df.archived_at IS NULL AND d.id <> ?3
+         ORDER BY d.seq, df.path",
+    )?;
+    let rows = stmt.query_map(params![phrase, project_id, except], read)?;
+    rows.collect()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

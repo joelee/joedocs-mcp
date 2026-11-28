@@ -635,6 +635,151 @@ fn get_reports_missing_documents_and_revisions() {
     );
 }
 
+/// Three projects: joedocs and infra with two documents each, other with
+/// one, all updated at the same time.
+fn across_fixture() -> Fixture {
+    let mut fx = fixture();
+    fx.store.add_project("infra", "IN", None).unwrap();
+    fx.store.add_project("other", "OT", None).unwrap();
+    // The same updated time for every document, so ties decide the order.
+    for (project, title, doc_type, status) in [
+        ("joedocs", "Plan A", "plans", "draft"),
+        ("infra", "Plan B", "plans", "draft"),
+        ("joedocs", "Idea C", "ideas", "done"),
+        ("infra", "Note D", "notes", "review"),
+        ("other", "Plan E", "plans", "draft"),
+    ] {
+        let mut doc = new_doc(title);
+        project.clone_into(&mut doc.project);
+        doc.doc_type = Some(doc_type.into());
+        doc.status = Some(status.into());
+        fx.store.create(&actor(), doc).unwrap();
+    }
+    fx
+}
+
+fn across(projects: &[&str]) -> ListAcross {
+    ListAcross {
+        projects: projects.iter().map(|p| (*p).to_owned()).collect(),
+        doc_types: Vec::new(),
+        statuses: Vec::new(),
+        sort: Sort::UpdatedDesc,
+        start: 1,
+        limit: 10,
+    }
+}
+
+#[test]
+fn listing_across_projects_types_and_statuses() {
+    let fx = across_fixture();
+    let ids =
+        |listing: &Listing| -> Vec<String> { listing.items.iter().map(|d| d.id.clone()).collect() };
+    let mut request = ListAcross {
+        projects: vec!["joedocs".into(), "infra".into()],
+        doc_types: Vec::new(),
+        statuses: Vec::new(),
+        sort: Sort::UpdatedDesc,
+        start: 1,
+        limit: 10,
+    };
+    // Ties (all updated at once) break by project, then number, in the
+    // sort's direction: infra was added after joedocs.
+    let all = fx.store.list_across(&request).unwrap();
+    assert_eq!(ids(&all), ["IN-2", "IN-1", "JD-2", "JD-1"]);
+    assert_eq!(all.total, 4);
+    request.sort = Sort::UpdatedAsc;
+    assert_eq!(
+        ids(&fx.store.list_across(&request).unwrap()),
+        ["JD-1", "JD-2", "IN-1", "IN-2"]
+    );
+    // ID order is by project key, then number.
+    request.sort = Sort::IdAsc;
+    assert_eq!(
+        ids(&fx.store.list_across(&request).unwrap()),
+        ["IN-1", "IN-2", "JD-1", "JD-2"]
+    );
+    request.sort = Sort::IdDesc;
+    assert_eq!(
+        ids(&fx.store.list_across(&request).unwrap()),
+        ["JD-2", "JD-1", "IN-2", "IN-1"]
+    );
+    // Several types and statuses.
+    request.sort = Sort::IdAsc;
+    request.doc_types = vec!["plans".into(), "notes".into()];
+    assert_eq!(
+        ids(&fx.store.list_across(&request).unwrap()),
+        ["IN-1", "IN-2", "JD-1"]
+    );
+    request.statuses = vec!["review".into(), "done".into()];
+    assert_eq!(ids(&fx.store.list_across(&request).unwrap()), ["IN-2"]);
+    // Paging across projects; a project named twice counts once.
+    request.doc_types.clear();
+    request.statuses.clear();
+    request.projects = vec!["joedocs".into(), "infra".into(), "joedocs".into()];
+    request.limit = 3;
+    let first = fx.store.list_across(&request).unwrap();
+    assert_eq!(ids(&first), ["IN-1", "IN-2", "JD-1"]);
+    assert_eq!((first.total, first.next_start), (4, Some(4)));
+    request.start = 4;
+    assert_eq!(ids(&fx.store.list_across(&request).unwrap()), ["JD-2"]);
+}
+
+#[test]
+fn listing_one_project_across_is_listing_it_and_refusals_name_the_fault() {
+    let fx = across_fixture();
+    // One project, one type and one status: exactly what `list` gives.
+    for sort in [
+        Sort::UpdatedDesc,
+        Sort::CreatedAsc,
+        Sort::Title,
+        Sort::StatusDesc,
+    ] {
+        let one = ListAcross {
+            projects: vec!["infra".into()],
+            doc_types: vec!["plans".into()],
+            statuses: vec!["draft".into()],
+            sort,
+            start: 1,
+            limit: 10,
+        };
+        let single = ListRequest {
+            project: "infra".into(),
+            doc_type: Some("plans".into()),
+            status: Some("draft".into()),
+            sort,
+            start: 1,
+            limit: 10,
+        };
+        assert_eq!(
+            fx.store.list_across(&one).unwrap(),
+            fx.store.list(&single).unwrap()
+        );
+    }
+    // Refusals name what is wrong.
+    for (edit, message) in [
+        (
+            Box::new(|r: &mut ListAcross| r.projects = vec!["joedocs".into(), "nope".into()])
+                as Box<dyn Fn(&mut ListAcross)>,
+            "project nope",
+        ),
+        (Box::new(|r| r.projects.clear()), "invalid project"),
+        (
+            Box::new(|r| r.doc_types = vec!["memo".into()]),
+            "invalid type",
+        ),
+        (
+            Box::new(|r| r.statuses = vec!["open".into()]),
+            "invalid status",
+        ),
+        (Box::new(|r| r.start = 0), "invalid start"),
+    ] {
+        let mut bad = across(&["joedocs", "infra"]);
+        edit(&mut bad);
+        let err = fx.store.list_across(&bad).unwrap_err().to_string();
+        assert!(err.starts_with(message), "{message}: {err}");
+    }
+}
+
 #[test]
 fn list_filters_sorts_and_pages() {
     let mut fx = fixture();

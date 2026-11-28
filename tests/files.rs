@@ -319,12 +319,9 @@ fn bad_files_are_refused_and_change_nothing() {
         .unwrap();
     let before = snapshot(dir.path()).unwrap();
 
-    let mut on_single = new_file("x", "x\n", None);
-    on_single.document_id = "JD-2".into();
     let mut bad_front_matter = new_file("y", "x\n", None);
     bad_front_matter.front_matter = fields(json!({"revision": 9}));
     let cases: Vec<(NewFile, &str)> = vec![
-        (on_single, "joedocs document convert JD-2"),
         (new_file("../escape", "x\n", None), "invalid file"),
         (new_file("INDEX", "x\n", None), "reserved"),
         (new_file("roadmap", "x\n", None), "main file"),
@@ -922,6 +919,100 @@ fn several_files_are_written_in_one_revision_or_not_at_all() {
     assert_rebuilds_identically(dir.path(), &mut store).unwrap();
 }
 
+#[test]
+fn writing_files_converts_a_single_file_document_first() {
+    let dir = TempDir::new().unwrap();
+    let mut settings = Settings::from_config(&Config::default());
+    settings.max_files = 2;
+    settings.max_document_bytes = 1000;
+    let mut store = open_with(dir.path(), settings).unwrap();
+    roadmap(&mut store).unwrap();
+    let before = snapshot(dir.path()).unwrap();
+    let request =
+        |files: Vec<joedocs::store::FileWrite>, expected: Option<u64>| joedocs::store::WriteFiles {
+            document_id: "JD-2".into(),
+            files,
+            expected_revision: expected,
+            summary: None,
+        };
+
+    // One bad entry, or any failed check, converts nothing.
+    for (files, expected, why) in [
+        (
+            vec![
+                write("a", "x\n", json!({})),
+                write("../b", "x\n", json!({})),
+            ],
+            None,
+            "file 2",
+        ),
+        (
+            vec![
+                write("a", "x\n", json!({})),
+                write("A.md", "y\n", json!({})),
+            ],
+            None,
+            "twice",
+        ),
+        (
+            vec![
+                write("a", "x\n", json!({})),
+                write("b", "x\n", json!({})),
+                write("c", "x\n", json!({})),
+            ],
+            None,
+            "1 to 2",
+        ),
+        (vec![write("Plan", "x\n", json!({}))], None, "main file"),
+        (
+            vec![write("a", &"x".repeat(2000), json!({}))],
+            None,
+            "max_document_bytes",
+        ),
+        (
+            vec![write("a", "x\n", json!({}))],
+            Some(9),
+            "revision 1, not 9",
+        ),
+        (
+            vec![write("a", "x\n", json!({"revision": 1}))],
+            None,
+            "owned by the server",
+        ),
+        (vec![], None, "1 to 2"),
+    ] {
+        let err = store
+            .write_files(&actor(), &request(files, expected))
+            .unwrap_err();
+        assert!(err.to_string().contains(why), "{why}: {err}");
+    }
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+    assert!(!store.get("JD-2", None).unwrap().document.multifile);
+
+    let written = store
+        .write_files(
+            &actor(),
+            &request(
+                vec![
+                    write("backlog/item-1", "# Item 1\n", json!({"status": "planned"})),
+                    write("notes", "n\n", json!({})),
+                ],
+                Some(1),
+            ),
+        )
+        .unwrap();
+    assert_eq!(written.revision, 3);
+    assert!(written.files.iter().all(|f| f.created));
+    assert_eq!(
+        actions(&store, "JD-2").unwrap(),
+        ["1 create", "2 convert", "3 write_files"]
+    );
+    assert!(store.get("JD-2", None).unwrap().document.multifile);
+    assert!(read(dir.path(), "joedocs/plans/Plan/notes.md").contains("revision: 3"));
+    assert_eq!(store.check().unwrap().problems(), 0);
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
+
 // --- Whole-document operations on folders (STEP-07) -------------------------
 
 fn vault_tree(root: &Path) -> Vec<String> {
@@ -1490,6 +1581,90 @@ fn a_single_file_document_converts_to_a_folder_keeping_its_history() {
         again.to_string().contains("already a multi-file document"),
         "{again}"
     );
+    assert_eq!(store.check().unwrap().problems(), 0);
+    assert_rebuilds_identically(dir.path(), &mut store).unwrap();
+}
+
+/// `"<revision> <action>"` for each revision of `id`, oldest first.
+fn actions(store: &Store, id: &str) -> TestResult<Vec<String>> {
+    let mut actions: Vec<String> = store
+        .history(id, 1, 100)?
+        .revisions
+        .into_iter()
+        .map(|r| format!("{} {}", r.revision, r.action))
+        .collect();
+    actions.reverse();
+    Ok(actions)
+}
+
+#[test]
+fn adding_a_file_converts_a_single_file_document_first() {
+    let dir = TempDir::new().unwrap();
+    let mut settings = Settings::from_config(&Config::default());
+    settings.max_document_bytes = 1000;
+    let mut store = open_with(dir.path(), settings).unwrap();
+    roadmap(&mut store).unwrap();
+    let before = snapshot(dir.path()).unwrap();
+
+    // Every check runs before the conversion: a refusal leaves JD-2 as it was.
+    let on_plan = |file: &str, content: &str, expected: Option<u64>| NewFile {
+        document_id: "JD-2".into(),
+        ..new_file(file, content, expected)
+    };
+    let mut bad_front_matter = on_plan("y", "x\n", None);
+    bad_front_matter.front_matter = fields(json!({"revision": 9}));
+    let cases: Vec<(NewFile, &str)> = vec![
+        (on_plan("../escape", "x\n", None), "invalid file"),
+        (on_plan("INDEX", "x\n", None), "reserved"),
+        (on_plan("plan", "x\n", None), "main file"),
+        (
+            on_plan("big", &"x".repeat(2000), None),
+            "max_document_bytes",
+        ),
+        (on_plan("y", "x\n", Some(9)), "revision 1, not 9"),
+        (bad_front_matter, "owned by the server"),
+    ];
+    for (request, why) in cases {
+        let err = store.create_file(&actor(), &request).unwrap_err();
+        assert!(err.to_string().contains(why), "{why}: {err}");
+    }
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+    assert!(!store.get("JD-2", None).unwrap().document.multifile);
+
+    // A file changed by hand blocks it too.
+    let plan = dir.path().join("vault/joedocs/plans/Plan.md");
+    let text = fs::read_to_string(&plan).unwrap();
+    fs::write(&plan, format!("{text}edited\n")).unwrap();
+    let err = store
+        .create_file(&actor(), &on_plan("notes", "x\n", None))
+        .unwrap_err();
+    assert!(matches!(err, Error::Integrity { .. }), "{err}");
+    fs::write(&plan, text).unwrap();
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+
+    // Then: the convert revision, and the file revision.
+    let changed = store
+        .create_file(&actor(), &on_plan("notes", "x\n", Some(1)))
+        .unwrap();
+    assert_eq!(
+        (changed.revision, changed.path.as_str()),
+        (3, "joedocs/plans/Plan/notes.md")
+    );
+    assert_eq!(
+        actions(&store, "JD-2").unwrap(),
+        ["1 create", "2 convert", "3 create_file"]
+    );
+    let got = store.get("JD-2", None).unwrap();
+    assert!(got.document.multifile);
+    assert_eq!(got.document.path, "joedocs/plans/Plan/Plan.md");
+    assert!(!plan.exists());
+    let convert = git(dir.path())
+        .log()
+        .unwrap()
+        .into_iter()
+        .find(|c| c.trailer("JoeDocs-Action") == Some("convert"))
+        .unwrap();
+    assert_eq!(convert.subject, "Convert JD-2: single file → folder");
     assert_eq!(store.check().unwrap().problems(), 0);
     assert_rebuilds_identically(dir.path(), &mut store).unwrap();
 }

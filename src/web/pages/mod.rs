@@ -6,6 +6,7 @@ mod audit;
 mod board;
 mod document;
 mod documents;
+mod filters;
 mod history;
 mod keys;
 pub(crate) mod login;

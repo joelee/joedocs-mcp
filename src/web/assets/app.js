@@ -138,7 +138,7 @@
     documents: {
       path: "/admin/documents",
       form: "#documents-filters",
-      keys: ["project", "type", "status", "sort", "dir", "limit"],
+      keys: ["project", "type", "status", "filters", "sort", "dir", "limit"],
     },
   };
   const viewKey = (view) => `joedocs-${view}-view`;
@@ -171,6 +171,60 @@
     }
     return out.join("&");
   };
+  // The address of a filter form marked `data-filter-address` (Documents,
+  // JD-81): the filter parts' query (comma-separated lists, defaults left
+  // out), with the order written as the page's column links write it:
+  // nothing for the default order (the attribute, e.g. "updated desc"),
+  // else `sort`, and `dir=desc` only when descending. `limit` comes from
+  // the address, as the page size has no control.
+  const filterAddress = (form) => {
+    const [defaultSort, defaultDir] = (form.dataset.filterAddress || "").split(" ");
+    const parts = [];
+    let sort = defaultSort;
+    let dir = defaultDir;
+    for (const pair of form.joedocsFilters.query().split("&")) {
+      const [key, value] = pair.split("=");
+      if (key === "sort") {
+        sort = decodeURIComponent(value);
+      } else if (key === "dir") {
+        dir = decodeURIComponent(value);
+      } else if (pair) {
+        parts.push(pair);
+      }
+    }
+    if (sort !== defaultSort || dir !== defaultDir) {
+      parts.push(`sort=${encodeURIComponent(sort)}`);
+      if (dir === "desc") {
+        parts.push("dir=desc");
+      }
+    }
+    const limit = new URLSearchParams(location.search).get("limit");
+    if (limit) {
+      parts.push(`limit=${encodeURIComponent(limit)}`);
+    }
+    return parts.join("&");
+  };
+  // htmx sends such a form's address instead of its fields (repeated keys,
+  // every default), so the address it pushes is the comma form.
+  document.addEventListener("htmx:config:request", (event) => {
+    const ctx = event.detail?.ctx;
+    const form = ctx?.sourceElement;
+    if (!(form instanceof HTMLFormElement) || !form.hasAttribute("data-filter-address") || !form.joedocsFilters) {
+      return;
+    }
+    const query = filterAddress(form);
+    const path = form.getAttribute("hx-get") || location.pathname;
+    ctx.request.action = query ? `${path}?${query}` : path;
+    ctx.request.body = new FormData();
+  });
+  // The filter parts change the form without a `change` event (a chip's x,
+  // Clear all, a pill's All): such a form reloads its results then too.
+  document.addEventListener("filters:changed", (event) => {
+    const form = event.target;
+    if (form instanceof HTMLFormElement && form.hasAttribute("data-filter-address")) {
+      form.requestSubmit();
+    }
+  });
   const rememberLinks = () => {
     for (const link of document.querySelectorAll("a[data-remember]")) {
       const view = VIEWS[link.dataset.remember];
@@ -241,6 +295,36 @@
     }
     if (target.closest("[data-to-top]")) {
       toTop();
+      return;
+    }
+    // The Filters toggle of a `data-filter-address` form (Documents) opens
+    // or shuts the panel, as the Board's does: `filters=closed` in the form
+    // and the address, with no new results.
+    const panelToggle = target.closest("form[data-filter-address] [data-filter-toggle]");
+    if (panelToggle) {
+      const form = panelToggle.closest("form");
+      const panel = form.querySelector("[data-filter-panel]");
+      const open = panelToggle.getAttribute("aria-expanded") !== "true";
+      panelToggle.setAttribute("aria-expanded", String(open));
+      if (panel) {
+        panel.hidden = !open;
+      }
+      const held = form.querySelector("input[data-filters-closed]");
+      if (open) {
+        held?.remove();
+      } else if (!held) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "filters";
+        input.value = "closed";
+        input.dataset.filtersClosed = "";
+        form.append(input);
+      }
+      if (form.joedocsFilters) {
+        const query = filterAddress(form);
+        history.replaceState(history.state, "", query ? `${location.pathname}?${query}` : location.pathname);
+        document.dispatchEvent(new CustomEvent("joedocs:view-changed", { detail: { view: "documents" } }));
+      }
       return;
     }
     const reset = target.closest("[data-reset-view]");
@@ -475,17 +559,25 @@
       fitToTop();
       rememberLinks();
     }
-    // New Documents results: the form (with the sort its results carry)
-    // holds the view; `limit` only comes from the address.
+    // New Documents results: the View menu follows the order they are in
+    // (a column header's link may have changed it), and the form then
+    // holds the view, written as its address.
     if (region.id === "results" && location.pathname === VIEWS.documents.path) {
       const form = document.getElementById("documents-filters");
-      if (form instanceof HTMLFormElement) {
-        const params = new URLSearchParams(new FormData(form));
-        const limit = new URLSearchParams(location.search).get("limit");
-        if (limit) {
-          params.set("limit", limit);
+      const order = region.querySelector("[data-order]");
+      if (form instanceof HTMLFormElement && order instanceof HTMLElement) {
+        const sort = form.querySelector('select[name="sort"]');
+        if (sort instanceof HTMLSelectElement) {
+          sort.value = order.dataset.order;
         }
-        saveView("documents", viewQuery("documents", params.toString()));
+        const dir = form.querySelector(`input[name="dir"][value="${order.dataset.orderDir}"]`);
+        if (dir instanceof HTMLInputElement) {
+          dir.checked = true;
+        }
+        form.joedocsFilters?.refresh();
+      }
+      if (form instanceof HTMLFormElement && form.joedocsFilters) {
+        saveView("documents", viewQuery("documents", filterAddress(form)));
       }
     }
     drawDiagrams(region);

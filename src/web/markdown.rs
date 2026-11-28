@@ -23,8 +23,7 @@
 use std::collections::HashMap;
 
 use pulldown_cmark::{
-    CodeBlockKind, CowStr, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd,
-    TextMergeStream,
+    CodeBlockKind, CowStr, Event, HeadingLevel, LinkType, Parser, Tag, TagEnd, TextMergeStream,
 };
 
 use super::plantuml;
@@ -68,22 +67,40 @@ pub struct Rendered {
     pub headings: Vec<Heading>,
     /// Whether it has a Mermaid diagram, so the page loads Pele.
     pub needs_pele: bool,
+    /// Its `PlantUML` diagrams when the server draws them, each once, for
+    /// the image cache.
+    pub diagrams: Vec<plantuml::Diagram>,
 }
 
-/// Renders a document file (front matter and body) or a body alone.
-/// `plantuml_url` is `admin.web_plantuml_url`, or empty.
+/// [`render_with`] for a `PlantUML` server URL, or `""` for source (tests).
+#[cfg(test)]
 #[must_use]
 pub fn render(markdown: &str, resolver: &dyn Resolver, plantuml_url: &str) -> Rendered {
+    render_with(
+        markdown,
+        resolver,
+        &plantuml::Diagrams::server_or_source(plantuml_url),
+    )
+}
+
+/// Renders a document file (front matter and body) or a body alone,
+/// drawing `PlantUML` diagrams as `diagrams` says. When the server draws
+/// them, each block is an image from
+/// `/admin/diagrams/<key>.svg`, and [`Rendered::diagrams`] lists them.
+#[must_use]
+pub fn render_with(
+    markdown: &str,
+    resolver: &dyn Resolver,
+    diagrams: &plantuml::Diagrams,
+) -> Rendered {
     let body = front_matter::split(markdown).map_or(markdown, |(_, body)| body);
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_WIKILINKS;
+    let options = crate::document::links::markdown_options();
     let events: Vec<Event<'_>> = TextMergeStream::new(Parser::new_ext(body, options)).collect();
     let mut renderer = Renderer {
         resolver,
-        plantuml_url: plantuml_url.trim_end_matches('/'),
+        plantuml_url: diagrams.server_url().trim_end_matches('/'),
+        draw_here: matches!(diagrams, plantuml::Diagrams::Cli(_)),
+        diagrams: Vec::new(),
         out: Vec::with_capacity(events.len()),
         headings: Vec::new(),
         ids: HashMap::new(),
@@ -98,6 +115,7 @@ pub fn render(markdown: &str, resolver: &dyn Resolver, plantuml_url: &str) -> Re
         html,
         headings: renderer.headings,
         needs_pele: renderer.needs_pele,
+        diagrams: renderer.diagrams,
     }
 }
 
@@ -118,6 +136,9 @@ enum Quote {
 struct Renderer<'r, 'a> {
     resolver: &'r dyn Resolver,
     plantuml_url: &'r str,
+    /// Whether the server draws `PlantUML` diagrams (`Diagrams::Cli`).
+    draw_here: bool,
+    diagrams: Vec<plantuml::Diagram>,
     out: Vec<Event<'a>>,
     headings: Vec<Heading>,
     ids: HashMap<String, usize>,
@@ -348,6 +369,17 @@ impl<'a> Renderer<'_, 'a> {
             "mermaid" => {
                 self.needs_pele = true;
                 format!("<div class=\"diagram mermaid\" data-diagram=\"mermaid\">{source}</div>")
+            }
+            "plantuml" | "puml" if self.draw_here => {
+                let diagram = plantuml::Diagram::of(text);
+                let html = format!(
+                    "<figure class=\"diagram plantuml\"><img src=\"/admin/diagrams/{}.svg\" alt=\"PlantUML diagram\" loading=\"lazy\"><details><summary>Show source</summary>{source}</details></figure>",
+                    diagram.key
+                );
+                if !self.diagrams.iter().any(|d| d.key == diagram.key) {
+                    self.diagrams.push(diagram);
+                }
+                html
             }
             "plantuml" | "puml" => {
                 let encoded = (!self.plantuml_url.is_empty())

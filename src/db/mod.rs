@@ -22,9 +22,10 @@ pub use admin::{
     record_failed_login, record_login, revoke_admin_token, revoke_session, touch_session,
 };
 pub use documents::{
-    DocumentRow, ListQuery, RevisionRow, Sort, archived_documents, document_counts, find_by_title,
-    find_files, get_document, get_revision, insert_document, insert_revision, last_change_at,
-    list_documents, list_revisions, live_documents, live_documents_in, path_taken, save_document,
+    DocumentRow, ListAcrossQuery, ListQuery, RevisionRow, Sort, archived_documents,
+    document_counts, find_by_title, find_files, get_document, get_revision, insert_document,
+    insert_revision, last_change_at, list_documents, list_documents_across, list_revisions,
+    live_documents, live_documents_in, path_taken, save_document,
 };
 pub use files::{
     FileChange, FileRow, RevisionFileRow, count_live_files, file_by_id, files_of, find_live_file,
@@ -41,8 +42,8 @@ pub use projects::{
 pub use rusqlite::{Connection, Error as SqlError};
 use rusqlite::{OptionalExtension as _, params};
 pub use search::{
-    SearchQuery, SearchRow, clear_documents, file_fts_rowid, fts_rowid, index_document, index_file,
-    search_documents, unindex_document, unindex_file,
+    SearchQuery, SearchRow, clear_documents, file_fts_rowid, files_mentioning, fts_rowid,
+    index_document, index_file, search_documents, unindex_document, unindex_file,
 };
 pub use users::{
     DeviceRow, ThrottleRow, UserRow, UserSecrets, UserSessionRow, clear_totp, confirm_totp,

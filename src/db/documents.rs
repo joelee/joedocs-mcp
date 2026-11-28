@@ -1,6 +1,9 @@
 //! Document and revision queries.
 
-use rusqlite::{Connection, OptionalExtension as _, Row, params};
+use std::fmt::Write as _;
+
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OptionalExtension as _, Row, params, params_from_iter};
 
 /// The index row of one document (its latest revision).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,23 +242,31 @@ pub enum Sort {
     RevisionAsc,
     /// Most revisions first.
     RevisionDesc,
+    /// By document ID: project key, then number.
+    IdAsc,
+    /// By document ID, last first.
+    IdDesc,
 }
 
 impl Sort {
     fn order_by(self) -> &'static str {
         match self {
-            Self::UpdatedDesc => "d.updated_at DESC, d.seq DESC",
-            Self::UpdatedAsc => "d.updated_at ASC, d.seq ASC",
-            Self::CreatedDesc => "d.seq DESC",
-            Self::CreatedAsc => "d.seq ASC",
-            Self::Title => "d.title COLLATE NOCASE ASC, d.seq ASC",
-            Self::TitleDesc => "d.title COLLATE NOCASE DESC, d.seq DESC",
-            Self::TypeAsc => "d.type ASC, d.seq ASC",
-            Self::TypeDesc => "d.type DESC, d.seq DESC",
-            Self::StatusAsc => "d.status ASC, d.seq ASC",
-            Self::StatusDesc => "d.status DESC, d.seq DESC",
-            Self::RevisionAsc => "d.revision ASC, d.seq ASC",
-            Self::RevisionDesc => "d.revision DESC, d.seq DESC",
+            // Ties break by project, then number, in the sort's direction;
+            // within one project that is the number alone, as before.
+            Self::UpdatedDesc => "d.updated_at DESC, d.project_id DESC, d.seq DESC",
+            Self::UpdatedAsc => "d.updated_at ASC, d.project_id ASC, d.seq ASC",
+            Self::CreatedDesc => "d.seq DESC, d.project_id DESC",
+            Self::CreatedAsc => "d.seq ASC, d.project_id ASC",
+            Self::Title => "d.title COLLATE NOCASE ASC, d.project_id ASC, d.seq ASC",
+            Self::TitleDesc => "d.title COLLATE NOCASE DESC, d.project_id DESC, d.seq DESC",
+            Self::TypeAsc => "d.type ASC, d.project_id ASC, d.seq ASC",
+            Self::TypeDesc => "d.type DESC, d.project_id DESC, d.seq DESC",
+            Self::StatusAsc => "d.status ASC, d.project_id ASC, d.seq ASC",
+            Self::StatusDesc => "d.status DESC, d.project_id DESC, d.seq DESC",
+            Self::RevisionAsc => "d.revision ASC, d.project_id ASC, d.seq ASC",
+            Self::RevisionDesc => "d.revision DESC, d.project_id DESC, d.seq DESC",
+            Self::IdAsc => "p.key ASC, d.seq ASC",
+            Self::IdDesc => "p.key DESC, d.seq DESC",
         }
     }
 }
@@ -286,28 +297,79 @@ pub fn list_documents(
     conn: &Connection,
     query: &ListQuery<'_>,
 ) -> rusqlite::Result<(Vec<DocumentRow>, u64)> {
-    let filter = "WHERE d.project_id = ?1 AND d.archived_at IS NULL
-        AND (?2 IS NULL OR d.type = ?2) AND (?3 IS NULL OR d.status = ?3)";
+    list_documents_across(
+        conn,
+        &ListAcrossQuery {
+            project_ids: &[query.project_id],
+            doc_types: query.doc_type.as_slice(),
+            statuses: query.status.as_slice(),
+            sort: query.sort,
+            offset: query.offset,
+            limit: query.limit,
+        },
+    )
+}
+
+/// Which live documents of several projects to list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListAcrossQuery<'a> {
+    /// Project row IDs; none lists nothing.
+    pub project_ids: &'a [i64],
+    /// Only these types; every type when empty.
+    pub doc_types: &'a [&'a str],
+    /// Only these statuses; every status when empty.
+    pub statuses: &'a [&'a str],
+    /// Order.
+    pub sort: Sort,
+    /// Rows to skip.
+    pub offset: u64,
+    /// Most rows to return.
+    pub limit: u64,
+}
+
+/// One page of the live documents of several projects, and the total
+/// number matching.
+///
+/// # Errors
+///
+/// Returns an error when the query fails.
+pub fn list_documents_across(
+    conn: &Connection,
+    query: &ListAcrossQuery<'_>,
+) -> rusqlite::Result<(Vec<DocumentRow>, u64)> {
+    if query.project_ids.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+    let mut values: Vec<SqlValue> = Vec::new();
+    let marks = |n: usize| vec!["?"; n].join(", ");
+    let mut filter = format!(
+        "WHERE d.archived_at IS NULL AND d.project_id IN ({})",
+        marks(query.project_ids.len())
+    );
+    values.extend(query.project_ids.iter().map(|id| SqlValue::Integer(*id)));
+    for (column, wanted) in [("d.type", query.doc_types), ("d.status", query.statuses)] {
+        if !wanted.is_empty() {
+            let _ = write!(filter, " AND {column} IN ({})", marks(wanted.len()));
+            values.extend(wanted.iter().map(|v| SqlValue::Text((*v).to_owned())));
+        }
+    }
     let total = conn.query_row(
         &format!("SELECT count(*) FROM documents d {filter}"),
-        params![query.project_id, query.doc_type, query.status],
+        params_from_iter(&values),
         |row| row.get(0),
     )?;
+    values.push(SqlValue::Integer(
+        i64::try_from(query.limit).unwrap_or(i64::MAX),
+    ));
+    values.push(SqlValue::Integer(
+        i64::try_from(query.offset).unwrap_or(i64::MAX),
+    ));
     let mut stmt = conn.prepare(&format!(
-        "{SELECT} {filter} ORDER BY {} LIMIT ?4 OFFSET ?5",
+        "{SELECT} {filter} ORDER BY {} LIMIT ? OFFSET ?",
         query.sort.order_by()
     ))?;
     let rows = stmt
-        .query_map(
-            params![
-                query.project_id,
-                query.doc_type,
-                query.status,
-                query.limit,
-                query.offset
-            ],
-            from_row,
-        )?
+        .query_map(params_from_iter(&values), from_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok((rows, total))
 }

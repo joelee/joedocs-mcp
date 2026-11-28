@@ -85,7 +85,7 @@ brew install joelee/oss/joedocs
 **Linux or macOS** (a prebuilt binary from [GitHub Releases](https://github.com/joelee/joedocs-mcp/releases), from 0.4.3: static for Linux x86_64 and aarch64, and for Apple silicon Macs):
 
 ```bash
-V=0.5.6 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
+V=0.5.7 T=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin
 A="joedocs-$V-$T.tar.gz"
 gh release download "v$V" -R joelee/joedocs-mcp -p "$A" -p SHA256SUMS --clobber &&
   shasum -a 256 -c --ignore-missing SHA256SUMS &&
@@ -101,7 +101,7 @@ Each step runs only if the one before it succeeded, so a failed download, checks
 ```bash
 docker run -d --name joedocs -p 127.0.0.1:8750:8750 \
   -v joedocs-vault:/data/vault -v joedocs-state:/data/state \
-  joeworks/joedocs:0.5.6
+  joeworks/joedocs:0.5.7
 docker logs joedocs      # the web interface's address, the user admin and a one-time password
 ```
 
@@ -112,6 +112,8 @@ The first start creates the store and the user `admin`, and prints how to sign i
 ```bash
 cargo install joedocs --locked
 ```
+
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), `cargo binstall joedocs` installs the same release archive as above (Linux x86_64 and aarch64, Apple silicon Macs) instead of compiling; Intel Macs and other targets have no archive and build from source. It does not check the attestation: use the steps above for that.
 
 JoeDocs needs `git` at run time. On macOS the Xcode Command Line Tools provide it. The macOS binary is not notarised: if you downloaded it in a browser, clear the quarantine flag with `xattr -d com.apple.quarantine joedocs` (files fetched with `gh` or `curl` have none).
 
@@ -212,16 +214,14 @@ Planned:
 - The research workflow skills out of beta (shipped as beta in 0.5.6: a coordinator, a scout, a writer and a critic, with your approval at each checkpoint), after a live trial.
 - More agent skills: decision records, a session journal and a gardener.
 - An optional `git push` of the history to a private remote after each commit.
-- More ways to install: `cargo binstall joedocs` (the release binaries, no compiling) and an Arch Linux AUR package `joedocs-bin`.
+- Another way to install: an Arch Linux AUR package `joedocs-bin`.
 
 Further out:
 
 - A document graph agents can query, for example "what depends on JD-12" (an idea to explore first).
-- Rewriting `[[links]]` to a renamed document in the same project.
 - Approval provenance: server-stamped status changes, and optionally a grant needed to approve.
 - Web interface appearance: a stylesheet of your own, named in the configuration, on top of the bundled one (an idea to explore first).
 - Hiding projects from the Board, per user, so a server with many projects does not flood it (an idea to explore first).
-- The Board's new filter parts (the searchable picker, pills and filter chips) on Documents, Search, Archive and Audit.
 - A homebrew-core formula.
 - From the design plan's "Later" list: per-type templates, documents as MCP resources, backlinks, embedding search, attachments, secret scanning on write.
 

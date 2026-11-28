@@ -5,9 +5,8 @@
   <p class="lede">Every MCP call that changes a document, every admin API call and every web request, newest first.</p>
 </div>
 
-<nav class="quick-filters" aria-label="Quick filters">
-  <a href="/admin/audit">All</a>
-  {% for item in quick %}<a href="{{ item.href }}">{{ item.label }}</a>{% endfor %}
+<nav class="quick-filters pills" aria-label="Quick filters">
+  {% for item in quick %}<a class="pill" href="{{ item.href }}"{% if item.current %} aria-current="true"{% endif %}>{{ item.label }}</a>{% endfor %}
 </nav>
 
 <form class="filters" method="get" action="/admin/audit"
@@ -23,8 +22,7 @@
   {% if let Some(limit) = limit %}<input type="hidden" name="limit" value="{{ limit }}">{% endif %}
   <div class="filters-apply"><button type="submit">Filter</button></div>
 </form>
-{% if !self.value("outcome_not").is_empty() %}<p class="hint">Showing outcomes other than <code>{{ self.value("outcome_not") }}</code>. <a href="/admin/audit">Show all</a></p>{% endif %}
-{% if !self.value("tool_not").is_empty() %}<p class="hint">Leaving out tools matching <code>{{ self.value("tool_not") }}</code>. <a href="/admin/audit">Show all</a></p>{% endif %}
+{% if !chips.is_empty() %}<div class="audit-chips" role="group" aria-label="Filters leaving rows out">{% for chip in chips %}<span class="fchip"><span class="fchip-text"><span class="fchip-facet">{{ chip.facet }}:</span>{{ chip.text }}</span><a href="{{ chip.remove }}" aria-label="{{ chip.label }}" data-chip-remove>×</a></span>{% endfor %}</div>{% endif %}
 
 <section id="results" class="results" aria-label="Audit entries" data-focus="keep" data-announce="Audit entries updated">
 {{ results|safe }}

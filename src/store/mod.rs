@@ -35,6 +35,7 @@ mod links;
 mod principal;
 mod registry;
 mod reindex;
+mod relink;
 mod revisions;
 mod search;
 mod sign_in;
@@ -57,8 +58,8 @@ pub use audit::{AuditPage, AuditRequest, MAX_AUDIT_LIMIT};
 pub use backup::Snapshot;
 pub use check::CheckReport;
 pub use documents::{
-    Archived, Changed, DocumentInfo, Fetched, ListRequest, Listing, MAX_LIST_LIMIT, NewDocument,
-    RevisionInfo, Update,
+    Archived, Changed, DocumentInfo, Fetched, ListAcross, ListRequest, Listing, MAX_LIST_LIMIT,
+    NewDocument, RevisionInfo, Update,
 };
 pub use editing::{MAX_EDITS, Replacement};
 pub use file_changes::{FileWrite, WriteFiles, WrittenFile, WrittenFiles};
@@ -67,6 +68,7 @@ pub use folders::ArchivedFile;
 pub use principal::Admin;
 pub use registry::CreatedKey;
 pub use reindex::Reindexed;
+pub use relink::{Relinked, RenameOptions, Renamed};
 pub use revisions::{Diff, HistoryPage, MAX_DIFF_CONTEXT, MAX_HISTORY_LIMIT};
 pub use search::{MAX_SEARCH_LIMIT, SearchHit, SearchRequest, SearchResults};
 pub use sign_in::{

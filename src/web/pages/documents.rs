@@ -1,6 +1,7 @@
-//! The document library: one project's live documents, filtered by type and
-//! status and paged as `joedocs list` does, and sorted by any column header
-//! across every page.
+//! The document library: the live documents of one project, several or
+//! all, filtered by types and statuses with the Board's filter parts
+//! (JD-81), paged as `joedocs list` does, and sorted from the View menu or
+//! any column header across every page.
 
 use askama::Template;
 use axum::http::StatusCode;
@@ -8,10 +9,11 @@ use axum::response::Response;
 
 use super::super::assets::{self, Urls};
 use super::super::{Session, WebError, WebRequest, render};
+use super::filters::{self, Group};
 use super::{Chrome, Section};
 use crate::cli::DEFAULT_LIST_LIMIT;
 use crate::db::{ProjectRow, Sort};
-use crate::store::{DocumentInfo, ListRequest, Store};
+use crate::store::{DocumentInfo, ListAcross, Store};
 
 /// A column the library sorts by, as its header and the `sort` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,15 @@ impl Column {
             Self::Status => "status",
             Self::Revision => "revision",
             Self::Updated => "updated",
+        }
+    }
+
+    /// The column's name in the View menu.
+    fn view_label(self) -> &'static str {
+        match self {
+            Self::Id => "Document ID",
+            Self::Updated => "Last updated",
+            other => other.label(),
         }
     }
 
@@ -118,8 +129,8 @@ impl Order {
             return Sort::default();
         };
         match (column, descending) {
-            (Column::Id, false) => Sort::CreatedAsc,
-            (Column::Id, true) => Sort::CreatedDesc,
+            (Column::Id, false) => Sort::IdAsc,
+            (Column::Id, true) => Sort::IdDesc,
             (Column::Title, false) => Sort::Title,
             (Column::Title, true) => Sort::TitleDesc,
             (Column::Type, false) => Sort::TypeAsc,
@@ -162,20 +173,80 @@ struct DocumentsPage<'a> {
     title: &'a str,
     assets: Urls,
     chrome: Chrome<'a>,
-    projects: Vec<Choice>,
-    types: Vec<Choice>,
-    statuses: Vec<Choice>,
+    panel: Panel,
+    view: View,
     results: DocumentsResults,
+}
+
+/// The filter panel's choices: projects (a picker), types and statuses
+/// (pills, or a picker when there are many).
+struct Panel {
+    projects: Group,
+    types: Group,
+    statuses: Group,
+    /// How many groups the address narrows: the bar's count and chips.
+    active: usize,
+    /// Whether the panel is shut (`filters=closed`).
+    closed: bool,
+    /// No project exists yet.
+    empty: bool,
+}
+
+/// The View menu: the sort field and the order.
+struct View {
+    /// The sorted column's name, `updated` by default.
+    sort: &'static str,
+    /// `desc` or `asc`.
+    dir: &'static str,
+    /// Every field the menu offers, as `(value, label, chosen)`, in its
+    /// order.
+    sorts: Vec<(&'static str, &'static str, bool)>,
+    /// What the menu's button says, e.g. "Last updated ↓".
+    summary: String,
+}
+
+impl View {
+    /// The menu for `order` (the page's default when `None`: most
+    /// recently updated first).
+    fn of(order: Option<Order>) -> Self {
+        let (column, descending) =
+            order.map_or((Column::Updated, true), |o| (o.column, o.descending));
+        let fields = [
+            Column::Updated,
+            Column::Id,
+            Column::Title,
+            Column::Type,
+            Column::Status,
+            Column::Revision,
+        ];
+        Self {
+            sort: column.name(),
+            dir: if descending { "desc" } else { "asc" },
+            sorts: fields
+                .iter()
+                .map(|c| (c.name(), c.view_label(), *c == column))
+                .collect(),
+            summary: format!(
+                "{} {}",
+                column.view_label(),
+                if descending { "↓" } else { "↑" }
+            ),
+        }
+    }
 }
 
 /// The results region, also sent alone to htmx when a filter changes.
 #[derive(Template)]
 #[template(path = "documents_results.html")]
 struct DocumentsResults {
+    /// The project, when exactly one is in view.
     project: Option<ProjectRow>,
+    /// Whether rows name their project (more than one in view).
+    project_column: bool,
     headers: Vec<Header>,
-    /// The order, kept by the filter form through fields in this region.
-    sort: Option<(&'static str, bool)>,
+    /// The order the results are in, `(column, descending)`, for the View
+    /// menu to follow after a header's link reloads them.
+    order: (&'static str, bool),
     /// What the region announces when htmx swaps it in: the order.
     announcement: String,
     items: Vec<DocumentInfo>,
@@ -188,9 +259,12 @@ struct DocumentsResults {
 
 /// What the page lists, from its query.
 struct Filters {
-    project: String,
-    doc_type: Option<String>,
-    status: Option<String>,
+    /// The projects, types and statuses the address names (none: all).
+    projects: Vec<String>,
+    types: Vec<String>,
+    statuses: Vec<String>,
+    /// The panel is shut (`filters=closed`), kept by every link.
+    closed: bool,
     order: Option<Order>,
     start: u64,
     limit: u64,
@@ -202,34 +276,48 @@ impl Filters {
         self.url_with(self.order, start)
     }
 
-    /// This listing in `order`, at `start`.
+    /// This listing in `order`, at `start`. Several values of a key are
+    /// one comma-separated list, each value URL-encoded (the Board's
+    /// address rule).
     fn url_with(&self, order: Option<Order>, start: u64) -> String {
-        let mut query = form_urlencoded::Serializer::new(String::new());
-        query.append_pair("project", &self.project);
-        if let Some(t) = &self.doc_type {
-            query.append_pair("type", t);
+        let encode =
+            |value: &str| form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
+        let mut pairs: Vec<String> = Vec::new();
+        for (key, values) in [
+            ("project", &self.projects),
+            ("type", &self.types),
+            ("status", &self.statuses),
+        ] {
+            if !values.is_empty() {
+                let list: Vec<String> = values.iter().map(|v| encode(v)).collect();
+                pairs.push(format!("{key}={}", list.join(",")));
+            }
         }
-        if let Some(s) = &self.status {
-            query.append_pair("status", s);
+        if self.closed {
+            pairs.push("filters=closed".to_owned());
         }
         if let Some(order) = order {
-            query.append_pair("sort", order.column.name());
+            pairs.push(format!("sort={}", order.column.name()));
             if order.descending {
-                query.append_pair("dir", "desc");
+                pairs.push("dir=desc".to_owned());
             }
         }
         if start != 1 {
-            query.append_pair("start", &start.to_string());
+            pairs.push(format!("start={start}"));
         }
         if self.limit != DEFAULT_LIST_LIMIT {
-            query.append_pair("limit", &self.limit.to_string());
+            pairs.push(format!("limit={}", self.limit));
         }
-        format!("/admin/documents?{}", query.finish())
+        if pairs.is_empty() {
+            "/admin/documents".to_owned()
+        } else {
+            format!("/admin/documents?{}", pairs.join("&"))
+        }
     }
 
     /// The column headers, each linking to its next order from the first
-    /// page.
-    fn headers(&self) -> Vec<Header> {
+    /// page; with `project_column`, a Project column after ID.
+    fn headers(&self, project_column: bool) -> Vec<Header> {
         let sortable = |label, column: Column| {
             let current = self.order.filter(|o| o.column == column);
             let next = match current {
@@ -263,21 +351,26 @@ impl Filters {
                 key: column.name(),
             }
         };
-        vec![
-            sortable("ID", Column::Id),
+        let plain = |label, class, key| Header {
+            label,
+            class,
+            href: None,
+            aria_sort: None,
+            key,
+        };
+        let mut headers = vec![sortable("ID", Column::Id)];
+        if project_column {
+            headers.push(plain("Project", "", "project"));
+        }
+        headers.extend([
             sortable("Title", Column::Title),
             sortable("Type", Column::Type),
             sortable("Status", Column::Status),
             sortable("Revision", Column::Revision),
-            Header {
-                label: "Files",
-                class: "num",
-                href: None,
-                aria_sort: None,
-                key: "files",
-            },
+            plain("Files", "num", "files"),
             sortable("Updated (UTC)", Column::Updated),
-        ]
+        ]);
+        headers
     }
 }
 
@@ -302,56 +395,67 @@ pub(crate) fn list(
     session: &Session,
 ) -> Result<Response, WebError> {
     let projects = store.projects().map_err(|e| WebError::from_store(&e))?;
-    let wanted = request.query("project").filter(|p| !p.is_empty());
-    let Some(name) = wanted
-        .map(str::to_owned)
-        .or_else(|| projects.first().map(|p| p.name.clone()))
-    else {
+    if projects.is_empty() {
         return Ok(empty(session));
-    };
+    }
+    let settings = store.settings();
+    let names: Vec<String> = projects.iter().map(|p| p.name.clone()).collect();
+    let unknown = filters::unknown_values(
+        request,
+        &[
+            ("project", &names),
+            ("type", &settings.types),
+            ("status", &settings.statuses),
+        ],
+        &[],
+    );
+    if !unknown.is_empty() {
+        return Err(filters::unknown_refusal(
+            &filters::Refusing {
+                address: "The Documents page's address",
+                path: "/admin/documents",
+                reset: "Reset the Documents view",
+                view: "documents",
+            },
+            &unknown,
+        ));
+    }
     let order = Order::parse(request.query("sort"), request.query("dir"))?;
     let filters = Filters {
-        doc_type: request
-            .query("type")
-            .filter(|t| !t.is_empty())
-            .map(str::to_owned),
-        status: request
-            .query("status")
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned),
+        projects: filters::named(request, "project", &names),
+        types: filters::named(request, "type", &settings.types),
+        statuses: filters::named(request, "status", &settings.statuses),
+        closed: request.query("filters") == Some("closed"),
         order,
         start: number(request, "start", 1)?,
         limit: number(request, "limit", DEFAULT_LIST_LIMIT)?,
-        project: name,
+    };
+    // In view: the projects named, or every project.
+    let in_view = if filters.projects.is_empty() {
+        names.clone()
+    } else {
+        filters.projects.clone()
     };
     let listing = store
-        .list(&ListRequest {
-            project: filters.project.clone(),
-            doc_type: filters.doc_type.clone(),
-            status: filters.status.clone(),
+        .list_across(&ListAcross {
+            projects: in_view.clone(),
+            doc_types: filters.types.clone(),
+            statuses: filters.statuses.clone(),
             sort: Order::sort(filters.order),
             start: filters.start,
             limit: filters.limit,
         })
         .map_err(|e| WebError::from_store(&e))?;
-    let settings = store.settings();
-    let choices = |values: &[String], current: Option<&str>, all: &str| {
-        std::iter::once(Choice {
-            value: String::new(),
-            label: all.to_owned(),
-            selected: current.is_none(),
-        })
-        .chain(values.iter().map(|v| Choice {
-            value: v.clone(),
-            label: v.clone(),
-            selected: current == Some(v.as_str()),
-        }))
-        .collect()
-    };
+    let project_column = in_view.len() > 1;
+    let view = View::of(filters.order);
     let results = DocumentsResults {
-        project: projects.iter().find(|p| p.name == filters.project).cloned(),
-        headers: filters.headers(),
-        sort: filters.order.map(|o| (o.column.name(), o.descending)),
+        project: match in_view.as_slice() {
+            [only] => projects.iter().find(|p| p.name == *only).cloned(),
+            _ => None,
+        },
+        project_column,
+        headers: filters.headers(project_column),
+        order: (view.sort, view.dir == "desc"),
         announcement: Order::announcement(filters.order),
         total: listing.total,
         start: filters.start,
@@ -364,24 +468,24 @@ pub(crate) fn list(
     if request.wants_fragment() {
         return Ok(render(StatusCode::OK, &results));
     }
+    let panel = Panel {
+        projects: filters::group(&projects, &names, &filters.projects, true),
+        // Only projects have titles: a type or status named like a project
+        // keeps its own name.
+        types: filters::group(&[], &settings.types, &filters.types, false),
+        statuses: filters::group(&[], &settings.statuses, &filters.statuses, false),
+        active: usize::from(!filters.projects.is_empty())
+            + usize::from(!filters.types.is_empty())
+            + usize::from(!filters.statuses.is_empty()),
+        closed: filters.closed,
+        empty: false,
+    };
     let page = DocumentsPage {
         title: "Documents",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Documents, ""),
-        projects: projects
-            .iter()
-            .map(|p| Choice {
-                value: p.name.clone(),
-                label: format!("{} ({})", p.name, p.key),
-                selected: p.name == filters.project,
-            })
-            .collect(),
-        types: choices(&settings.types, filters.doc_type.as_deref(), "All types"),
-        statuses: choices(
-            &settings.statuses,
-            filters.status.as_deref(),
-            "All statuses",
-        ),
+        panel,
+        view,
         results,
     };
     Ok(render(StatusCode::OK, &page))
@@ -389,17 +493,25 @@ pub(crate) fn list(
 
 /// The library before any project exists.
 fn empty(session: &Session) -> Response {
+    let none = || filters::group(&[], &[], &[], false);
     let page = DocumentsPage {
         title: "Documents",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Documents, ""),
-        projects: Vec::new(),
-        types: Vec::new(),
-        statuses: Vec::new(),
+        panel: Panel {
+            projects: none(),
+            types: none(),
+            statuses: none(),
+            active: 0,
+            closed: false,
+            empty: true,
+        },
+        view: View::of(None),
         results: DocumentsResults {
             project: None,
+            project_column: false,
             headers: Vec::new(),
-            sort: None,
+            order: ("updated", true),
             announcement: Order::announcement(None),
             items: Vec::new(),
             total: 0,

@@ -8,6 +8,7 @@
 │   └── dependabot.yml      Weekly action, crate and Docker base update proposals
 ├── AGENTS.md               Instructions for coding agents
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code
+├── DESIGN.md               Design rules for the admin web interface (JavaScript required, Chrome and Firefox, filter parts)
 ├── Dockerfile              Image: a source build (`local`, the default) or a release's binary (`release`), on debian-slim with git
 ├── docker/entrypoint.sh    The image's entrypoint: init, the first user and its sign-in banner, then serve
 ├── compose.yaml            Local server; data bind-mounted from .local/data (git-ignored)
@@ -40,7 +41,7 @@
 ├── .env.example            Supported secret variables with placeholders
 ├── .gitleaks.toml          Secret-scan rules and allowlists
 ├── .githooks/pre-commit    Git hook running `just pre-commit` (enabled by just setup)
-├── templates/              Askama templates of the admin web interface (compiled into the binary)
+├── templates/              Askama templates of the admin web interface (compiled into the binary); filter_parts.html holds the shared picker macro
 ├── docs/                   Maintained documentation (rules in docs/AGENTS.md)
 │   ├── deployment.md       Running a server: systemd, brew services, Tailscale, operations
 │   ├── docker.md           Docker installation: the published image, volumes, configuration, backups
@@ -91,6 +92,7 @@
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
 │   │   ├── title.rs        Title rules and file stems
 │   │   ├── file.rs         FilePath: paths of files inside a multi-file document
+│   │   ├── links.rs        Wiki links in a body, by the web renderer's parser options
 │   │   └── front_matter.rs Key classes, parse, render, change rules (documents and their files)
 │   ├── history/mod.rs      History trait and GitCli (commit, show, log, diff)
 │   ├── mcp/
@@ -107,8 +109,8 @@
 │   │   ├── assets.rs       Static files under content-hashed paths
 │   │   ├── assets/         app.css, app.js, board.js (the Board), filters.js (the filter parts: pills, picker, chips), document.js (a live document page), the icons (favicon.svg and the .ico and touch .png drawn from it), and vendor/ (htmx, Pele and their licences)
 │   │   ├── markdown.rs     Obsidian-style Markdown to safe HTML (tests in markdown_tests.rs)
-│   │   ├── plantuml.rs     PlantUML text encoding for the configured server
-│   │   └── pages/          One module per workspace: login, setup, overview, documents, document, history, search, projects, keys, users (and Account), audit, archive, maintenance
+│   │   ├── plantuml.rs     How PlantUML diagrams are drawn (CLI, server or source) and the server URL encoding
+│   │   └── pages/          One module per workspace: login, setup, overview, documents, document, history, search, projects, keys, users (and Account), audit, archive, maintenance; filters.rs, the filter parts' server side shared by the Board and Documents
 │   ├── search/
 │   │   ├── mod.rs          Re-exports and the Invalid error
 │   │   ├── query.rs        Query grammar and FTS5 expressions
@@ -136,6 +138,7 @@
 │       ├── registry.rs     Projects and API keys
 │       ├── search.rs       Store::search
 │       ├── reindex.rs      Rebuilding the index from the history
+│       ├── relink.rs       Rewriting the links to a renamed document (rewrite_links)
 │       ├── journal.rs      Undoable vault file writes
 │       ├── tests.rs        Store unit tests (temp vault, real git)
 │       └── sign_in_tests.rs Store tests of user sign-in (a module of tests.rs)
@@ -150,7 +153,8 @@
     ├── config_example.rs   config.example.toml matches the schema
     ├── history.rs          History, diff, restore, move, edit, append, archive, check
     ├── mcp.rs              Every tool over HTTP, grants, Host/Origin, serve
-    ├── reindex.rs          Rebuilds: identical, after a lost write or database
+    ├── reindex.rs          Rebuilds: identical, after a lost write or database, relinking renames
+    ├── relink.rs           A rename that rewrites the links to it: forms, scope, all or nothing
     ├── search.rs           Search over a fixture vault
     ├── store.rs            A document's lifecycle across files, git and index
     ├── users.rs            joedocs user ... on the server, through the binary

@@ -46,6 +46,7 @@
 //! | `GET /admin/documents/{id}/diff` | `admin:documents.diff` |
 //! | `GET /admin/documents/{id}/download` | `admin:documents.get` |
 //! | `GET /admin/documents/{id}/stream` | `admin:documents.stream` |
+//! | `GET /admin/diagrams/{key}.svg` | `admin:web.diagram` |
 //! | `GET /admin/search` | `admin:documents.search` |
 //! | `GET /admin/projects` | `admin:projects.list` |
 //! | `POST /admin/projects` | `admin:projects.add` |
@@ -75,7 +76,7 @@ mod assets;
 mod board_signal;
 pub(crate) mod markdown;
 mod pages;
-mod plantuml;
+pub mod plantuml;
 mod session;
 
 use std::sync::Arc;
@@ -100,8 +101,12 @@ pub const CLIENT: &str = "joedocs-web";
 pub struct WebOptions {
     /// `admin.session_hours`.
     pub session_hours: u32,
-    /// `admin.web_plantuml_url`, or empty.
-    pub plantuml_url: String,
+    /// How `PlantUML` diagrams are drawn: from `admin.web_plantuml_url`
+    /// and `admin.use_plantuml_cli`, chosen when the server starts.
+    pub diagrams: plantuml::Diagrams,
+    /// How long one `PlantUML` drawing may take:
+    /// [`plantuml::DRAW_TIMEOUT`] (shorter in tests).
+    pub diagram_timeout: std::time::Duration,
     /// The Board's settings.
     pub board: BoardOptions,
 }
@@ -141,6 +146,8 @@ pub(crate) struct WebState {
     device_days: u32,
     /// The Board's change signal and open streams.
     board_signal: Arc<board_signal::BoardSignal>,
+    /// [`plantuml::DRAW_SLOTS`] places for drawing `PlantUML` diagrams.
+    diagram_slots: Arc<tokio::sync::Semaphore>,
 }
 
 /// The routes: `/` and `/admin` redirect to `/admin/`, and everything under
@@ -151,7 +158,7 @@ pub(crate) fn routes(
     server: &ServerOptions,
     shutdown: &tokio_util::sync::CancellationToken,
 ) -> Router {
-    let csp = HeaderValue::from_str(&content_security_policy(&web.plantuml_url))
+    let csp = HeaderValue::from_str(&content_security_policy(web.diagrams.server_url()))
         .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'"));
     let state = Arc::new(WebState {
         shared: Arc::clone(shared),
@@ -171,6 +178,7 @@ pub(crate) fn routes(
             std::time::Duration::from_millis(u64::from(web.board.refresh_ms)),
             shutdown.child_token(),
         ),
+        diagram_slots: Arc::new(tokio::sync::Semaphore::new(plantuml::DRAW_SLOTS)),
     });
     Router::new()
         .route("/", any(dispatch))
@@ -223,6 +231,7 @@ pub(crate) enum Route {
     Diff(String),
     Download(String),
     DocumentStream(String),
+    Diagram(String),
     Search,
     ProjectsList,
     ProjectsAdd,
@@ -303,6 +312,10 @@ impl Route {
             (_, ["documents", id, "stream"]) if get && !id.is_empty() => {
                 Self::DocumentStream(percent_decode(id))
             }
+            (_, ["diagrams", file]) if get => match file.strip_suffix(".svg") {
+                Some(key) if plantuml::is_key(key) => Self::Diagram(key.to_owned()),
+                _ => Self::Unknown,
+            },
             ("/admin/search", _) if get => Self::Search,
             ("/admin/projects", _) if get => Self::ProjectsList,
             ("/admin/projects", _) if post => Self::ProjectsAdd,
@@ -365,6 +378,7 @@ impl Route {
             Self::History(_) => "admin:documents.history",
             Self::Diff(_) => "admin:documents.diff",
             Self::DocumentStream(_) => "admin:documents.stream",
+            Self::Diagram(_) => "admin:web.diagram",
             Self::Search => "admin:documents.search",
             Self::ProjectsList => "admin:projects.list",
             Self::ProjectsAdd => "admin:projects.add",
@@ -702,6 +716,11 @@ async fn run(
     if matches!(route, Route::Backup) && checked.is_ok() {
         return secured(backup(state, request).await, &csp);
     }
+    if let Route::Diagram(key) = &route
+        && checked.is_ok()
+    {
+        return diagram(state, request, key.clone()).await;
+    }
     // These hash a password, so they run without the store lock held.
     if matches!(route, Route::SignIn) && checked.is_ok() {
         return secured(pages::setup::sign_in(state, request).await, &csp);
@@ -757,6 +776,126 @@ async fn run(
         }
     };
     secured(response, &csp)
+}
+
+/// `GET /admin/diagrams/{key}.svg`: a `PlantUML` diagram drawn on the
+/// server (`Diagrams::Cli`), from the image cache, or drawn now from the
+/// source a document page saved there. The command runs without the store
+/// lock held, at most [`plantuml::DRAW_SLOTS`] at once. The SVG gets its
+/// own strict policy, so opened on its own it runs nothing.
+async fn diagram(state: Arc<WebState>, request: WebRequest, key: String) -> Response {
+    let operation = Route::Diagram(String::new()).operation();
+    let checked = {
+        let state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || {
+            let Ok(store) = state.shared.store().lock() else {
+                return Err(Box::new(internal().into_response()));
+            };
+            match signed_in(&store, &state, &request) {
+                Ok(session) => Ok((
+                    session.admin,
+                    plantuml::Cache::new(&store.paths().state_dir),
+                )),
+                Err(refusal) => {
+                    let (who, refused) = *refusal;
+                    write_audit(&store, who.as_ref(), operation, refused.code);
+                    Err(Box::new(refused.into_response()))
+                }
+            }
+        })
+        .await
+    };
+    let (admin, cache) = match checked {
+        Ok(Ok(found)) => found,
+        Ok(Err(refused)) => return secured(*refused, &state.csp),
+        Err(error) => {
+            tracing::error!(%error, "web interface task failed");
+            return secured(internal().into_response(), &state.csp);
+        }
+    };
+    let (outcome, response) = match draw_diagram(&state, &cache, &key).await {
+        Ok(svg) => ("ok", svg_response(svg)),
+        Err(refused) => (refused.code, refused.into_response()),
+    };
+    let audit = Arc::clone(&state);
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Ok(store) = audit.shared.store().lock() {
+            write_audit(&store, Some(&admin), operation, outcome);
+        }
+    })
+    .await;
+    let mut response = secured(response, &state.csp);
+    if response.status() == StatusCode::OK {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, max-age=31536000, immutable"),
+        );
+    }
+    response
+}
+
+/// The cached drawing of `key`, or a new one from its saved source.
+async fn draw_diagram(
+    state: &WebState,
+    cache: &plantuml::Cache,
+    key: &str,
+) -> Result<Vec<u8>, WebError> {
+    let not_found = || WebError::new(StatusCode::NOT_FOUND, "not_found", "no such diagram");
+    let plantuml::Diagrams::Cli(cli) = &state.options.diagrams else {
+        return Err(not_found());
+    };
+    if let Some(svg) = cache.svg(key) {
+        return Ok(svg);
+    }
+    let source = cache.source(key).ok_or_else(not_found)?;
+    let _slot = state
+        .diagram_slots
+        .acquire()
+        .await
+        .map_err(|_| internal())?;
+    // Another request may have drawn it while this one waited.
+    if let Some(svg) = cache.svg(key) {
+        return Ok(svg);
+    }
+    match plantuml::draw(cli, cache, &source, state.options.diagram_timeout).await {
+        Ok(svg) => {
+            if let Err(error) = cache.save_svg(key, &svg) {
+                tracing::warn!(%error, key, "cannot cache a PlantUML drawing");
+            }
+            Ok(svg)
+        }
+        Err(error) => {
+            tracing::warn!(%error, key, "cannot draw a PlantUML diagram");
+            Err(WebError::new(
+                StatusCode::BAD_GATEWAY,
+                "bad_gateway",
+                "the diagram could not be drawn",
+            ))
+        }
+    }
+}
+
+/// An SVG drawing with its own policy: no scripts, no requests, sandboxed.
+fn svg_response(svg: Vec<u8>) -> Response {
+    let mut response = svg.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("image/svg+xml"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+    );
+    response
+}
+
+fn internal() -> WebError {
+    WebError::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal",
+        "internal error",
+    )
 }
 
 /// `POST /admin/maintenance/backup`: the admin API's backup download

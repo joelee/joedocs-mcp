@@ -13,7 +13,8 @@ use std::fs;
 use indexmap::IndexMap;
 
 use super::admin_files::{TARGET_DOCUMENT, TARGET_FILE, TARGET_REVISION};
-use super::documents::{FILE_FROM_TRAILER, FILE_TRAILER, sha256};
+use super::documents::{Action, FILE_FROM_TRAILER, FILE_TRAILER, sha256};
+use super::relink::{RELINKED_FILE_TRAILER, RELINKED_TRAILER, relink_summary};
 use super::{Error, Store, index_file, lock};
 use crate::clock::format_timestamp;
 use crate::db::{
@@ -210,6 +211,24 @@ fn replay(
         .map_err(|_| bad(&commit.id, "the revision is not a number"))?;
     let action = trailer(ACTION)?;
     check_next(replays, commit, &id, revision)?;
+    let relinked = relinked_trailers(commit)?;
+    let without_relinked;
+    let commit = if relinked.is_empty() {
+        commit
+    } else {
+        // The rename's own paths are what the relinked documents leave.
+        let claimed = replay_relinked(replays, commit, &id, &relinked)?;
+        without_relinked = Logged {
+            changes: commit
+                .changes
+                .iter()
+                .filter(|(_, path)| !claimed.contains(path))
+                .cloned()
+                .collect(),
+            ..commit.clone()
+        };
+        &without_relinked
+    };
     if commit.trailer(TARGET_DOCUMENT).is_some() {
         return replay_move(replays, commit, &id, revision, action);
     }
@@ -389,6 +408,151 @@ fn replay_move(
     let key = new.to_lowercase();
     replays.entry(target).or_default().files.insert(key, file);
     Ok(())
+}
+
+/// One document a rename rewrote links in: its ID, its new revision and
+/// (for a multi-file document) the files rewritten, from the
+/// `JoeDocs-Relinked` and `JoeDocs-Relinked-File` trailers.
+type RelinkedTrailer = (String, u64, Vec<String>);
+
+/// The `JoeDocs-Relinked` trailers of `commit` in order, each with the
+/// `JoeDocs-Relinked-File` trailers naming it.
+fn relinked_trailers(commit: &Logged) -> Result<Vec<RelinkedTrailer>, Error> {
+    let mut relinked: Vec<RelinkedTrailer> = Vec::new();
+    for (key, value) in &commit.trailers {
+        if key == RELINKED_TRAILER {
+            let parsed = value.split_once(' ').and_then(|(id, revision)| {
+                let id: DocumentId = id.parse().ok()?;
+                Some((id.to_string(), revision.parse().ok()?))
+            });
+            let (id, revision) = parsed.ok_or_else(|| {
+                bad(
+                    &commit.id,
+                    format!("{RELINKED_TRAILER} {value} is not a document ID and a revision"),
+                )
+            })?;
+            relinked.push((id, revision, Vec::new()));
+        } else if key == RELINKED_FILE_TRAILER {
+            let named = value.split_once(' ').and_then(|(id, file)| {
+                relinked
+                    .iter_mut()
+                    .find(|(relinked, _, _)| relinked == id)
+                    .map(|(_, _, files)| (files, file))
+            });
+            let (files, file) = named.ok_or_else(|| {
+                bad(
+                    &commit.id,
+                    format!("{RELINKED_FILE_TRAILER} {value} names no {RELINKED_TRAILER} document"),
+                )
+            })?;
+            files.push(file.to_owned());
+        }
+    }
+    Ok(relinked)
+}
+
+/// Replays the `relink` revision of each document a rename of `renamed`
+/// rewrote links in: each changed path must be one of its live files, and
+/// was modified. Returns the vault paths they claim.
+fn replay_relinked(
+    replays: &mut IndexMap<String, Replay>,
+    commit: &Logged,
+    renamed: &str,
+    relinked: &[RelinkedTrailer],
+) -> Result<HashSet<String>, Error> {
+    let fail = |message: String| bad(&commit.id, message);
+    let at = format_timestamp(commit.at);
+    let client = commit.trailer(CLIENT).unwrap_or("unknown").to_owned();
+    let modified = |path: &str| {
+        commit
+            .changes
+            .iter()
+            .any(|(change, p)| *change == Change::Modified && p == path)
+    };
+    let mut claimed = HashSet::new();
+    for (id, revision, files) in relinked {
+        let revision = *revision;
+        if id == renamed {
+            return Err(fail(format!(
+                "{RELINKED_TRAILER} names {id}, the renamed document"
+            )));
+        }
+        check_next(replays, commit, id, revision)?;
+        let doc = replays.entry(id.clone()).or_default();
+        let path = doc
+            .revisions
+            .last()
+            .filter(|_| doc.archived.is_none())
+            .map(|r| r.path.clone())
+            .ok_or_else(|| fail(format!("{id} is not a live document")))?;
+        if doc.multifile {
+            if files.is_empty() {
+                return Err(fail(format!(
+                    "{id} is a multi-file document, but the commit names none of its files"
+                )));
+            }
+            let folder = path.rsplit_once('/').map_or("", |(folder, _)| folder);
+            let folder_name = folder.rsplit_once('/').map_or(folder, |(_, name)| name);
+            for file in files {
+                let rel = file.strip_suffix(".md").ok_or_else(|| {
+                    fail(format!(
+                        "{RELINKED_FILE_TRAILER} {file} does not end in .md"
+                    ))
+                })?;
+                let vault = format!("{folder}/{file}");
+                if !modified(&vault) {
+                    return Err(fail(format!("the commit does not change {vault} for {id}")));
+                }
+                let main = rel == folder_name;
+                if main {
+                    doc.main_revision = revision;
+                    doc.content = Some((commit.id.clone(), vault.clone()));
+                } else {
+                    let replayed = doc
+                        .files
+                        .get_mut(&rel.to_lowercase())
+                        .ok_or_else(|| fail(format!("{id} has no file {rel}")))?;
+                    replayed.revision = revision;
+                    at.clone_into(&mut replayed.updated_at);
+                    commit.author.clone_into(&mut replayed.updated_by);
+                    client.clone_into(&mut replayed.client);
+                    replayed.content = (commit.id.clone(), vault.clone());
+                }
+                doc.changes.push(RevisionFileRow {
+                    document_id: id.clone(),
+                    revision,
+                    path: rel.to_owned(),
+                    main,
+                    change: FileChange::Modified,
+                    from_path: None,
+                });
+                claimed.insert(vault);
+            }
+        } else {
+            if !files.is_empty() {
+                return Err(fail(format!(
+                    "{id} is a single-file document, but the commit names files of it"
+                )));
+            }
+            if !modified(&path) {
+                return Err(fail(format!("the commit does not change {path} for {id}")));
+            }
+            doc.content = Some((commit.id.clone(), path.clone()));
+            claimed.insert(path.clone());
+        }
+        doc.revisions.push(RevisionRow {
+            document_id: id.clone(),
+            revision,
+            commit_id: commit.id.clone(),
+            path,
+            action: Action::Relink.name().to_owned(),
+            author: commit.author.clone(),
+            client: client.clone(),
+            summary: relink_summary(renamed),
+            created_at: at.clone(),
+        });
+    }
+    Ok(claimed)
 }
 
 /// The `JoeDocs-File` trailers of `commit` in order, each with the
