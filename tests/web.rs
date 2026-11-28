@@ -7167,3 +7167,105 @@ async fn documents_search_and_archive_choose_a_project_with_the_picker() -> Test
     assert!(page.body.contains("value=\"\" checked"), "all projects");
     server.stop().await
 }
+
+#[tokio::test]
+async fn audit_quick_filters_are_pills_and_its_negations_are_chips() -> TestResult<()> {
+    let server = start().await?;
+    let cookie = server.login().await?;
+    let pills = |body: &str| -> Vec<(String, bool)> {
+        tags(body)
+            .into_iter()
+            .filter(|t| t.name == "a" && t.get("class") == Some("pill"))
+            .map(|t| {
+                (
+                    t.get("href").unwrap_or("").to_owned(),
+                    t.get("aria-current") == Some("true"),
+                )
+            })
+            .collect()
+    };
+    let current = |body: &str| -> Vec<String> {
+        pills(body)
+            .into_iter()
+            .filter(|(_, on)| *on)
+            .map(|(href, _)| href)
+            .collect()
+    };
+    let all = server.get("/admin/audit", Some(&cookie)).await?;
+    assert_eq!(all.status, 200);
+    let hrefs: Vec<String> = pills(&all.body).into_iter().map(|(h, _)| h).collect();
+    assert_eq!(hrefs.len(), 5, "{hrefs:?}");
+    assert_eq!(hrefs[0], "/admin/audit");
+    for quick in [
+        "/admin/audit?tool=admin%3A*",
+        "/admin/audit?outcome_not=ok",
+        "/admin/audit?tool_not=admin%3Adocuments.board*",
+    ] {
+        assert!(hrefs.iter().any(|h| h == quick), "{quick} in {hrefs:?}");
+    }
+    assert_eq!(current(&all.body), ["/admin/audit"], "All is lit");
+    assert!(
+        !all.body.contains("class=\"fchip\""),
+        "no chips without filters"
+    );
+
+    // Refusals: its pill is lit, and the hint is a chip whose removal
+    // leads where the hint's "Show all" did.
+    let refusals = server
+        .get("/admin/audit?outcome_not=ok", Some(&cookie))
+        .await?;
+    assert_eq!(current(&refusals.body), ["/admin/audit?outcome_not=ok"]);
+    assert!(!refusals.body.contains("Showing outcomes other than"));
+    let removers: Vec<Tag> = tags(&refusals.body)
+        .into_iter()
+        .filter(|t| t.get("data-chip-remove").is_some())
+        .collect();
+    assert_eq!(removers.len(), 1);
+    assert_eq!(removers[0].get("href"), Some("/admin/audit"));
+    assert_eq!(
+        removers[0].get("aria-label"),
+        Some("Remove the filter: outcomes other than ok")
+    );
+    assert!(
+        refusals
+            .body
+            .contains("<span class=\"fchip-facet\">Outcome:</span>")
+    );
+    // The form still carries the value, so the results keep it.
+    assert!(
+        refusals
+            .body
+            .contains("type=\"hidden\" name=\"outcome_not\" value=\"ok\"")
+    );
+
+    // Two chips: each removal drops its own parameter only.
+    let both = server
+        .get(
+            "/admin/audit?key=ci-bot&outcome_not=ok&tool_not=admin%3Adocuments.board*&limit=20",
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(both.status, 200);
+    assert_eq!(
+        current(&both.body),
+        Vec::<String>::new(),
+        "no preset matches"
+    );
+    let removers: Vec<String> = tags(&both.body)
+        .into_iter()
+        .filter(|t| t.get("data-chip-remove").is_some())
+        .filter_map(|t| t.get("href").map(|h| h.replace("&#38;", "&")))
+        .collect();
+    assert_eq!(
+        removers,
+        [
+            "/admin/audit?key=ci-bot&tool_not=admin%3Adocuments.board*&limit=20",
+            "/admin/audit?key=ci-bot&outcome_not=ok&limit=20",
+        ]
+    );
+    for href in &removers {
+        let page = server.get(href, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{href}");
+    }
+    server.stop().await
+}

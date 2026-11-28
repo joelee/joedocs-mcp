@@ -30,10 +30,23 @@ const FILTERS: [&str; 8] = [
 /// frequent rows while a Board is open (JD-47 REQ-11).
 const BOARD_TOOLS: &str = "admin:documents.board*";
 
-/// A quick filter link.
+/// A quick filter, shown as a pill: a link to a preset view, lit when the
+/// filters in force are exactly its own.
 pub(crate) struct Quick {
     pub(crate) href: String,
     pub(crate) label: &'static str,
+    pub(crate) current: bool,
+}
+
+/// A filter that leaves rows out (`outcome_not`, `tool_not`), shown as a
+/// chip whose x is a link to the same view without it.
+pub(crate) struct Chip {
+    pub(crate) facet: &'static str,
+    pub(crate) text: String,
+    /// The address without this filter.
+    pub(crate) remove: String,
+    /// The x's accessible name.
+    pub(crate) label: String,
 }
 
 #[derive(Template)]
@@ -45,6 +58,7 @@ struct AuditPage<'a> {
     /// The filter form's values, by key.
     values: Vec<(&'static str, &'a str)>,
     quick: Vec<Quick>,
+    chips: Vec<Chip>,
     /// The page size, kept in the form when it is not the default.
     limit: Option<u64>,
     results: AuditResults,
@@ -115,7 +129,8 @@ pub(crate) fn page(
         title: "Audit",
         assets: assets::urls(),
         chrome: Chrome::new(session, Section::Audit, ""),
-        quick: quick_filters(store),
+        quick: quick_filters(store, &values),
+        chips: Vec::new(),
         limit: None,
         values: values.clone(),
         results: AuditResults {
@@ -141,6 +156,7 @@ pub(crate) fn page(
         }
     };
     page.limit = (limit != DEFAULT_AUDIT_LIMIT).then_some(limit);
+    page.chips = chips(&values, page.limit);
     let found = store.audit_entries(&AuditRequest {
         since: given("since"),
         until: given("until"),
@@ -174,33 +190,80 @@ pub(crate) fn page(
     }
 }
 
-/// Admin calls, refusals, and the last 24 hours by the store's clock.
-fn quick_filters(store: &Store) -> Vec<Quick> {
+/// The chips of the filters that leave rows out, each removed by a link
+/// that keeps every other filter and the page size.
+fn chips(values: &[(&'static str, &str)], limit: Option<u64>) -> Vec<Chip> {
+    let limit = limit.map(|l| l.to_string());
+    let without = |key: &str| {
+        let mut pairs: Vec<(&str, Option<&str>)> = values
+            .iter()
+            .filter(|(k, _)| *k != key)
+            .map(|(k, v)| (*k, Some(*v)))
+            .collect();
+        pairs.push(("limit", limit.as_deref()));
+        link("/admin/audit", &pairs)
+    };
+    let value = |key: &str| {
+        values
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| *v)
+            .filter(|v| !v.is_empty())
+    };
+    let mut chips = Vec::new();
+    if let Some(outcome) = value("outcome_not") {
+        chips.push(Chip {
+            facet: "Outcome",
+            text: format!("not {outcome}"),
+            remove: without("outcome_not"),
+            label: format!("Remove the filter: outcomes other than {outcome}"),
+        });
+    }
+    if let Some(tool) = value("tool_not") {
+        chips.push(Chip {
+            facet: "Tool",
+            text: format!("not {tool}"),
+            remove: without("tool_not"),
+            label: format!("Remove the filter: leaving out tools matching {tool}"),
+        });
+    }
+    chips
+}
+
+/// All, admin calls, refusals, everything but the Board's rows, and the
+/// last 24 hours by the store's clock; the one matching the filters in
+/// force (`values`) exactly is current.
+fn quick_filters(store: &Store, values: &[(&'static str, &str)]) -> Vec<Quick> {
     let day_ago = store
         .now()
         .parse::<jiff::Timestamp>()
         .ok()
         .and_then(|now| now.checked_sub(jiff::SignedDuration::from_hours(24)).ok())
         .map(crate::clock::format_timestamp);
-    let mut quick = vec![
-        Quick {
-            href: link("/admin/audit", &[("tool", Some("admin:*"))]),
-            label: "Admin calls",
-        },
-        Quick {
-            href: link("/admin/audit", &[("outcome_not", Some("ok"))]),
-            label: "Refusals",
-        },
-        Quick {
-            href: link("/admin/audit", &[("tool_not", Some(BOARD_TOOLS))]),
-            label: "Leave out Board",
-        },
+    let in_force: Vec<(&str, &str)> = values
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (*k, *v))
+        .collect();
+    let quick = |label: &'static str, pair: Option<(&str, &str)>| Quick {
+        href: link(
+            "/admin/audit",
+            &pair
+                .map(|(k, v)| (k, Some(v)))
+                .into_iter()
+                .collect::<Vec<_>>(),
+        ),
+        label,
+        current: in_force == pair.into_iter().collect::<Vec<_>>(),
+    };
+    let mut quicks = vec![
+        quick("All", None),
+        quick("Admin calls", Some(("tool", "admin:*"))),
+        quick("Refusals", Some(("outcome_not", "ok"))),
+        quick("Leave out Board", Some(("tool_not", BOARD_TOOLS))),
     ];
     if let Some(since) = day_ago {
-        quick.push(Quick {
-            href: link("/admin/audit", &[("since", Some(&since))]),
-            label: "Last 24 hours",
-        });
+        quicks.push(quick("Last 24 hours", Some(("since", &since))));
     }
-    quick
+    quicks
 }

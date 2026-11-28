@@ -352,8 +352,7 @@ pre.token { background: var(--surface); white-space: pre-wrap; overflow-wrap: an
 pre.report-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Audit */
-.quick-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
-.quick-filters a { padding: var(--space-1) var(--space-3); border: 1px solid var(--border); border-radius: 999px; background: var(--surface); text-decoration: none; font-size: var(--text-sm); }
+.quick-filters { margin-bottom: var(--space-3); }
 
 /* Search */
 .search-form .search-words { flex: 2 1 16rem; }
@@ -593,6 +592,16 @@ button.pill-all[aria-pressed="true"] { background: var(--pill-all-on); border-co
 .fchip-facet { color: var(--muted); margin-right: 0.3em; }
 .fchip button { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 50%; background: none; color: inherit; font-size: 1rem; font-weight: 400; line-height: 1; }
 .fchip button:hover { background: var(--accent); color: var(--accent-text); }
+/* Audit (JD-80): its quick filters are pills that are links, the one in
+   force lit; its filters that leave rows out are chips whose x is a link. */
+a.pill { text-decoration: none; }
+a.pill:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+a.pill[aria-current="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+a.pill[aria-current="true"]::before { content: "\2713"; content: "\2713" / ""; font-size: 0.85em; }
+.audit-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-3); }
+.fchip a { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; color: inherit; font-size: 1rem; line-height: 1; text-decoration: none; }
+.fchip a:hover { background: var(--accent); color: var(--accent-text); }
+.fchip a:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
 button.fchip-more { min-height: 1.75rem; padding: 0 0.65em; border-radius: 999px; border: 1px dashed var(--accent); background: none; color: var(--accent); font-size: var(--text-sm); font-weight: 400; }
 
 .switch { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 2rem; font-size: 1rem; font-weight: 400; cursor: pointer; }
