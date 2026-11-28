@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [0.5.7] - 2026-11-28
 
-PlantUML drawn on the server itself, link rewriting on rename, MCP file tools that make a single-file document multi-file, the Board's filter parts on four more pages, and `cargo binstall`. The database stays at version 8 (no migration); the new configuration key and MCP parameter are optional.
+PlantUML drawn on the server itself, link rewriting on rename, MCP file tools that make a single-file document multi-file, the Board's filters and sort on the Documents page (and its parts on Search, Archive and Audit), `list_documents` across projects, and `cargo binstall`. The database stays at version 8 (no migration); the new configuration key and MCP parameters are optional.
 
 ### Added
 
@@ -18,12 +18,15 @@ PlantUML drawn on the server itself, link rewriting on rename, MCP file tools th
   - The rename and every rewrite are one commit. Each rewritten document gets one revision with the new action `relink`, and the result lists them in `relinked` (`{document_id, revision}`).
   - All or nothing: a rewritten file over `server.max_document_bytes` (`invalid_argument` on `rewrite_links`) or a hand-edited file of a linking document (`integrity`) stops it before anything is written.
   - The commit names the rewritten documents in new `JoeDocs-Relinked` trailers (and their files in `JoeDocs-Relinked-File`), which `reindex` replays.
+- **`list_documents` lists several projects.** Its `project` takes one name as before, several (a list, or names joined by commas), or `"*"` for every project the key can read, as `search_documents` does. Every named project must be one the key can read, or the call fails naming it; `"*"` never lists another project. One name gives exactly the 0.5.6 result.
+- **`DESIGN.md`** for contributors: the admin web interface's design rules (JavaScript is required, every page change is checked in Chrome and Firefox, filtering pages reuse the Board's filter parts), linked from `AGENTS.md`.
 - **`cargo binstall joedocs`** downloads the release archive for Linux x86_64 and aarch64 and Apple silicon Macs instead of compiling (`[package.metadata.binstall]` in `Cargo.toml`).
 
 ### Changed
 
 - **`new_document_file` and `write_document_files` make a single-file document multi-file** instead of refusing it: after every check has passed, they convert it (a `convert` revision, as `joedocs document convert`) and then add or write the files, so the call gives two revisions. A call that fails a check converts nothing.
-- **The web interface's project filter:** on Documents, Search and Archive the project is chosen with the Board's searchable picker, one at a time. On Audit the quick filters are pills, the one in force lit, and the filters that leave rows out (`outcome_not`, `tool_not`) are chips whose × removes them. The addresses are the same as in 0.5.6, and every page works without JavaScript.
+- **The Documents page filters and sorts as the Board does.** A Filters bar shows the filters in force as chips, with their count, Clear all and a View menu for the sort (ID, Title, Type, Status, Revision or Last updated) and the order; its panel holds a searchable picker for projects and pills for types and statuses, several at once. The page lists one project, several or all: a bare `/admin/documents` now shows every project (it showed the first), with a Project column whenever more than one is shown. Column headers still sort. The address takes comma-separated values (`?project=a,b&type=plans,ideas`) as the Board's does, and every 0.5.6 Documents address shows the same documents; an unknown project, type or status is now refused with `400` and a link that resets the view (an unknown project was `404`).
+- **Search, Archive and Audit use the Board's filter parts:** Search and Archive choose their project with the searchable picker, one at a time; Audit's quick filters are pills, the one in force lit, and the filters that leave rows out (`outcome_not`, `tool_not`) are chips whose × removes them. Their addresses are the same as in 0.5.6.
 
 ### Security
 
