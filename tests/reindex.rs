@@ -10,7 +10,9 @@ use joedocs::Config;
 use joedocs::clock::FixedClock;
 use joedocs::document::front_matter::Fields;
 use joedocs::history::{Commit, GitCli, History as _};
-use joedocs::store::{Actor, Error, NewDocument, Paths, Settings, Store, Update};
+use joedocs::store::{
+    Actor, Error, NewDocument, NewFile, Paths, RenameOptions, Settings, Store, Update,
+};
 use rusqlite::types::ValueRef;
 use serde_json::json;
 use tempfile::TempDir;
@@ -105,11 +107,16 @@ fn snapshot(root: &Path) -> TestResult<Vec<String>> {
         ),
         (
             "doc_fields",
-            "SELECT * FROM doc_fields ORDER BY document_id, key, value",
+            "SELECT * FROM doc_fields ORDER BY document_id, key, value, file_id",
         ),
         (
             "doc_fts",
             "SELECT rowid, title, body FROM doc_fts ORDER BY rowid",
+        ),
+        ("document_files", "SELECT * FROM document_files ORDER BY id"),
+        (
+            "revision_files",
+            "SELECT * FROM revision_files ORDER BY document_id, revision, path",
         ),
         ("meta", "SELECT * FROM meta ORDER BY key"),
     ] {
@@ -309,6 +316,22 @@ fn a_history_that_cannot_be_replayed_leaves_the_index_alone() {
             "x\n\nJoeDocs-Document: JD-9\nJoeDocs-Revision: 1\nJoeDocs-Action: create\n",
             "front matter",
         ),
+        (
+            "x\n\nJoeDocs-Document: JD-1\nJoeDocs-Revision: 4\nJoeDocs-Action: rename\nJoeDocs-Relinked: JD-2 3\n",
+            "does not change joedocs/plans/Idea.md for JD-2",
+        ),
+        (
+            "x\n\nJoeDocs-Document: JD-1\nJoeDocs-Revision: 4\nJoeDocs-Action: rename\nJoeDocs-Relinked: JD-2 two\n",
+            "JoeDocs-Relinked JD-2 two",
+        ),
+        (
+            "x\n\nJoeDocs-Document: JD-1\nJoeDocs-Revision: 4\nJoeDocs-Action: rename\nJoeDocs-Relinked: JD-2 5\n",
+            "JD-2 revision 5 found where revision 3 was expected",
+        ),
+        (
+            "x\n\nJoeDocs-Document: JD-1\nJoeDocs-Revision: 4\nJoeDocs-Action: rename\nJoeDocs-Relinked-File: JD-2 Idea.md\n",
+            "JoeDocs-Relinked-File JD-2 Idea.md names no JoeDocs-Relinked document",
+        ),
     ];
     for (message, expected) in cases {
         let dir = TempDir::new().unwrap();
@@ -321,6 +344,103 @@ fn a_history_that_cannot_be_replayed_leaves_the_index_alone() {
         assert!(err.to_string().contains(expected), "{expected}: {err}");
         assert_eq!(snapshot(dir.path()).unwrap(), before, "{expected}");
     }
+}
+
+fn create(store: &mut Store, title: &str, content: &str, multifile: bool) -> TestResult<String> {
+    Ok(store
+        .create(
+            &actor(),
+            NewDocument {
+                project: "joedocs".into(),
+                doc_type: Some("notes".into()),
+                title: title.into(),
+                content: content.into(),
+                multifile,
+                ..NewDocument::default()
+            },
+        )?
+        .id)
+}
+
+fn add_file(store: &mut Store, id: &str, file: &str, content: &str) -> TestResult<()> {
+    store.create_file(
+        &actor(),
+        &NewFile {
+            document_id: id.into(),
+            file: file.into(),
+            content: content.into(),
+            ..NewFile::default()
+        },
+    )?;
+    Ok(())
+}
+
+#[test]
+fn renames_that_rewrote_links_are_replayed() {
+    let dir = TempDir::new().unwrap();
+    let mut store = open(dir.path()).unwrap();
+    populate(&mut store).unwrap();
+    let relink = RenameOptions {
+        rewrite_links: true,
+    };
+    let linker = create(
+        &mut store,
+        "Linker",
+        "[[Idea]], [[Folder|f]] and [[Note]]\n",
+        false,
+    )
+    .unwrap();
+    let folder = create(&mut store, "Folder", "Main [[Idea]]\n", true).unwrap();
+    add_file(&mut store, &folder, "items/one", "![[Idea#h]]\n").unwrap();
+    add_file(&mut store, &folder, "items/two", "No links\n").unwrap();
+
+    // A single-file document renamed: a single-file and a multi-file
+    // document relinked, the latter in its main file and one other file.
+    let renamed = store
+        .rename_with(&actor(), "JD-2", "Big idea", None, relink)
+        .unwrap();
+    assert_eq!(renamed.relinked.len(), 2);
+    // A multi-file document renamed (its folder moves): a single-file
+    // document relinked.
+    let renamed = store
+        .rename_with(&actor(), &folder, "Folder two", None, relink)
+        .unwrap();
+    assert_eq!(renamed.relinked.len(), 1);
+    // Later changes replay on top.
+    store
+        .update(&actor(), update(&linker, "Later\n", 3))
+        .unwrap();
+    store
+        .rename_with(
+            &actor(),
+            "JD-1",
+            "Plan again",
+            None,
+            RenameOptions::default(),
+        )
+        .unwrap();
+
+    let before = snapshot(dir.path()).unwrap();
+    assert!(
+        before
+            .iter()
+            .any(|l| l.starts_with("revisions") && l.contains("| relink |")),
+        "{before:?}"
+    );
+    let report = store.reindex().unwrap();
+    assert!(report.drifted.is_empty(), "{report:?}");
+    assert_eq!(snapshot(dir.path()).unwrap(), before);
+    assert_eq!(store.check().unwrap().problems(), 0);
+    let history = store.history(&folder, 1, 10).unwrap();
+    let actions: Vec<&str> = history
+        .revisions
+        .iter()
+        .map(|r| r.action.as_str())
+        .collect();
+    assert_eq!(
+        actions,
+        ["rename", "relink", "create_file", "create_file", "create"]
+    );
 }
 
 #[test]

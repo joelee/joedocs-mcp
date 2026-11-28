@@ -91,6 +91,7 @@
 │   │   ├── id.rs           Project keys and DocumentId (JD-42)
 │   │   ├── title.rs        Title rules and file stems
 │   │   ├── file.rs         FilePath: paths of files inside a multi-file document
+│   │   ├── links.rs        Wiki links in a body, by the web renderer's parser options
 │   │   └── front_matter.rs Key classes, parse, render, change rules (documents and their files)
 │   ├── history/mod.rs      History trait and GitCli (commit, show, log, diff)
 │   ├── mcp/
@@ -136,6 +137,7 @@
 │       ├── registry.rs     Projects and API keys
 │       ├── search.rs       Store::search
 │       ├── reindex.rs      Rebuilding the index from the history
+│       ├── relink.rs       Rewriting the links to a renamed document (rewrite_links)
 │       ├── journal.rs      Undoable vault file writes
 │       ├── tests.rs        Store unit tests (temp vault, real git)
 │       └── sign_in_tests.rs Store tests of user sign-in (a module of tests.rs)
@@ -150,7 +152,8 @@
     ├── config_example.rs   config.example.toml matches the schema
     ├── history.rs          History, diff, restore, move, edit, append, archive, check
     ├── mcp.rs              Every tool over HTTP, grants, Host/Origin, serve
-    ├── reindex.rs          Rebuilds: identical, after a lost write or database
+    ├── reindex.rs          Rebuilds: identical, after a lost write or database, relinking renames
+    ├── relink.rs           A rename that rewrites the links to it: forms, scope, all or nothing
     ├── search.rs           Search over a fixture vault
     ├── store.rs            A document's lifecycle across files, git and index
     ├── users.rs            joedocs user ... on the server, through the binary

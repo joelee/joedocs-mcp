@@ -253,6 +253,7 @@ pub(super) enum Action {
     Convert,
     MoveFile,
     RestoreFile,
+    Relink,
 }
 
 impl Action {
@@ -275,6 +276,7 @@ impl Action {
             Self::Convert => "convert",
             Self::MoveFile => "move_file",
             Self::RestoreFile => "restore_file",
+            Self::Relink => "relink",
         }
     }
 
@@ -296,6 +298,7 @@ impl Action {
             Self::Convert => "Convert",
             Self::MoveFile => "Move a file of",
             Self::RestoreFile => "Restore a file of",
+            Self::Relink => "Rewrite links in",
         }
     }
 }
@@ -503,25 +506,56 @@ impl Store {
         title: &str,
         expected_revision: Option<u64>,
     ) -> Result<Changed, Error> {
-        let title = check_title(title).map_err(|m| Error::invalid("title", m))?;
-        self.revise(
+        self.rename_with(
             actor,
             id,
+            title,
             expected_revision,
-            Action::Rename,
-            None,
-            |draft, _| {
-                if draft.title == title {
-                    return Err(Error::invalid("title", "is already the document's title"));
-                }
-                let old_title = std::mem::replace(&mut draft.title, title.clone());
-                front_matter::add_alias(&mut draft.extra, &old_title);
-                if let Some(serde_json::Value::Array(aliases)) = draft.extra.get_mut("aliases") {
-                    aliases.retain(|alias| alias.as_str() != Some(title.as_str()));
-                }
-                Ok(())
-            },
+            super::RenameOptions::default(),
         )
+        .map(|renamed| renamed.changed)
+    }
+
+    /// [`Store::rename`], and with `options.rewrite_links` the wiki links
+    /// to the old title in the project's other live documents rewritten to
+    /// the new one, in the same commit: each such document gets a `relink`
+    /// revision. All or nothing.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Store::rename`]; [`Error::Integrity`] when a file of
+    /// a document with links to rewrite was changed by hand; and
+    /// [`Error::Invalid`] on `rewrite_links` when a rewritten file would be
+    /// over `server.max_document_bytes`.
+    pub fn rename_with(
+        &mut self,
+        actor: &Actor,
+        id: &str,
+        title: &str,
+        expected_revision: Option<u64>,
+        options: super::RenameOptions,
+    ) -> Result<super::Renamed, Error> {
+        let title = check_title(title).map_err(|m| Error::invalid("title", m))?;
+        let edit = |draft: &mut Draft, _: &Settings| {
+            if draft.title == title {
+                return Err(Error::invalid("title", "is already the document's title"));
+            }
+            let old_title = std::mem::replace(&mut draft.title, title.clone());
+            front_matter::add_alias(&mut draft.extra, &old_title);
+            if let Some(serde_json::Value::Array(aliases)) = draft.extra.get_mut("aliases") {
+                aliases.retain(|alias| alias.as_str() != Some(title.as_str()));
+            }
+            Ok(())
+        };
+        let request = Revision {
+            id,
+            expected: expected_revision,
+            action: Action::Rename,
+            summary: None,
+            relink: options.rewrite_links,
+        };
+        let (changed, relinked) = self.revise_with(actor, &request, edit)?;
+        Ok(super::Renamed { changed, relinked })
     }
 
     /// Sets and removes front matter keys.
@@ -742,6 +776,32 @@ impl Store {
         summary: Option<String>,
         edit: impl FnOnce(&mut Draft, &Settings) -> Result<(), Error>,
     ) -> Result<Changed, Error> {
+        let request = Revision {
+            id,
+            expected,
+            action,
+            summary,
+            relink: false,
+        };
+        self.revise_with(actor, &request, edit)
+            .map(|(changed, _)| changed)
+    }
+
+    /// [`Store::revise`], rewriting the links to the document's old title
+    /// in the same commit when `request.relink` (a rename).
+    fn revise_with(
+        &mut self,
+        actor: &Actor,
+        request: &Revision<'_>,
+        edit: impl FnOnce(&mut Draft, &Settings) -> Result<(), Error>,
+    ) -> Result<(Changed, Vec<super::Relinked>), Error> {
+        let Revision {
+            id,
+            expected,
+            action,
+            ref summary,
+            relink,
+        } = *request;
         let id = parse_id(id)?;
         let at = self.clock.now();
         let now = crate::clock::format_timestamp(at);
@@ -771,37 +831,22 @@ impl Store {
             body: parsed.body.to_owned(),
         };
         edit(&mut draft, settings)?;
+        let plans = if relink {
+            super::relink::plan(&tx, &paths.home, &row, &draft.title)?
+        } else {
+            Vec::new()
+        };
 
         let old_path = row.path.clone();
         let old_title = std::mem::replace(&mut row.title, draft.title);
         let old_type = std::mem::replace(&mut row.doc_type, draft.doc_type);
         if row.title != old_title || row.doc_type != old_type {
-            let own = if row.multifile {
-                let live = db::live_files(&tx, &row.id)?;
-                top_level_stems(live.iter().map(|f| f.path.as_str()))
-            } else {
-                Vec::new()
-            };
-            let layout = if row.multifile {
-                Layout::Folder(&own)
-            } else {
-                Layout::Single
-            };
-            row.path = choose_path(
-                &tx,
-                &paths.home,
-                &row.project,
-                &row.doc_type,
-                &row.title,
-                &row.id,
-                Some(&old_path),
-                &layout,
-            )?;
+            row.path = moved_path(&tx, &paths.home, &row, &old_path)?;
         }
         row.status = draft.status;
         row.revision += 1;
         row.main_revision = row.revision;
-        row.updated_at = now;
+        now.clone_into(&mut row.updated_at);
         actor.name().clone_into(&mut row.updated_by);
         actor.client().clone_into(&mut row.client);
         let (row, fields, journal, moved) = super::folders::write_main(
@@ -813,7 +858,10 @@ impl Store {
             &draft.body,
             &old_path,
         )?;
-        let summary = summary.unwrap_or_else(|| match action {
+        let (relinked_journal, relinked) =
+            super::relink::write(&tx, &paths.home, settings, actor, &now, plans)?;
+        let journal = journal.then(relinked_journal);
+        let summary = summary.clone().unwrap_or_else(|| match action {
             Action::Rename => format!("{old_title} → {}", row.title),
             Action::Move => format!("{old_type} → {}", row.doc_type),
             _ => String::new(),
@@ -837,13 +885,54 @@ impl Store {
             paths: &changed_paths,
             files: &touched,
         };
-        finish(tx, history.as_ref(), journal, &commit)?;
+        finish_with(tx, history.as_ref(), journal, &commit, &relinked)?;
         if old_path != row.path {
             super::folders::clean_after_move(&paths.home, &old_path, Some(&row.path));
         }
         index_file::refresh_document(conn, &paths.home, settings, &row);
-        Ok(changed)
+        let relinked = super::relink::refreshed(conn, &paths.home, settings, relinked);
+        Ok((changed, relinked))
     }
+}
+
+/// Where `row` goes after its title or type changed from `old_path`.
+fn moved_path(
+    conn: &Connection,
+    home: &Path,
+    row: &DocumentRow,
+    old_path: &str,
+) -> Result<String, Error> {
+    let own = if row.multifile {
+        let live = db::live_files(conn, &row.id)?;
+        top_level_stems(live.iter().map(|f| f.path.as_str()))
+    } else {
+        Vec::new()
+    };
+    let layout = if row.multifile {
+        Layout::Folder(&own)
+    } else {
+        Layout::Single
+    };
+    choose_path(
+        conn,
+        home,
+        &row.project,
+        &row.doc_type,
+        &row.title,
+        &row.id,
+        Some(old_path),
+        &layout,
+    )
+}
+
+/// A revision for [`Store::revise_with`] to write.
+struct Revision<'a> {
+    id: &'a str,
+    expected: Option<u64>,
+    action: Action,
+    summary: Option<String>,
+    /// Rewrite the links to the old title (a rename with `rewrite_links`).
+    relink: bool,
 }
 
 /// Renders `row` with `extra` and `body`, checks the size, saves and
@@ -980,6 +1069,20 @@ pub(super) fn finish(
     journal: Journal,
     change: &Change<'_>,
 ) -> Result<(), Error> {
+    finish_with(tx, history, journal, change, &[])
+}
+
+/// [`finish`], with the documents a rename rewrote links in: each is named
+/// by a `JoeDocs-Relinked` trailer (and its files by
+/// `JoeDocs-Relinked-File`) and gets a `relink` revision in the same
+/// commit.
+fn finish_with(
+    tx: Transaction<'_>,
+    history: &dyn History,
+    journal: Journal,
+    change: &Change<'_>,
+    relinked: &[super::relink::Written],
+) -> Result<(), Error> {
     let Change {
         row,
         at,
@@ -1007,8 +1110,10 @@ pub(super) fn finish(
             let _ = writeln!(message, "{FILE_FROM_TRAILER}: {from}.md");
         }
     }
+    super::relink::write_trailers(&mut message, relinked);
     let mut changed: Vec<String> = paths.iter().map(|p| (*p).to_owned()).collect();
     changed.dedup();
+    changed.extend(relinked.iter().flat_map(|w| w.vaults.iter().cloned()));
     let commit_id = history.commit(&Commit {
         paths: changed,
         author: actor.name().to_owned(),
@@ -1043,6 +1148,7 @@ pub(super) fn finish(
             },
         )?;
     }
+    super::relink::record(&tx, relinked, &commit_id, actor, &row.id)?;
     db::set_history_head(&tx, &commit_id)?;
     tx.commit()?;
     Ok(())

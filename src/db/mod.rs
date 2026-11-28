@@ -41,8 +41,8 @@ pub use projects::{
 pub use rusqlite::{Connection, Error as SqlError};
 use rusqlite::{OptionalExtension as _, params};
 pub use search::{
-    SearchQuery, SearchRow, clear_documents, file_fts_rowid, fts_rowid, index_document, index_file,
-    search_documents, unindex_document, unindex_file,
+    SearchQuery, SearchRow, clear_documents, file_fts_rowid, files_mentioning, fts_rowid,
+    index_document, index_file, search_documents, unindex_document, unindex_file,
 };
 pub use users::{
     DeviceRow, ThrottleRow, UserRow, UserSecrets, UserSessionRow, clear_totp, confirm_totp,

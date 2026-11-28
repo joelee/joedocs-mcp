@@ -23,8 +23,7 @@
 use std::collections::HashMap;
 
 use pulldown_cmark::{
-    CodeBlockKind, CowStr, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd,
-    TextMergeStream,
+    CodeBlockKind, CowStr, Event, HeadingLevel, LinkType, Parser, Tag, TagEnd, TextMergeStream,
 };
 
 use super::plantuml;
@@ -95,11 +94,7 @@ pub fn render_with(
     diagrams: &plantuml::Diagrams,
 ) -> Rendered {
     let body = front_matter::split(markdown).map_or(markdown, |(_, body)| body);
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_WIKILINKS;
+    let options = crate::document::links::markdown_options();
     let events: Vec<Event<'_>> = TextMergeStream::new(Parser::new_ext(body, options)).collect();
     let mut renderer = Renderer {
         resolver,
