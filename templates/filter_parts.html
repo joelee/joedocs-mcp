@@ -1,0 +1,26 @@
+{# The filter parts' markup (JD-71), shared by the pages that filter with
+   them (the Board, Documents): `filters.js` draws and adjusts them, and
+   `src/web/pages/filters.rs` builds their choices. #}
+{% macro picker(prefix, key, noun, choices, named, all_label, default) %}
+<div class="picker" data-filter-picker="{{ key }}">
+  <div class="picker-box">
+    <span class="picker-chips" data-picker-chips></span>
+    <button type="button" class="picker-trigger" aria-expanded="false" aria-controls="{{ prefix }}-{{ key }}-picker" data-picker-open data-all-label="{{ all_label }}" data-some-label="Add or remove {{ noun }}">{% if named %}Add or remove {{ noun }}{% else %}{{ all_label }}{% endif %}<span class="caret" aria-hidden="true"></span></button>
+  </div>
+  <div class="picker-pop" id="{{ prefix }}-{{ key }}-picker" popover role="dialog" aria-label="Choose {{ noun }}" data-picker-pop>
+    <div class="picker-head">
+      <input type="search" id="{{ prefix }}-{{ key }}-search" aria-label="Search {{ choices.len() }} {{ noun }}" placeholder="Search {{ choices.len() }} {{ noun }}" autocomplete="off" data-picker-search>
+      <div class="picker-actions">
+        <button type="button" class="link" data-picker-all>Select all</button>
+        <button type="button" class="link" data-picker-clear>{% if default.is_empty() %}Clear{% else %}Default{% endif %}</button>
+        <span class="picker-count" data-picker-count></span>
+      </div>
+    </div>
+    <ul class="picker-list" data-picker-list>
+      {% for choice in choices %}<li data-picker-item data-search="{{ choice.search }}"><label class="picker-row" for="{{ prefix }}-{{ key }}-{{ choice.value }}"><input type="checkbox" name="{{ key }}" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="{{ prefix }}-{{ key }}-{{ choice.value }}"> <span class="picker-name">{{ choice.label }}</span>{% if !choice.meta.is_empty() %} <span class="picker-meta">{{ choice.meta }}</span>{% endif %}</label><button type="button" class="link picker-only" data-picker-only="{{ choice.value }}" aria-label="Only {{ choice.label }}">Only</button></li>{% endfor %}
+    </ul>
+    <p class="picker-empty" data-picker-empty hidden>No match.</p>
+    <div class="picker-foot"><button type="button" data-picker-done>Done</button></div>
+  </div>
+</div>
+{% endmacro %}

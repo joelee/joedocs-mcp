@@ -1,27 +1,5 @@
 {% extends "layout.html" %}
-{% macro picker(key, noun, choices, named, all_label, default) %}
-<div class="picker" data-filter-picker="{{ key }}">
-  <div class="picker-box">
-    <span class="picker-chips" data-picker-chips></span>
-    <button type="button" class="picker-trigger" aria-expanded="false" aria-controls="bf-{{ key }}-picker" data-picker-open data-all-label="{{ all_label }}" data-some-label="Add or remove {{ noun }}">{% if named %}Add or remove {{ noun }}{% else %}{{ all_label }}{% endif %}<span class="caret" aria-hidden="true"></span></button>
-  </div>
-  <div class="picker-pop" id="bf-{{ key }}-picker" popover role="dialog" aria-label="Choose {{ noun }}" data-picker-pop>
-    <div class="picker-head">
-      <input type="search" id="bf-{{ key }}-search" aria-label="Search {{ choices.len() }} {{ noun }}" placeholder="Search {{ choices.len() }} {{ noun }}" autocomplete="off" data-picker-search>
-      <div class="picker-actions">
-        <button type="button" class="link" data-picker-all>Select all</button>
-        <button type="button" class="link" data-picker-clear>{% if default.is_empty() %}Clear{% else %}Default{% endif %}</button>
-        <span class="picker-count" data-picker-count></span>
-      </div>
-    </div>
-    <ul class="picker-list" data-picker-list>
-      {% for choice in choices %}<li data-picker-item data-search="{{ choice.search }}"><label class="picker-row" for="bf-{{ key }}-{{ choice.value }}"><input type="checkbox" name="{{ key }}" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="bf-{{ key }}-{{ choice.value }}"> <span class="picker-name">{{ choice.label }}</span>{% if !choice.meta.is_empty() %} <span class="picker-meta">{{ choice.meta }}</span>{% endif %}</label><button type="button" class="link picker-only" data-picker-only="{{ choice.value }}" aria-label="Only {{ choice.label }}">Only</button></li>{% endfor %}
-    </ul>
-    <p class="picker-empty" data-picker-empty hidden>No match.</p>
-    <div class="picker-foot"><button type="button" data-picker-done>Done</button></div>
-  </div>
-</div>
-{% endmacro %}
+{% import "filter_parts.html" as parts %}
 {% block scripts %}<script src="{{ assets.filters|safe }}" defer></script><script src="{{ assets.board|safe }}" defer></script>{% endblock %}
 {% block content %}
 <div class="board-page">
@@ -73,11 +51,11 @@
   <div class="fpanel" id="board-filter-panel" data-filter-panel{% if view.filters_closed %} hidden{% endif %}>
     <div class="frow" role="group" aria-labelledby="bf-project-label" data-filter-group="project" data-filter-label="Projects" data-filter-default="">
       <span class="flabel" id="bf-project-label">Projects</span>
-      <div class="fbody">{% call picker("project", "projects", panel.projects.choices, panel.projects.named, "All projects", "") %}{% endcall %}</div>
+      <div class="fbody">{% call parts::picker("bf", "project", "projects", panel.projects.choices, panel.projects.named, "All projects", "") %}{% endcall %}</div>
     </div>
     <div class="frow" role="group" aria-labelledby="bf-type-label" data-filter-group="type" data-filter-label="Types" data-filter-default="">
       <span class="flabel" id="bf-type-label">Types</span>
-      <div class="fbody">{% if panel.types.picker %}{% call picker("type", "types", panel.types.choices, panel.types.named, "All types", "") %}{% endcall %}{% else %}
+      <div class="fbody">{% if panel.types.picker %}{% call parts::picker("bf", "type", "types", panel.types.choices, panel.types.named, "All types", "") %}{% endcall %}{% else %}
         <div class="pills" data-filter-pills>
           <button type="button" class="pill pill-all" aria-pressed="{{ !panel.types.named }}" data-pills-all>All</button>
           {% for choice in panel.types.choices %}<label class="pill" for="bf-type-{{ choice.value }}"><input type="checkbox" name="type" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="bf-type-{{ choice.value }}">{{ choice.label }}</label>{% endfor %}
@@ -86,7 +64,7 @@
     </div>
     <div class="frow" role="group" aria-labelledby="bf-status-label" data-filter-group="status" data-filter-label="Statuses" data-filter-default="{{ panel.status_default }}" data-filter-default-label="open">
       <span class="flabel" id="bf-status-label">Statuses</span>
-      <div class="fbody">{% if panel.statuses.picker %}{% call picker("status", "statuses", panel.statuses.choices, true, "Open statuses", panel.status_default) %}{% endcall %}{% else %}
+      <div class="fbody">{% if panel.statuses.picker %}{% call parts::picker("bf", "status", "statuses", panel.statuses.choices, true, "Open statuses", panel.status_default) %}{% endcall %}{% else %}
         <div class="pills" data-filter-pills>
           {% for choice in panel.statuses.choices %}<label class="pill st-{{ choice.value }}" for="bf-status-{{ choice.value }}"><input type="checkbox" name="status" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="bf-status-{{ choice.value }}">{{ choice.label }}</label>{% endfor %}
           <span class="pills-tools" data-pills-tools{% if panel.statuses_at_default && panel.statuses_all_lit %} hidden{% endif %}><button type="button" class="link" data-pills-default{% if panel.statuses_at_default %} hidden{% endif %}>Open only</button> <button type="button" class="link" data-pills-every{% if panel.statuses_all_lit %} hidden{% endif %}>All</button></span>
