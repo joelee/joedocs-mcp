@@ -1456,3 +1456,102 @@ fn serve_reports_an_unusable_address() {
         .code(69)
         .stderr(predicates::str::contains("cannot serve on 127.0.0.1:"));
 }
+
+#[tokio::test]
+async fn rename_document_can_rewrite_the_links_to_it() {
+    let server = start().await.unwrap();
+    let client = server.client(&server.writer).await.unwrap();
+    let tools = client.list_all_tools().await.unwrap();
+    let rename = tools.iter().find(|t| t.name == "rename_document").unwrap();
+    let input = Value::Object((*rename.input_schema).clone());
+    assert_eq!(
+        input["properties"]["rewrite_links"]["type"],
+        json!(["boolean", "null"]),
+        "{input}"
+    );
+    let output = Value::Object((*rename.output_schema.clone().unwrap()).clone());
+    assert!(output["properties"].get("relinked").is_some(), "{output}");
+    assert!(
+        !output["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("relinked")),
+        "{output}"
+    );
+
+    for (title, content) in [("Old", "Body\n"), ("Notes", "[[Old]] and [[Old|o]]\n")] {
+        ok(
+            &client,
+            "new_document",
+            json!({"project": "joedocs", "title": title, "content": content}),
+        )
+        .await
+        .unwrap();
+    }
+    let plain = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "Older"}),
+    )
+    .await
+    .unwrap();
+    assert!(plain.get("relinked").is_none(), "{plain}");
+
+    let renamed = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "New", "rewrite_links": true,
+               "expected_revision": 2}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(renamed["revision"], 3);
+    assert_eq!(
+        renamed["relinked"],
+        json!([]),
+        "the links name Old, not Older"
+    );
+
+    let back = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "Old", "rewrite_links": false}),
+    )
+    .await
+    .unwrap();
+    assert!(back.get("relinked").is_none(), "{back}");
+    let renamed = ok(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-1", "title": "Newest", "rewrite_links": true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        renamed["relinked"],
+        json!([{"document_id": "JD-2", "revision": 2}])
+    );
+    let notes = ok(&client, "get_document", json!({"document_id": "JD-2"}))
+        .await
+        .unwrap();
+    assert!(
+        notes["markdown"]
+            .as_str()
+            .unwrap()
+            .ends_with("[[Newest]] and [[Newest|o]]\n"),
+        "{notes}"
+    );
+
+    let refused = error(
+        &client,
+        "rename_document",
+        json!({"document_id": "JD-2", "file": "a", "new_file": "b", "rewrite_links": true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refused["code"], "invalid_argument");
+    assert_eq!(refused["field"], "rewrite_links");
+
+    client.cancel().await.unwrap();
+    server.stop().await.unwrap();
+}

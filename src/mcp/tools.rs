@@ -56,7 +56,8 @@ files such as backlog/item-1 that new_document_file adds, each with its own fron
 adding files to a single-file document makes it multi-file first. list_document_files lists them; get_document with file reads one. Pass file to \
 update_document, edit_document, append_to_document, change_document_front_matter or \
 rename_document (with new_file) to change one file; write_document_files writes several in one \
-revision. Every change to any file raises the document's one revision number, and a change \
+revision. rename_document with rewrite_links: true also rewrites the wiki links to the old \
+title in the project's other documents. Every change to any file raises the document's one revision number, and a change \
 conflicts only when that file changed after the revision you read.";
 
 /// The MCP server: one instance per session, sharing the store.
@@ -429,6 +430,11 @@ pub struct RenameDocumentParams {
     /// The file's new path inside the document's folder, with file.
     #[serde(default)]
     pub new_file: Option<String>,
+    /// With title: also rewrite the wiki links to the old title
+    /// ([[Old]], [[Old|label]], [[Old#heading]], ![[Old]]) in the
+    /// project's other live documents, in the same commit. Default false.
+    #[serde(default)]
+    pub rewrite_links: Option<bool>,
 }
 
 /// One file of `write_document_files`.
@@ -795,6 +801,26 @@ pub struct ChangedOut {
     pub front_matter: Fields,
 }
 
+/// Result of `rename_document`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RenamedOut {
+    #[serde(flatten)]
+    pub changed: ChangedOut,
+    /// With `rewrite_links`: each document whose links were rewritten, with
+    /// its new revision (empty when no link was found).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relinked: Option<Vec<RelinkedOut>>,
+}
+
+/// A document whose links a rename rewrote.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RelinkedOut {
+    /// Document ID.
+    pub document_id: String,
+    /// Its new revision.
+    pub revision: u64,
+}
+
 impl From<Changed> for ChangedOut {
     fn from(changed: Changed) -> Self {
         Self {
@@ -989,6 +1015,12 @@ trait AuditId {
 impl AuditId for ChangedOut {
     fn audit_id(&self) -> Option<String> {
         Some(self.document_id.clone())
+    }
+}
+
+impl AuditId for RenamedOut {
+    fn audit_id(&self) -> Option<String> {
+        self.changed.audit_id()
     }
 }
 
@@ -1387,7 +1419,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "Change a document's title. The file is renamed and the old title is kept in aliases.",
+        description = "Change a document's title. The file is renamed and the old title is kept in aliases. With rewrite_links: true, the wiki links to the old title in the project's other live documents are rewritten to the new title in the same commit (each such document gets one new revision, listed in relinked); links in code are left alone. With file and new_file, renames or moves that file within its multi-file document instead.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1398,7 +1430,7 @@ impl JoeDocsServer {
         &self,
         Parameters(params): Parameters<RenameDocumentParams>,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<Json<ChangedOut>, CallToolResult> {
+    ) -> Result<Json<RenamedOut>, CallToolResult> {
         let id = params.document_id.clone();
         self.write(
             &ctx,
@@ -1406,29 +1438,56 @@ impl JoeDocsServer {
             Some(id),
             move |store, caller, actor| {
                 require_document(store, caller, &params.document_id, Permission::Write)?;
-                let changed = match (params.title, params.file, params.new_file) {
-                    (None, Some(file), Some(new_file)) => store.rename_file(
-                        actor,
-                        &params.document_id,
-                        &file,
-                        &new_file,
-                        params.expected_revision,
-                    )?,
-                    (Some(title), None, None) => store.rename(
-                        actor,
-                        &params.document_id,
-                        &title,
-                        params.expected_revision,
-                    )?,
-                    _ => {
-                        return Err(store::Error::invalid(
-                            "title",
-                            "give title to rename the document, or file and new_file to rename one of its files",
-                        )
-                        .into());
+                match (params.title, params.file, params.new_file) {
+                    (None, Some(file), Some(new_file)) => {
+                        if params.rewrite_links.is_some() {
+                            return Err(store::Error::invalid(
+                                "rewrite_links",
+                                "goes only with title: renaming a file rewrites no links",
+                            )
+                            .into());
+                        }
+                        let changed = store.rename_file(
+                            actor,
+                            &params.document_id,
+                            &file,
+                            &new_file,
+                            params.expected_revision,
+                        )?;
+                        Ok(RenamedOut {
+                            changed: changed.into(),
+                            relinked: None,
+                        })
                     }
-                };
-                Ok(changed.into())
+                    (Some(title), None, None) => {
+                        let rewrite_links = params.rewrite_links.unwrap_or(false);
+                        let renamed = store.rename_with(
+                            actor,
+                            &params.document_id,
+                            &title,
+                            params.expected_revision,
+                            store::RenameOptions { rewrite_links },
+                        )?;
+                        Ok(RenamedOut {
+                            changed: renamed.changed.into(),
+                            relinked: rewrite_links.then(|| {
+                                renamed
+                                    .relinked
+                                    .into_iter()
+                                    .map(|r| RelinkedOut {
+                                        document_id: r.document_id,
+                                        revision: r.revision,
+                                    })
+                                    .collect()
+                            }),
+                        })
+                    }
+                    _ => Err(store::Error::invalid(
+                        "title",
+                        "give title to rename the document, or file and new_file to rename one of its files",
+                    )
+                    .into()),
+                }
             },
         )
         .await
