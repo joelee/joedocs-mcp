@@ -105,6 +105,17 @@ Changes made after the backup are lost, so go back soon or not at all.
 
 ## Version notes
 
+### 0.5.6 to 0.5.7
+
+- **No migration:** the database stays at version 8, so going back to 0.5.6 needs only the older binary, with the notes below.
+- **A new key, `admin.use_plantuml_cli`** (default `false`): with it on and `plantuml` on the service's `PATH`, the web interface draws PlantUML diagrams on the server ([deployment](deployment.md#6b-admin-web-interface)). Nothing needs setting. Going back to 0.5.6, remove the key from `config.toml` (or its `JOEDOCS__ADMIN__USE_PLANTUML_CLI` override) first: 0.5.6 does not know it and refuses to start.
+- **The diagram cache, `<state_dir>/cache/plantuml/`,** is new. It holds each diagram's source and drawing, is not in backups, and is safe to delete at any time (the next view draws again). After going back to 0.5.6 nothing uses it; delete it.
+- **The MCP file tools convert single-file documents:** `new_document_file` and `write_document_files` on a single-file document now make it multi-file (a `convert` revision, then the file change) instead of refusing, so such a call raises the revision by two. A client that relied on the refusal to stay away from single-file documents should check `multifile` first.
+- **`rename_document` with `rewrite_links: true`** writes one commit for the renamed document and every document whose links it rewrote, with new `JoeDocs-Relinked` and `JoeDocs-Relinked-File` trailers and the action `relink`. 0.5.7's `reindex` replays it. **0.5.6 cannot:** after such a rename, do not run 0.5.6's `joedocs reindex` (0.5.6 `serve` also runs it on start when the database is lost or behind the history). Checked on stores written by 0.5.7, 0.5.6's `reindex` either refuses (`cannot rebuild the index from history commit ...`, exit 70, the index left as it was) or, for a single-file document renamed while the rewritten document was not changed again, rebuilds the index without that document's `relink` revision and reports its file as differing from the history, so writes to it are refused. The vault and the history are never changed. If that happened, install 0.5.7 again and run `joedocs reindex`, which rebuilds the index with no problems. Renames without `rewrite_links` write the same commits as before.
+- **The web interface:** Documents, Search and Archive choose the project with a searchable picker, and Audit's quick filters are pills with chips for the filters that leave rows out. Addresses and remembered views are unchanged.
+- **`joedocs status`** has a new line, `PlantUML diagrams: ...`, and the admin API's `/admin/v1/status` a new `diagrams` field.
+- **`cargo binstall joedocs`** installs the release archive without compiling (Linux x86_64 and aarch64, Apple silicon Macs).
+
 ### 0.5.5 to 0.5.6
 
 0.5.6 gathers the pre-releases `0.5.6-dev`, `0.5.6-rc.1`, `0.5.6-rc.2` and `0.5.6-rc.3`. Those were held back from crates.io and Homebrew by RustSec advisory RUSTSEC-2026-0543, which `rmcp` 3.12 removes from the dependency tree. The pre-release a change first came in is marked below.

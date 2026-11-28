@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-11-28
+
+PlantUML drawn on the server itself, link rewriting on rename, MCP file tools that make a single-file document multi-file, the Board's filter parts on four more pages, and `cargo binstall`. The database stays at version 8 (no migration); the new configuration key and MCP parameter are optional.
+
+### Added
+
+- **PlantUML diagrams drawn by the local `plantuml` command.** With `admin.use_plantuml_cli = true` (`JOEDOCS__ADMIN__USE_PLANTUML_CLI`, default `false`) and `plantuml` on the server's `PATH`, the web interface shows each PlantUML block as an image from `/admin/diagrams/<key>.svg`, drawn on the server, so no diagram text leaves it.
+  - Each diagram is drawn once and cached by the SHA-1 of its source under `<state_dir>/cache/plantuml/`; an edited diagram gets a new key and is drawn again. The cache is not backed up and is safe to delete.
+  - The key takes precedence over `admin.web_plantuml_url`. When it is on but no `plantuml` is found, `serve` logs a warning and uses the server URL or shows the source, as before.
+  - `joedocs status` shows how diagrams are drawn (`PlantUML diagrams: ...`), and so does the admin API's `/admin/v1/status` (`diagrams`).
+- **`rename_document` can rewrite the links to the old title.** With `rewrite_links: true` (default `false`), the wiki links and embeds to the old title (`[[Old]]`, `[[Old|label]]`, `[[Old#heading]]`, `![[Old]]`) in the project's other live documents, every file of each, are rewritten to the new title, keeping their heading and label. Links in code spans and code blocks, and links that resolve to another document, are left alone.
+  - The rename and every rewrite are one commit. Each rewritten document gets one revision with the new action `relink`, and the result lists them in `relinked` (`{document_id, revision}`).
+  - All or nothing: a rewritten file over `server.max_document_bytes` (`invalid_argument` on `rewrite_links`) or a hand-edited file of a linking document (`integrity`) stops it before anything is written.
+  - The commit names the rewritten documents in new `JoeDocs-Relinked` trailers (and their files in `JoeDocs-Relinked-File`), which `reindex` replays.
+- **`cargo binstall joedocs`** downloads the release archive for Linux x86_64 and aarch64 and Apple silicon Macs instead of compiling (`[package.metadata.binstall]` in `Cargo.toml`).
+
+### Changed
+
+- **`new_document_file` and `write_document_files` make a single-file document multi-file** instead of refusing it: after every check has passed, they convert it (a `convert` revision, as `joedocs document convert`) and then add or write the files, so the call gives two revisions. A call that fails a check converts nothing.
+- **The web interface's project filter:** on Documents, Search and Archive the project is chosen with the Board's searchable picker, one at a time. On Audit the quick filters are pills, the one in force lit, and the filters that leave rows out (`outcome_not`, `tool_not`) are chips whose × removes them. The addresses are the same as in 0.5.6, and every page works without JavaScript.
+
+### Security
+
+- **The `plantuml` command runs fenced in:** without a shell, with a cleared environment (`PATH`, a `HOME` in the cache directory and `PLANTUML_SECURITY_PROFILE=SANDBOX`, so `!include` cannot read the server's files), at most two at once, with a 10-second limit and an 8 MiB cap on its output. An SVG is served with `X-Content-Type-Options: nosniff` and the Content-Security-Policy `default-src 'none'; style-src 'unsafe-inline'; sandbox`, so a diagram cannot run script even when opened on its own.
+
 ## [0.5.6] - 2026-11-26
 
 Everything since 0.5.5, which the pre-releases 0.5.6-dev to 0.5.6-rc.3 brought first:
@@ -460,7 +485,8 @@ First release: a central MCP server for multi-project documentation, stored as M
 - **Exit codes.** `1` when `check` finds problems, `65` invalid request, `69` cannot listen or run systemd, `70` store fault, `74` output error, `78` configuration error.
 - **Packaging.** A `Dockerfile` and `compose.yaml` for a local server, and GitHub Actions CI on Linux and macOS.
 
-[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/joelee/joedocs-mcp/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/joelee/joedocs-mcp/compare/v0.5.5...v0.5.6
 [0.5.6-rc.3]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.2...v0.5.6-rc.3
 [0.5.6-rc.2]: https://github.com/joelee/joedocs-mcp/compare/v0.5.6-rc.1...v0.5.6-rc.2
