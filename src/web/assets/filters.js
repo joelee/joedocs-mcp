@@ -15,7 +15,9 @@
 // - any other control inside an element with `data-filter-default` (a
 //   radio group, a select) is left out of the query at that value;
 // - `[data-filter-picker]`: a picker (its button, popover, search field,
-//   list, Select all, Clear, Only, counter, chips);
+//   list, Select all, Clear, Only, counter, chips); with
+//   `data-picker-single`, one choice of radio buttons: its button names the
+//   choice, and choosing one closes it;
 // - `[data-filter-pills]`: pills, with `[data-pills-all]` (choose none),
 //   `[data-pills-default]` and `[data-pills-every]` (in a
 //   `[data-pills-tools]`), each hidden while it would change nothing;
@@ -249,10 +251,16 @@
       if (!group) {
         return;
       }
+      const opener = picker.querySelector("[data-picker-open]");
+      if (picker.hasAttribute("data-picker-single")) {
+        if (opener?.firstChild?.nodeType === Node.TEXT_NODE) {
+          opener.firstChild.textContent = lit(group).map(labelOf)[0] || "";
+        }
+        return;
+      }
       const all = inputs(group);
       const on = lit(group);
       const whole = defaults(group).length === 0 && (on.length === 0 || on.length === all.length);
-      const opener = picker.querySelector("[data-picker-open]");
       if (opener?.firstChild?.nodeType === Node.TEXT_NODE) {
         opener.firstChild.textContent = whole ? opener.dataset.allLabel : opener.dataset.someLabel;
       }
@@ -373,6 +381,9 @@
         }
       });
       search?.addEventListener("input", () => filterRows(picker));
+      if (picker.hasAttribute("data-picker-single")) {
+        pop?.addEventListener("change", () => close(picker));
+      }
       search?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           // Enter ticks the first row shown, and never submits the form.

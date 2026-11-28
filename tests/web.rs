@@ -6996,11 +6996,9 @@ async fn only_the_board_loads_its_script_which_is_a_cached_asset() -> TestResult
     for other in ["/admin/", "/admin/documents", "/admin/audit"] {
         let page = server.get(other, Some(&cookie)).await?;
         assert!(!page.body.contains("board.js"), "{other} does not load it");
-        assert!(
-            !page.body.contains("filters.js"),
-            "{other} does not load it"
-        );
     }
+    let home = server.get("/admin/", Some(&cookie)).await?;
+    assert!(!home.body.contains("filters.js"), "the overview does not");
     // The filter parts (JD-71) are their own cached script, loaded before
     // the Board's.
     let parts = board
@@ -7067,5 +7065,105 @@ async fn the_board_works_when_plans_is_not_a_type() -> TestResult<()> {
         assert_eq!(board_cards(&page.body), ["AL-1"], "{path}");
         assert!(!page.body.contains("data-building"), "{path}");
     }
+    server.stop().await
+}
+
+#[tokio::test]
+async fn documents_search_and_archive_choose_a_project_with_the_picker() -> TestResult<()> {
+    let server = start_full(|_| {}, board_fixture).await?;
+    let cookie = server.login().await?;
+    for (path, prefix, all) in [
+        ("/admin/documents?project=beta", "f-project", false),
+        ("/admin/search?project=beta", "s-project", true),
+        ("/admin/archive?project=beta", "ar-project", true),
+    ] {
+        let page = server.get(path, Some(&cookie)).await?;
+        assert_eq!(page.status, 200, "{path}");
+        let body = &page.body;
+        assert!(
+            body.contains("/filters.js\""),
+            "{path} loads the filter parts"
+        );
+        let page_tags = tags(body);
+        let form = page_tags
+            .iter()
+            .find(|t| t.name == "form" && t.get("data-filter-form").is_some())
+            .ok_or("no filter form")?;
+        assert!(
+            form.get("hx-get").is_some(),
+            "{path} still refreshes its results"
+        );
+        let picker = page_tags
+            .iter()
+            .find(|t| t.get("data-filter-picker").is_some())
+            .ok_or("no picker")?;
+        assert_eq!(picker.get("data-filter-picker"), Some("project"), "{path}");
+        assert!(
+            picker.get("data-picker-single").is_some(),
+            "{path}: one choice"
+        );
+        assert!(
+            !page_tags
+                .iter()
+                .any(|t| t.name == "select" && t.get("name") == Some("project")),
+            "{path}: no project select"
+        );
+        // One radio button per choice, the current one checked, with the
+        // same `project` values the select had.
+        let radios: Vec<&Tag> = page_tags
+            .iter()
+            .filter(|t| t.name == "input" && t.get("name") == Some("project"))
+            .collect();
+        assert!(
+            radios.iter().all(|r| r.get("type") == Some("radio")),
+            "{path}"
+        );
+        let values: Vec<&str> = radios.iter().filter_map(|r| r.get("value")).collect();
+        let expected: &[&str] = if all {
+            &["", "alpha", "beta"]
+        } else {
+            &["alpha", "beta"]
+        };
+        assert_eq!(values, expected, "{path}");
+        let checked: Vec<&str> = radios
+            .iter()
+            .filter(|r| r.get("checked").is_some())
+            .filter_map(|r| r.get("value"))
+            .collect();
+        assert_eq!(checked, ["beta"], "{path}");
+        assert!(
+            radios
+                .iter()
+                .all(|r| r.get("id").is_some_and(|id| id.starts_with(prefix))),
+            "{path}"
+        );
+        let opener = page_tags
+            .iter()
+            .find(|t| t.get("data-picker-open").is_some())
+            .ok_or("no picker button")?;
+        assert_eq!(opener.get("aria-expanded"), Some("false"), "{path}");
+        assert!(body.contains("aria-label=\"Search "), "{path}");
+        // Many choices are no part of choosing one.
+        for many in ["data-picker-all", "data-picker-only", "data-picker-clear"] {
+            assert!(!body.contains(many), "{path}: {many}");
+        }
+        // The address is as before: choosing a project still sends
+        // `project`.
+        let chosen = server
+            .get(&path.replace("beta", "alpha"), Some(&cookie))
+            .await?;
+        assert_eq!(chosen.status, 200);
+        let chosen_tags = tags(&chosen.body);
+        let checked: Vec<&str> = chosen_tags
+            .iter()
+            .filter(|t| t.name == "input" && t.get("name") == Some("project"))
+            .filter(|r| r.get("checked").is_some())
+            .filter_map(|r| r.get("value"))
+            .collect();
+        assert_eq!(checked, ["alpha"], "{path}");
+    }
+    // "All projects" is the default where there is one.
+    let page = server.get("/admin/search", Some(&cookie)).await?;
+    assert!(page.body.contains("value=\"\" checked"), "all projects");
     server.stop().await
 }

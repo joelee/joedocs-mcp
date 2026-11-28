@@ -1,4 +1,6 @@
 {% extends "layout.html" %}
+{% import "picker_one.html" as parts %}
+{% block scripts %}<script src="{{ assets.filters|safe }}" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>Archive</h1>
@@ -7,14 +9,9 @@
 
 {% if let Some(message) = notice %}<p class="notice ok" role="status">{{ message }}</p>{% endif %}
 
-<form class="filters" method="get" action="/admin/archive"
+<form class="filters" method="get" action="/admin/archive" data-filter-form
       hx-get="/admin/archive" hx-trigger="change, submit" hx-target="#results" hx-push-url="true">
-  <div>
-    <label for="ar-project">Project</label>
-    <select id="ar-project" name="project">
-      {% for choice in projects %}<option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}
-    </select>
-  </div>
+  {% call parts::picker_one("project", "ar-project", "Project", "projects", projects) %}{% endcall %}
   <div>
     <label for="ar-type">Type</label>
     <select id="ar-type" name="type">

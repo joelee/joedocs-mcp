@@ -1,4 +1,6 @@
 {% extends "layout.html" %}
+{% import "picker_one.html" as parts %}
+{% block scripts %}<script src="{{ assets.filters|safe }}" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>Documents</h1>
@@ -7,16 +9,9 @@
 {% if projects.is_empty() %}
 <p class="empty">No projects yet. <a href="/admin/projects">Add one</a> to start.</p>
 {% else %}
-<form class="filters" id="documents-filters" method="get" action="/admin/documents"
+<form class="filters" id="documents-filters" method="get" action="/admin/documents" data-filter-form
       hx-get="/admin/documents" hx-trigger="change, submit" hx-target="#results" hx-push-url="true">
-  <div>
-    <label for="f-project">Project</label>
-    <select id="f-project" name="project">
-      {% for choice in projects %}
-      <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
-      {% endfor %}
-    </select>
-  </div>
+  {% call parts::picker_one("project", "f-project", "Project", "projects", projects) %}{% endcall %}
   <div>
     <label for="f-type">Type</label>
     <select id="f-type" name="type">

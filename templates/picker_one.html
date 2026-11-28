@@ -1,0 +1,24 @@
+{# The searchable picker in single-choice mode (JD-80 STEP-08): radio
+   buttons named `key` underneath, so the form submits the same parameter a
+   select did. Without scripts the list shows in place; filters.js draws
+   the button and popover (`data-picker-single`). #}
+{% macro picker_one(key, id, label, noun, choices) %}
+<div class="filter-one" role="group" aria-labelledby="{{ id }}-label" data-filter-group="{{ key }}" data-filter-label="{{ label }}">
+  <span class="filter-label" id="{{ id }}-label">{{ label }}</span>
+  <div class="picker" data-filter-picker="{{ key }}" data-picker-single>
+    <div class="picker-box">
+      <button type="button" class="picker-trigger" aria-expanded="false" aria-controls="{{ id }}-picker" data-picker-open>{% for choice in choices %}{% if choice.selected %}{{ choice.label }}{% endif %}{% endfor %}<span class="caret" aria-hidden="true"></span></button>
+    </div>
+    <div class="picker-pop" id="{{ id }}-picker" popover role="dialog" aria-label="Choose a {{ label|lower }}" data-picker-pop>
+      <div class="picker-head">
+        <input type="search" id="{{ id }}-search" aria-label="Search {{ noun }}" placeholder="Search {{ noun }}" autocomplete="off" data-picker-search>
+      </div>
+      <ul class="picker-list" data-picker-list>
+        {% for choice in choices %}<li data-picker-item data-search="{{ choice.label|lower }}"><label class="picker-row" for="{{ id }}-{{ loop.index }}"><input type="radio" name="{{ key }}" value="{{ choice.value }}"{% if choice.selected %} checked{% endif %} id="{{ id }}-{{ loop.index }}"> <span class="picker-name">{{ choice.label }}</span></label></li>{% endfor %}
+      </ul>
+      <p class="picker-empty" data-picker-empty hidden>No match.</p>
+      <div class="picker-foot"><button type="button" data-picker-done>Done</button></div>
+    </div>
+  </div>
+</div>
+{% endmacro %}

@@ -104,7 +104,8 @@ pub struct Urls {
     pub pele: &'static str,
     /// `board.js`, loaded only by the Board.
     pub board: &'static str,
-    /// `filters.js`, the filter parts (JD-71), loaded by the Board.
+    /// `filters.js`, the filter parts (JD-71), loaded by the Board and by
+    /// Documents, Search and Archive (their project picker).
     pub filters: &'static str,
     /// `document.js`, loaded only by a document's latest revision.
     pub document: &'static str,

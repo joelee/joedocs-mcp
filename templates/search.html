@@ -1,24 +1,19 @@
 {% extends "layout.html" %}
+{% import "picker_one.html" as parts %}
+{% block scripts %}<script src="{{ assets.filters|safe }}" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>Search</h1>
   <p class="lede">Titles, aliases and bodies of live documents and their files, in every project or one.</p>
 </div>
 
-<form class="filters search-form" method="get" action="/admin/search" role="search"
+<form class="filters search-form" method="get" action="/admin/search" role="search" data-filter-form
       hx-get="/admin/search" hx-trigger="input changed delay:300ms, submit" hx-target="#results" hx-push-url="true">
   <div class="search-words">
     <label for="s-q">Words</label>
     <input id="s-q" name="q" type="search" value="{{ query }}" autocomplete="off" aria-describedby="search-help-summary">
   </div>
-  <div>
-    <label for="s-project">Project</label>
-    <select id="s-project" name="project">
-      {% for choice in projects %}
-      <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
-      {% endfor %}
-    </select>
-  </div>
+  {% call parts::picker_one("project", "s-project", "Project", "projects", projects) %}{% endcall %}
   <div>
     <label for="s-type">Type</label>
     <select id="s-type" name="type">
