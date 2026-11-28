@@ -113,6 +113,8 @@ The first start creates the store and the user `admin`, and prints how to sign i
 cargo install joedocs --locked
 ```
 
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), `cargo binstall joedocs` installs the same release archive as above (Linux x86_64 and aarch64, Apple silicon Macs) instead of compiling; Intel Macs and other targets have no archive and build from source. It does not check the attestation: use the steps above for that.
+
 JoeDocs needs `git` at run time. On macOS the Xcode Command Line Tools provide it. The macOS binary is not notarised: if you downloaded it in a browser, clear the quarantine flag with `xattr -d com.apple.quarantine joedocs` (files fetched with `gh` or `curl` have none).
 
 ## Quick start

@@ -24,6 +24,14 @@ include = [
     "/templates/**/*",
 ]
 
+# `cargo binstall joedocs` downloads the release archive for the host from
+# the GitHub release (each holds joedocs, LICENSE and README.md at its root)
+# instead of compiling. Hosts without an archive build from source.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
+
 [dependencies]
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash"] }
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
