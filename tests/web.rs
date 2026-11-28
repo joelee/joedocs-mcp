@@ -899,11 +899,14 @@ async fn the_library_lists_filters_sorts_and_pages_documents() -> TestResult<()>
         "archived documents are not listed"
     );
     assert!(all.body.contains("href=\"/admin/documents/JD-1\""));
-    // The default project is the first, and the picker lists them all.
+    // The bare page lists every project (JD-81), and the picker lists
+    // them all.
     let default = server.get("/admin/documents", Some(&cookie)).await?;
     assert!(default.body.contains("Rollout plan"), "{}", default.body);
     assert!(
-        default.body.contains("<option value=\"notes\""),
+        default
+            .body
+            .contains("type=\"checkbox\" name=\"project\" value=\"notes\""),
         "{}",
         default.body
     );
@@ -946,7 +949,7 @@ async fn the_library_lists_filters_sorts_and_pages_documents() -> TestResult<()>
     let unknown = server
         .get("/admin/documents?project=nope", Some(&cookie))
         .await?;
-    assert_eq!(unknown.status, 404);
+    assert_eq!(unknown.status, 400, "refused as the Board refuses (JD-81)");
     assert!(unknown.body.contains("nope"), "{}", unknown.body);
     let bad_sort = server
         .get(
@@ -4633,11 +4636,9 @@ async fn documents_sort_by_their_column_headers_across_pages() -> TestResult<()>
         "{}",
         ascending.body
     );
-    // The filter form keeps the order through a hidden field it owns.
+    // The filter form keeps the order in its View menu (JD-81).
     assert!(
-        ascending
-            .body
-            .contains("name=\"sort\" value=\"title\" form=\"documents-filters\""),
+        ascending.body.contains("<option value=\"title\" selected"),
         "{}",
         ascending.body
     );
@@ -4650,6 +4651,7 @@ async fn documents_sort_by_their_column_headers_across_pages() -> TestResult<()>
     let title_header = descending
         .body
         .split("<th")
+        .skip(1)
         .find(|th| th.contains(">Title<"))
         .ok_or("no Title header")?;
     assert!(
@@ -7073,7 +7075,6 @@ async fn documents_search_and_archive_choose_a_project_with_the_picker() -> Test
     let server = start_full(|_| {}, board_fixture).await?;
     let cookie = server.login().await?;
     for (path, prefix, all) in [
-        ("/admin/documents?project=beta", "f-project", false),
         ("/admin/search?project=beta", "s-project", true),
         ("/admin/archive?project=beta", "ar-project", true),
     ] {
@@ -7267,5 +7268,196 @@ async fn audit_quick_filters_are_pills_and_its_negations_are_chips() -> TestResu
         let page = server.get(href, Some(&cookie)).await?;
         assert_eq!(page.status, 200, "{href}");
     }
+    server.stop().await
+}
+
+/// Two projects, four documents of several types and statuses.
+fn documents_filter_fixture(store: &mut Store) -> TestResult<()> {
+    use joedocs::store::{Actor, NewDocument};
+    let actor = Actor::new("laptop-key", "claude-code");
+    store.add_project("alpha", "AL", Some("Alpha"))?;
+    store.add_project("beta", "BE", None)?;
+    for (project, doc_type, status, title) in [
+        ("alpha", "plans", "draft", "Alpha plan"),
+        ("alpha", "notes", "approved", "Alpha note"),
+        ("beta", "plans", "review", "Beta plan"),
+        ("beta", "ideas", "draft", "Beta idea"),
+    ] {
+        store.create(
+            &actor,
+            NewDocument {
+                project: project.into(),
+                doc_type: Some(doc_type.into()),
+                status: Some(status.into()),
+                title: title.into(),
+                content: "x\n".into(),
+                ..NewDocument::default()
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// The document IDs a Documents page lists, in order.
+fn listed_ids(body: &str) -> Vec<String> {
+    tags(body)
+        .into_iter()
+        .filter(|t| t.name == "a")
+        .filter_map(|t| t.get("href").map(str::to_owned))
+        .filter_map(|href| href.strip_prefix("/admin/documents/").map(str::to_owned))
+        .filter(|id| !id.contains('/') && !id.contains('?'))
+        .fold(Vec::new(), |mut ids, id| {
+            if ids.last() != Some(&id) {
+                ids.push(id);
+            }
+            ids
+        })
+}
+
+/// The Documents page's filter bar, panel and View menu, on a page of the
+/// two projects of `documents_filter_fixture` (JD-81).
+fn documents_bar_markup(body: &str) -> TestResult<()> {
+    let page_tags = tags(body);
+    let form = page_tags
+        .iter()
+        .find(|t| t.get("id") == Some("documents-filters"))
+        .ok_or("no form")?;
+    for attribute in ["data-filter-form", "data-filter-address", "hx-get"] {
+        assert!(form.get(attribute).is_some(), "{attribute}");
+    }
+    for part in [
+        "data-filter-toggle",
+        "data-filter-count",
+        "data-filter-chips",
+        "data-filter-clear",
+        "data-view-menu",
+        "data-filter-panel",
+    ] {
+        assert!(page_tags.iter().any(|t| t.get(part).is_some()), "{part}");
+    }
+    let picker = page_tags
+        .iter()
+        .find(|t| t.get("data-filter-picker") == Some("project"))
+        .ok_or("no project picker")?;
+    assert!(
+        picker.get("data-picker-single").is_none(),
+        "several projects"
+    );
+    let values = |name: &str| -> Vec<String> {
+        page_tags
+            .iter()
+            .filter(|t| t.name == "input" && t.get("name") == Some(name))
+            .filter(|t| t.get("type") == Some("checkbox"))
+            .filter_map(|t| t.get("value").map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(values("project"), ["alpha", "beta"]);
+    assert!(values("type").contains(&"plans".to_owned()));
+    assert!(values("status").contains(&"draft".to_owned()));
+    assert!(
+        page_tags
+            .iter()
+            .filter(|t| t.get("data-filter-pills").is_some())
+            .count()
+            >= 2,
+        "types and statuses are pills"
+    );
+    let sorts: Vec<&str> = page_tags
+        .iter()
+        .skip_while(|t| !(t.name == "select" && t.get("name") == Some("sort")))
+        .take_while(|t| t.name != "fieldset")
+        .filter(|t| t.name == "option")
+        .filter_map(|t| t.get("value"))
+        .collect();
+    assert_eq!(
+        sorts,
+        ["updated", "id", "title", "type", "status", "revision"]
+    );
+    assert!(body.contains("name=\"dir\" value=\"desc\" checked"));
+    assert!(body.contains(">Project</th>"), "a Project column");
+    Ok(())
+}
+
+#[tokio::test]
+async fn documents_have_the_boards_filters_bar_and_view_menu() -> TestResult<()> {
+    let server = start_full(|_| {}, documents_filter_fixture).await?;
+    let cookie = server.login().await?;
+    let get = |query: &str| {
+        let path = format!("/admin/documents{query}");
+        let server = &server;
+        let cookie = &cookie;
+        async move { server.get(&path, Some(cookie)).await }
+    };
+
+    // The bare page: every project, the bar, the panel and the View menu.
+    let bare = get("").await?;
+    assert_eq!(bare.status, 200, "{}", bare.body);
+    let mut ids = listed_ids(&bare.body);
+    ids.sort();
+    assert_eq!(ids, ["AL-1", "AL-2", "BE-1", "BE-2"]);
+    documents_bar_markup(&bare.body)?;
+
+    // Several values, as comma lists or repeated keys.
+    for query in [
+        "?project=alpha,beta&type=plans,ideas&status=draft,review",
+        "?project=alpha&project=beta&type=plans&type=ideas&status=draft&status=review",
+    ] {
+        let page = get(query).await?;
+        assert_eq!(page.status, 200, "{query}");
+        let mut ids = listed_ids(&page.body);
+        ids.sort();
+        assert_eq!(ids, ["AL-1", "BE-1", "BE-2"], "{query}");
+        assert!(
+            page.body.contains("data-filter-count>2<"),
+            "{query}: two filters in force"
+        );
+    }
+
+    // A 0.5.6 address keeps its meaning, with the View menu showing its order.
+    let old = get("?project=alpha&type=plans&sort=title&dir=desc").await?;
+    assert_eq!(listed_ids(&old.body), ["AL-1"]);
+    assert!(
+        !old.body.contains(">Project</th>"),
+        "one project: no Project column"
+    );
+    assert!(old.body.contains("<code>AL</code>"), "the project line");
+    assert!(old.body.contains("<option value=\"title\" selected"));
+    assert!(old.body.contains("name=\"dir\" value=\"desc\" checked"));
+    // Headers and paging keep the filters, in the comma form.
+    let paged = get("?project=alpha,beta&type=plans,ideas&limit=1&filters=closed").await?;
+    assert!(
+        paged.body.contains(
+            "href=\"/admin/documents?type=plans,ideas&#38;filters=closed&#38;start=2&#38;limit=1\""
+        ),
+        "{}",
+        paged.body
+    );
+    let panel = tags(&paged.body)
+        .into_iter()
+        .find(|t| t.get("data-filter-panel").is_some())
+        .ok_or("no panel")?;
+    assert!(
+        panel.get("hidden").is_some(),
+        "filters=closed shuts the panel"
+    );
+
+    // Unknown values are refused, with a way back.
+    for (query, named) in [
+        ("?project=nope", "nope"),
+        ("?type=plans,memo", "memo"),
+        ("?status=open", "open"),
+        ("?sort=sideways", "sideways"),
+        ("?dir=up", "up"),
+    ] {
+        let refused = get(query).await?;
+        assert_eq!(refused.status, 400, "{query}");
+        assert!(refused.body.contains(named), "{query}: {}", refused.body);
+    }
+    let refused = get("?project=nope").await?;
+    assert!(
+        refused.body.contains("Reset the Documents view"),
+        "{}",
+        refused.body
+    );
     server.stop().await
 }

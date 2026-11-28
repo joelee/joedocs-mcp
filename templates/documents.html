@@ -1,35 +1,61 @@
 {% extends "layout.html" %}
-{% import "picker_one.html" as parts %}
+{% import "filter_parts.html" as parts %}
 {% block scripts %}<script src="{{ assets.filters|safe }}" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>Documents</h1>
 </div>
 
-{% if projects.is_empty() %}
+{% if panel.empty %}
 <p class="empty">No projects yet. <a href="/admin/projects">Add one</a> to start.</p>
 {% else %}
-<form class="filters" id="documents-filters" method="get" action="/admin/documents" data-filter-form
+{# The Board's filter parts (JD-81): app.js writes the address in their
+   comma form (`data-filter-address`, with the default order) and keeps the
+   View menu in step with the results' order. #}
+<form class="board-filters" id="documents-filters" method="get" action="/admin/documents" data-filter-form data-filter-address="updated desc"
       hx-get="/admin/documents" hx-trigger="change, submit" hx-target="#results" hx-push-url="true">
-  {% call parts::picker_one("project", "f-project", "Project", "projects", projects) %}{% endcall %}
-  <div>
-    <label for="f-type">Type</label>
-    <select id="f-type" name="type">
-      {% for choice in types %}
-      <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
-      {% endfor %}
-    </select>
+  <div class="fbar" data-filter-bar>
+    <button type="button" class="fbar-toggle" aria-expanded="{% if panel.closed %}false{% else %}true{% endif %}" aria-controls="df-panel" data-filter-toggle><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"/></svg> <span class="fbar-title">Filters</span> <span class="fbar-count" data-filter-count{% if panel.active == 0 %} hidden{% endif %}>{{ panel.active }}</span></button>
+    <div class="fbar-chips" role="group" aria-label="Active filters" data-filter-chips></div>
+    <button type="button" class="link" data-filter-clear{% if panel.active < 2 %} hidden{% endif %}>Clear all</button>
+    <div class="fbar-view" data-view-menu>
+      <button type="button" class="fbtn" aria-expanded="false" aria-controls="df-view" data-view-open><span class="fbtn-facet">View</span> <span class="fbtn-value" data-view-summary>{{ view.summary }}</span><span class="caret" aria-hidden="true"></span></button>
+      <div class="picker-pop view-pop" id="df-view" popover role="dialog" aria-label="View" data-view-pop>
+        <div class="view-body">
+          <div class="fview">
+            <label class="fview-cap" for="df-sort">Sort</label>
+            <select name="sort" id="df-sort" data-filter-default="updated" data-view-part>
+              {% for (value, label, chosen) in view.sorts %}<option value="{{ value }}"{% if chosen %} selected{% endif %} data-short="{{ label }}">{{ label }}</option>{% endfor %}
+            </select>
+          </div>
+          <fieldset class="fview" data-filter-default="desc" data-view-part data-view-join=" ">
+            <legend class="fview-cap">Order</legend>
+            <span class="seg">
+              <label for="df-dir-desc"><input type="radio" name="dir" value="desc"{% if view.dir == "desc" %} checked{% endif %} id="df-dir-desc" data-short="↓"><span aria-hidden="true">↓</span> Descending</label><label for="df-dir-asc"><input type="radio" name="dir" value="asc"{% if view.dir == "asc" %} checked{% endif %} id="df-dir-asc" data-short="↑"><span aria-hidden="true">↑</span> Ascending</label>
+            </span>
+          </fieldset>
+        </div>
+        <div class="picker-foot"><button type="button" data-view-done>Done</button></div>
+      </div>
+      <button type="button" class="link" data-reset-view="documents">Reset filters</button>
+    </div>
   </div>
-  <div>
-    <label for="f-status">Status</label>
-    <select id="f-status" name="status">
-      {% for choice in statuses %}
-      <option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>
-      {% endfor %}
-    </select>
+  <div class="fpanel" id="df-panel" data-filter-panel{% if panel.closed %} hidden{% endif %}>
+    <div class="frow" role="group" aria-labelledby="df-project-label" data-filter-group="project" data-filter-label="Projects" data-filter-default="">
+      <span class="flabel" id="df-project-label">Projects</span>
+      <div class="fbody">{% call parts::picker("df", "project", "projects", panel.projects.choices, panel.projects.named, "All projects", "") %}{% endcall %}</div>
+    </div>
+    <div class="frow" role="group" aria-labelledby="df-type-label" data-filter-group="type" data-filter-label="Types" data-filter-default="">
+      <span class="flabel" id="df-type-label">Types</span>
+      <div class="fbody">{% if panel.types.picker %}{% call parts::picker("df", "type", "types", panel.types.choices, panel.types.named, "All types", "") %}{% endcall %}{% else %}{% call parts::pills("df", "type", panel.types.choices, panel.types.named, false) %}{% endcall %}{% endif %}</div>
+    </div>
+    <div class="frow" role="group" aria-labelledby="df-status-label" data-filter-group="status" data-filter-label="Statuses" data-filter-default="">
+      <span class="flabel" id="df-status-label">Statuses</span>
+      <div class="fbody">{% if panel.statuses.picker %}{% call parts::picker("df", "status", "statuses", panel.statuses.choices, panel.statuses.named, "All statuses", "") %}{% endcall %}{% else %}{% call parts::pills("df", "status", panel.statuses.choices, panel.statuses.named, true) %}{% endcall %}{% endif %}</div>
+    </div>
   </div>
+  {% if panel.closed %}<input type="hidden" name="filters" value="closed" data-filters-closed>{% endif %}
   <div class="filters-apply"><button type="submit">Show</button></div>
-  <div class="filters-reset"><button type="button" class="secondary" data-reset-view="documents">Reset filters</button></div>
 </form>
 
 <section id="results" class="results" aria-label="Documents" data-focus="keep" data-announce="Documents updated">

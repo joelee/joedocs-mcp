@@ -24,3 +24,12 @@
   </div>
 </div>
 {% endmacro %}
+{# Pills for a group whose default is "all": an All pill (pressed while
+   nothing is ticked) and a checkbox pill per value; with `coloured`, each
+   takes its status's colours (`st-<value>`). #}
+{% macro pills(prefix, key, choices, named, coloured) %}
+<div class="pills" data-filter-pills>
+  <button type="button" class="pill pill-all" aria-pressed="{{ !named }}" data-pills-all>All</button>
+  {% for choice in choices %}<label class="pill{% if coloured %} st-{{ choice.value }}{% endif %}" for="{{ prefix }}-{{ key }}-{{ choice.value }}"><input type="checkbox" name="{{ key }}" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %} id="{{ prefix }}-{{ key }}-{{ choice.value }}">{{ choice.label }}</label>{% endfor %}
+</div>
+{% endmacro %}
