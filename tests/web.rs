@@ -1162,6 +1162,373 @@ async fn with_the_plantuml_cli_no_diagram_goes_to_the_server() -> TestResult<()>
     server.stop().await
 }
 
+/// A fake `plantuml` in its own directory: it records its arguments,
+/// environment and stdin, counts its runs in `runs`, tracks how many run at
+/// once in `most`, then prints `<svg>` (or runs `extra` first).
+fn fake_plantuml(extra: &str) -> TestResult<(TempDir, std::path::PathBuf)> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = TempDir::new()?;
+    let d = dir.path().display();
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" > '{d}/args'\nenv > '{d}/env'\ncat > '{d}/stdin'\nmkdir -p '{d}/active'\ntouch \"{d}/active/$$\"\nls '{d}/active' | wc -l >> '{d}/most'\necho run >> '{d}/runs'\n{extra}\nrm -f \"{d}/active/$$\"\nprintf '<svg xmlns=\"http://www.w3.org/2000/svg\"><text>drawn</text></svg>'\n"
+    );
+    let tool = dir.path().join("plantuml");
+    std::fs::write(&tool, script)?;
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))?;
+    Ok((dir, tool))
+}
+
+fn runs(tool_dir: &std::path::Path) -> usize {
+    std::fs::read_to_string(tool_dir.join("runs")).map_or(0, |text| text.lines().count())
+}
+
+/// A document JD-1 with `blocks` `PlantUML` diagrams (`A -> B1`, ...).
+fn diagram_fixture(blocks: usize) -> impl FnOnce(&mut Store) -> TestResult<()> {
+    move |store: &mut Store| {
+        use joedocs::store::{Actor, NewDocument};
+        store.add_project("joedocs", "JD", None)?;
+        let mut body = String::new();
+        for n in 1..=blocks {
+            body.push_str("```plantuml\nA -> B");
+            body.push_str(&n.to_string());
+            body.push_str("\n```\n\n");
+        }
+        store.create(
+            &Actor::new("laptop-key", "claude-code"),
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Diagrams".into(),
+                content: body,
+                ..NewDocument::default()
+            },
+        )?;
+        Ok(())
+    }
+}
+
+async fn start_drawing(
+    tool: &std::path::Path,
+    timeout: std::time::Duration,
+    setup: impl FnOnce(&mut Store) -> TestResult<()>,
+) -> TestResult<Server> {
+    let tool = tool.to_path_buf();
+    start_options(
+        |c| c.admin.use_plantuml_cli = true,
+        move |options| {
+            if let Some(web) = options.web.as_mut() {
+                web.diagrams = joedocs::web::plantuml::Diagrams::Cli(tool);
+                web.diagram_timeout = timeout;
+            }
+        },
+        setup,
+    )
+    .await
+}
+
+/// From another store on the same files: appends `A -> C` to JD-1, then
+/// checks a backup leaves the image cache out and `check` ignores it.
+fn append_a_diagram_and_back_up(root: &std::path::Path) -> TestResult<()> {
+    let paths = joedocs::store::Paths {
+        home: root.join("vault"),
+        state_dir: root.join("state"),
+    };
+    let mut other = Store::open(
+        paths.clone(),
+        Settings::from_config(&Config::default()),
+        Box::new(GitCli::new(paths.git_dir(), &paths.home)),
+        Arc::new(FixedClock::at(1_793_000_100)),
+    )?;
+    other.append(
+        &joedocs::store::Actor::new("laptop-key", "claude-code"),
+        "JD-1",
+        "```plantuml\nA -> C\n```\n",
+        None,
+        None,
+    )?;
+    // A backup leaves the cache out; check ignores it.
+    let backup = root.join("backup.tgz");
+    joedocs::backup::create(&other, &backup)?;
+    let mut archive =
+        tar::Archive::new(flate2::read::GzDecoder::new(std::fs::File::open(&backup)?));
+    let mut names = Vec::new();
+    for entry in archive.entries()? {
+        names.push(entry?.path()?.display().to_string());
+    }
+    assert!(names.iter().any(|n| n.contains("history")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("cache")), "{names:?}");
+    assert_eq!(other.check()?.problems(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn diagrams_are_drawn_once_by_the_cli_and_cached_by_their_source() -> TestResult<()> {
+    use joedocs::web::plantuml::Diagram;
+    let (tool_dir, tool) = fake_plantuml("")?;
+    let server = start_drawing(
+        &tool,
+        std::time::Duration::from_secs(10),
+        diagram_fixture(1),
+    )
+    .await?;
+    let cookie = server.login().await?;
+    let first = Diagram::of("A -> B1\n");
+    let page = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert_eq!(page.status, 200, "{}", page.body);
+    let src = format!("/admin/diagrams/{}.svg", first.key);
+    assert!(
+        page.body.contains(&format!("<img src=\"{src}\"")),
+        "{}",
+        page.body
+    );
+    let csp = page.header("content-security-policy").ok_or("no policy")?;
+    assert!(csp.contains("img-src 'self' data:;"), "{csp}");
+    let cache = server.dir.path().join("state/cache/plantuml");
+    assert_eq!(
+        std::fs::read_to_string(cache.join(format!("{}.puml", first.key)))?,
+        "@startuml\nA -> B1\n@enduml\n"
+    );
+    assert_eq!(
+        runs(tool_dir.path()),
+        0,
+        "drawn only when the image is asked for"
+    );
+
+    let image = server.get(&src, Some(&cookie)).await?;
+    assert_eq!(image.status, 200, "{}", image.body);
+    assert_eq!(image.header("content-type"), Some("image/svg+xml"));
+    assert_eq!(image.header("x-content-type-options"), Some("nosniff"));
+    assert_eq!(
+        image.header("content-security-policy"),
+        Some("default-src 'none'; style-src 'unsafe-inline'; sandbox")
+    );
+    assert_eq!(
+        image.header("cache-control"),
+        Some("private, max-age=31536000, immutable")
+    );
+    assert!(image.body.contains("<text>drawn</text>"), "{}", image.body);
+    assert!(cache.join(format!("{}.svg", first.key)).is_file());
+    // The command line, the sandbox and the cleared environment.
+    assert_eq!(
+        std::fs::read_to_string(tool_dir.path().join("args"))?,
+        "-tsvg -pipe\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tool_dir.path().join("stdin"))?,
+        "@startuml\nA -> B1\n@enduml\n"
+    );
+    let env = std::fs::read_to_string(tool_dir.path().join("env"))?;
+    assert!(env.contains("PLANTUML_SECURITY_PROFILE=SANDBOX\n"), "{env}");
+    assert!(
+        env.contains(&format!("HOME={}\n", cache.display())),
+        "{env}"
+    );
+    assert!(!env.contains("CARGO"), "the environment is cleared: {env}");
+
+    // Viewed again, nothing is drawn again.
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert_eq!(server.get(&src, Some(&cookie)).await?.status, 200);
+    assert_eq!(runs(tool_dir.path()), 1);
+
+    // A changed diagram has a new key and is drawn once more.
+    append_a_diagram_and_back_up(server.dir.path())?;
+    let second = Diagram::of("A -> C\n");
+    let page = server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    assert!(page.body.contains(&second.key), "{}", page.body);
+    let src2 = format!("/admin/diagrams/{}.svg", second.key);
+    assert_eq!(server.get(&src2, Some(&cookie)).await?.status, 200);
+    assert_eq!(runs(tool_dir.path()), 2);
+
+    // Not a key, or a key with no saved source: 404. No session: refused.
+    for path in [
+        "/admin/diagrams/nothex.svg",
+        "/admin/diagrams/0000000000000000000000000000000000000000.svg",
+        &format!("/admin/diagrams/{}.png", first.key),
+    ] {
+        assert_eq!(server.get(path, Some(&cookie)).await?.status, 404, "{path}");
+    }
+    let anonymous = server.get(&src, None).await?;
+    assert!(
+        anonymous.status >= 300 && anonymous.status != 200,
+        "{}",
+        anonymous.status
+    );
+    assert!(!anonymous.body.contains("drawn"));
+    assert_eq!(runs(tool_dir.path()), 2);
+    let tools: Vec<String> = server.audit()?.into_iter().map(|(t, _, _)| t).collect();
+    assert!(tools.iter().any(|t| t == "admin:web.diagram"), "{tools:?}");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn a_diagram_that_takes_too_long_is_a_502_and_not_cached() -> TestResult<()> {
+    use joedocs::web::plantuml::Diagram;
+    let (tool_dir, tool) = fake_plantuml("sleep 5")?;
+    let server = start_drawing(
+        &tool,
+        std::time::Duration::from_millis(300),
+        diagram_fixture(1),
+    )
+    .await?;
+    let cookie = server.login().await?;
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let key = Diagram::of("A -> B1\n").key;
+    let started = std::time::Instant::now();
+    let image = server
+        .get(&format!("/admin/diagrams/{key}.svg"), Some(&cookie))
+        .await?;
+    assert_eq!(image.status, 502, "{}", image.body);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "killed"
+    );
+    let cache = server.dir.path().join("state/cache/plantuml");
+    assert!(!cache.join(format!("{key}.svg")).exists());
+    assert_eq!(runs(tool_dir.path()), 1);
+    server.stop().await
+}
+
+#[tokio::test]
+async fn an_error_image_with_a_failing_exit_is_still_served_and_cached() -> TestResult<()> {
+    use joedocs::web::plantuml::Diagram;
+    // PlantUML draws a syntax error as an image and exits 200.
+    let (tool_dir, tool) = fake_plantuml("trap 'exit 200' EXIT")?;
+    let server = start_drawing(
+        &tool,
+        std::time::Duration::from_secs(10),
+        diagram_fixture(1),
+    )
+    .await?;
+    let cookie = server.login().await?;
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let path = format!("/admin/diagrams/{}.svg", Diagram::of("A -> B1\n").key);
+    let image = server.get(&path, Some(&cookie)).await?;
+    assert_eq!(image.status, 200, "{}", image.body);
+    assert!(image.body.contains("drawn"));
+    assert_eq!(server.get(&path, Some(&cookie)).await?.status, 200);
+    assert_eq!(runs(tool_dir.path()), 1);
+    server.stop().await
+}
+
+#[tokio::test]
+#[ignore = "needs the real plantuml on PATH; run with --run-ignored"]
+async fn the_real_plantuml_draws_in_its_sandbox() -> TestResult<()> {
+    use joedocs::web::plantuml::{Diagram, Diagrams};
+    let mut config = Config::default();
+    config.admin.use_plantuml_cli = true;
+    let path = std::env::var("PATH").unwrap_or_default();
+    let (diagrams, missing) = Diagrams::choose(
+        true,
+        "",
+        &joedocs::env::MapEnv::new().with("PATH", path),
+        &joedocs::fs::RealFs,
+    );
+    assert_eq!(missing, None, "no plantuml on PATH");
+    let host = std::fs::read_to_string("/etc/hostname")?.trim().to_owned();
+    let setup = |store: &mut Store| -> TestResult<()> {
+        use joedocs::store::{Actor, NewDocument};
+        store.add_project("joedocs", "JD", None)?;
+        store.create(
+            &Actor::new("laptop-key", "claude-code"),
+            NewDocument {
+                project: "joedocs".into(),
+                title: "Real".into(),
+                content: "```plantuml\n@startuml\nBob -> Alice : hello\n@enduml\n```\n\n```plantuml\n@startuml\n!include /etc/hostname\nA -> B\n@enduml\n```\n".into(),
+                ..NewDocument::default()
+            },
+        )?;
+        Ok(())
+    };
+    let server = start_options(
+        |c| c.admin.use_plantuml_cli = true,
+        move |options| {
+            if let Some(web) = options.web.as_mut() {
+                web.diagrams = diagrams;
+            }
+        },
+        setup,
+    )
+    .await?;
+    let cookie = server.login().await?;
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let hello = Diagram::of("@startuml\nBob -> Alice : hello\n@enduml\n");
+    let image = server
+        .get(&format!("/admin/diagrams/{}.svg", hello.key), Some(&cookie))
+        .await?;
+    assert_eq!(image.status, 200, "{}", image.body);
+    assert!(
+        image.body.contains("<svg") && image.body.contains("Alice"),
+        "{}",
+        image.body
+    );
+    assert!(!image.body.contains("<script"), "{}", image.body);
+    println!(
+        "hello: {} bytes, {:?}",
+        image.bytes.len(),
+        image.header("content-security-policy")
+    );
+    let include = Diagram::of("@startuml\n!include /etc/hostname\nA -> B\n@enduml\n");
+    let refused = server
+        .get(
+            &format!("/admin/diagrams/{}.svg", include.key),
+            Some(&cookie),
+        )
+        .await?;
+    assert_eq!(
+        refused.status, 200,
+        "PlantUML draws the error: {}",
+        refused.body
+    );
+    println!(
+        "include: {} bytes, error text: {}",
+        refused.bytes.len(),
+        refused.body.contains("cannot include")
+    );
+    assert!(
+        !host.is_empty() && !refused.body.contains(&host),
+        "{}",
+        refused.body
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn at_most_two_diagrams_are_drawn_at_once() -> TestResult<()> {
+    use joedocs::web::plantuml::Diagram;
+    let (tool_dir, tool) = fake_plantuml("sleep 0.4")?;
+    let server = start_drawing(
+        &tool,
+        std::time::Duration::from_secs(10),
+        diagram_fixture(4),
+    )
+    .await?;
+    let cookie = server.login().await?;
+    server.get("/admin/documents/JD-1", Some(&cookie)).await?;
+    let path = |n: u32| {
+        format!(
+            "/admin/diagrams/{}.svg",
+            Diagram::of(&format!("A -> B{n}\n")).key
+        )
+    };
+    let (p1, p2, p3, p4) = (path(1), path(2), path(3), path(4));
+    let replies = tokio::join!(
+        server.get(&p1, Some(&cookie)),
+        server.get(&p2, Some(&cookie)),
+        server.get(&p3, Some(&cookie)),
+        server.get(&p4, Some(&cookie)),
+    );
+    for reply in [replies.0, replies.1, replies.2, replies.3] {
+        assert_eq!(reply?.status, 200);
+    }
+    assert_eq!(runs(tool_dir.path()), 4);
+    let most = std::fs::read_to_string(tool_dir.path().join("most"))?;
+    let most = most
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .max();
+    assert_eq!(most, Some(2), "two at once, not more");
+    server.stop().await
+}
+
 // --- STEP-07: search -------------------------------------------------------------
 
 /// The STEP-06 vault, plus a note in `notes` whose body needs escaping.
@@ -2461,7 +2828,10 @@ async fn every_route_writes_one_audit_row_with_its_documented_tool() -> TestResu
     let mut cookie = server.login().await?;
     let mut csrf = server.csrf(&cookie).await?;
     for (method, path, tool) in &routes {
-        let path = path.replace("{id}", "JD-1").replace("{name}", "ci");
+        let path = path
+            .replace("{id}", "JD-1")
+            .replace("{name}", "ci")
+            .replace("{key}", &"0".repeat(40));
         let before = server.audit()?.len();
         let reply = match (method.as_str(), path.as_str()) {
             ("POST", "/admin/login") => server.post_login(&server.code(), "/admin/").await?,

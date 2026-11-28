@@ -67,7 +67,8 @@ web_ui = false
 web_plantuml_url = ""
 # Draw PlantUML diagrams on this server with the `plantuml` command found on
 # PATH (0.5.7), instead of web_plantuml_url: no diagram text leaves the
-# server. When no `plantuml` is on PATH, serve logs a warning and uses
+# server. Drawings are cached in <state_dir>/cache/plantuml/ by the SHA-1 of
+# their source. When no `plantuml` is on PATH, serve logs a warning and uses
 # web_plantuml_url, or shows the source.
 use_plantuml_cli = false
 # How many days a device credential from `joedocs auth login` lasts without

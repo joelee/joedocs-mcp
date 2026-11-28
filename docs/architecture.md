@@ -150,7 +150,7 @@ sequenceDiagram
     B->>W: GET /admin/board?fragment=1 (the page script)
 ```
 
-Documents are rendered to HTML on the server (`web::markdown`), so the browser never parses Markdown. Raw HTML in a document becomes text, links keep only safe schemes, and every element the renderer writes comes from escaped parts. Mermaid blocks are placeholders that the bundled Pele draws in the page; PlantUML blocks are images from the configured PlantUML server. The Content-Security-Policy allows no inline script, so the scripts are the served files: htmx, `app.js`, and on their own pages `board.js` and `filters.js` (the Board's filter parts), `document.js` and Pele.
+Documents are rendered to HTML on the server (`web::markdown`), so the browser never parses Markdown. Raw HTML in a document becomes text, links keep only safe schemes, and every element the renderer writes comes from escaped parts. Mermaid blocks are placeholders that the bundled Pele draws in the page; PlantUML blocks are images: drawn by the server's own `plantuml` command (`admin.use_plantuml_cli`; `web::plantuml` runs it sandboxed, keeps the SVGs in `<state_dir>/cache/plantuml/` by the SHA-1 of the source, and `GET /admin/diagrams/<key>.svg` serves them with a policy of their own), or from the configured PlantUML server. The Content-Security-Policy allows no inline script, so the scripts are the served files: htmx, `app.js`, and on their own pages `board.js` and `filters.js` (the Board's filter parts), `document.js` and Pele.
 
 ## Write path
 

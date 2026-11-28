@@ -99,6 +99,7 @@ impl ServerOptions {
                 diagrams: crate::web::plantuml::Diagrams::server_or_source(
                     &config.admin.web_plantuml_url,
                 ),
+                diagram_timeout: crate::web::plantuml::DRAW_TIMEOUT,
                 board: crate::web::BoardOptions {
                     closed_statuses: config.documents.closed_statuses(),
                     refresh_ms: config.admin.board_refresh_ms,

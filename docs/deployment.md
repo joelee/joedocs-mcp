@@ -290,7 +290,7 @@ The admin API can also serve pages for a browser under `/admin/`: browse, search
 | Permissions | The state directory is private (`0700`, the database `0600`): it holds API key hashes and admin TOTP secrets. `serve` tightens an older install's permissions on start and logs it. Run admin commands as the account that owns it. |
 | Restore a backup | Stop the service, then `joedocs backup --restore --state-dir NEW_STATE --content-dir NEW_VAULT FILE.tgz` into empty or new directories. It checks the result and prints the `[storage]` settings to point the configuration at; set them (or move the directories into place), then start the service. |
 | Check consistency | `joedocs check` (exits `1` if it finds problems, and says how to fix each). `joedocs reindex` rebuilds the index from the history. |
-| Back up | Back up `state_dir` (the database holds the projects and keys; `history.git` holds every revision) and the vault. The document index can be rebuilt from `history.git` alone. |
+| Back up | Back up `state_dir` (the database holds the projects and keys; `history.git` holds every revision) and the vault. The document index can be rebuilt from `history.git` alone. `state_dir/cache/` (the PlantUML image cache) need not be backed up: `joedocs backup` leaves it out, and it fills again on its own. |
 | Browse in Obsidian | Copy the vault one way into an Obsidian vault on a schedule, for example `rsync -a --delete <home>/ <obsidian-vault>/JoeDocs/`. Edit through JoeDocs, not in the vault: JoeDocs refuses to overwrite files changed behind its back. |
 
 ## Troubleshooting
