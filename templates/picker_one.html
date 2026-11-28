@@ -1,7 +1,7 @@
 {# The searchable picker in single-choice mode (JD-80 STEP-08): radio
    buttons named `key` underneath, so the form submits the same parameter a
-   select did. Without scripts the list shows in place; filters.js draws
-   the button and popover (`data-picker-single`). #}
+   select did; filters.js draws the button and popover
+   (`data-picker-single`). #}
 {% macro picker_one(key, id, label, noun, choices) %}
 <div class="filter-one" role="group" aria-labelledby="{{ id }}-label" data-filter-group="{{ key }}" data-filter-label="{{ label }}">
   <span class="filter-label" id="{{ id }}-label">{{ label }}</span>
