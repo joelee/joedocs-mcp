@@ -11,7 +11,7 @@ use super::journal::Journal;
 use super::{Actor, Error, Settings, Store, begin_write, index_file};
 use std::fmt::Write as _;
 
-use crate::db::{self, Connection, DocumentRow, FileChange, ListQuery, RevisionRow, Sort};
+use crate::db::{self, Connection, DocumentRow, FileChange, ListAcrossQuery, RevisionRow, Sort};
 use crate::document::front_matter::{self, Fields};
 use crate::document::{DocumentId, Header, check_title, file_stem};
 use crate::history::{Commit, History};
@@ -216,6 +216,24 @@ pub struct ListRequest {
     /// Only this status.
     pub status: Option<String>,
     /// Order.
+    pub sort: Sort,
+    /// 1-based position of the first item.
+    pub start: u64,
+    /// Most items to return, 1 to [`MAX_LIST_LIMIT`].
+    pub limit: u64,
+}
+
+/// Which documents of several projects to list, for the web interface's
+/// Documents page and `list_documents` with several projects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListAcross {
+    /// Project names; a name given twice counts once.
+    pub projects: Vec<String>,
+    /// Only these types; every type when empty.
+    pub doc_types: Vec<String>,
+    /// Only these statuses; every status when empty.
+    pub statuses: Vec<String>,
+    /// Order. Ties break by project, then number.
     pub sort: Sort,
     /// 1-based position of the first item.
     pub start: u64,
@@ -722,11 +740,34 @@ impl Store {
     /// Returns [`Error::ProjectNotFound`], [`Error::Invalid`] for a bad type,
     /// status, start or limit, and database errors.
     pub fn list(&self, request: &ListRequest) -> Result<Listing, Error> {
-        let doc_type = request.doc_type.as_deref().filter(|t| *t != "all");
-        if let Some(doc_type) = doc_type {
+        self.list_across(&ListAcross {
+            projects: vec![request.project.clone()],
+            doc_types: request
+                .doc_type
+                .iter()
+                .filter(|t| *t != "all")
+                .cloned()
+                .collect(),
+            statuses: request.status.iter().cloned().collect(),
+            sort: request.sort,
+            start: request.start,
+            limit: request.limit,
+        })
+    }
+
+    /// One page of the live documents of several projects, filtered by
+    /// several types and statuses. Changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ProjectNotFound`] naming the first unknown project,
+    /// [`Error::Invalid`] for no project, a bad type, status, start or
+    /// limit, and database errors.
+    pub fn list_across(&self, request: &ListAcross) -> Result<Listing, Error> {
+        for doc_type in &request.doc_types {
             check_member("type", doc_type, &self.settings.types)?;
         }
-        if let Some(status) = &request.status {
+        for status in &request.statuses {
             check_member("status", status, &self.settings.statuses)?;
         }
         if request.start == 0 {
@@ -738,16 +779,27 @@ impl Store {
                 format!("must be 1 to {MAX_LIST_LIMIT}"),
             ));
         }
-        let project = db::find_project(&self.conn, &request.project)?
-            .filter(|p| p.name == request.project)
-            .ok_or_else(|| Error::ProjectNotFound(request.project.clone()))?;
+        if request.projects.is_empty() {
+            return Err(Error::invalid("project", "names no project"));
+        }
+        let mut project_ids: Vec<i64> = Vec::with_capacity(request.projects.len());
+        for name in &request.projects {
+            let project = db::find_project(&self.conn, name)?
+                .filter(|p| p.name == *name)
+                .ok_or_else(|| Error::ProjectNotFound(name.clone()))?;
+            if !project_ids.contains(&project.id) {
+                project_ids.push(project.id);
+            }
+        }
+        let doc_types: Vec<&str> = request.doc_types.iter().map(String::as_str).collect();
+        let statuses: Vec<&str> = request.statuses.iter().map(String::as_str).collect();
         let offset = request.start - 1;
-        let (rows, total) = db::list_documents(
+        let (rows, total) = db::list_documents_across(
             &self.conn,
-            &ListQuery {
-                project_id: project.id,
-                doc_type,
-                status: request.status.as_deref(),
+            &ListAcrossQuery {
+                project_ids: &project_ids,
+                doc_types: &doc_types,
+                statuses: &statuses,
                 sort: request.sort,
                 offset,
                 limit: request.limit,

@@ -58,8 +58,8 @@ pub use audit::{AuditPage, AuditRequest, MAX_AUDIT_LIMIT};
 pub use backup::Snapshot;
 pub use check::CheckReport;
 pub use documents::{
-    Archived, Changed, DocumentInfo, Fetched, ListRequest, Listing, MAX_LIST_LIMIT, NewDocument,
-    RevisionInfo, Update,
+    Archived, Changed, DocumentInfo, Fetched, ListAcross, ListRequest, Listing, MAX_LIST_LIMIT,
+    NewDocument, RevisionInfo, Update,
 };
 pub use editing::{MAX_EDITS, Replacement};
 pub use file_changes::{FileWrite, WriteFiles, WrittenFile, WrittenFiles};
