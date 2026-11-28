@@ -8,6 +8,7 @@
 │   └── dependabot.yml      Weekly action, crate and Docker base update proposals
 ├── AGENTS.md               Instructions for coding agents
 ├── CLAUDE.md               Imports AGENTS.md for Claude Code
+├── DESIGN.md               Design rules for the admin web interface (JavaScript required, Chrome and Firefox, filter parts)
 ├── Dockerfile              Image: a source build (`local`, the default) or a release's binary (`release`), on debian-slim with git
 ├── docker/entrypoint.sh    The image's entrypoint: init, the first user and its sign-in banner, then serve
 ├── compose.yaml            Local server; data bind-mounted from .local/data (git-ignored)

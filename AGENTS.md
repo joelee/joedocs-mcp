@@ -46,6 +46,7 @@ The MSRV is declared in `Cargo.toml` as `rust-version`. Do not use APIs newer th
 
 - Layout: `src/lib.rs` holds all logic; `src/main.rs` is a thin wrapper that parses args, calls the library, and maps errors to exit codes. Integration tests live in `tests/`. See `docs/directory-structure.md` for the module map.
 - CLI parsing: `clap` with the derive API.
+- Web interface: follow `DESIGN.md` (JavaScript is required; every page change is checked in Chrome and Firefox; filtering pages reuse the filter parts). Plans for the web interface follow it too.
 - Configuration: `serde` + `toml` for non-secret TOML; config structs use `#[serde(deny_unknown_fields)]`.
 - Errors: `thiserror` for library error types; `anyhow` only in `main.rs`. No `unwrap()`/`expect()`/`panic!` in non-test code (enforced by clippy).
 - Logging: `tracing` + `tracing-subscriber`; never `println!` for diagnostics. Never log secrets or whole config structs that may contain them.
@@ -153,6 +154,7 @@ The CI platform is GitHub Actions (`.github/workflows/ci.yml`, with action updat
 
 Follow `docs/AGENTS.md` for documentation rules. The maintained set is:
 
+- `DESIGN.md` (the admin web interface's design rules)
 - `README.md` (including the chosen MSRV profile and CI platform)
 - `CHANGELOG.md` (Keep a Changelog format)
 - `docs/deployment.md`
