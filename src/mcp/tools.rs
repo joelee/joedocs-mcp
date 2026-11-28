@@ -21,8 +21,8 @@ use super::{Caller, Shared, ToolError};
 use crate::auth::Permission;
 use crate::document::front_matter::Fields;
 use crate::store::{
-    self, Actor, Changed, DocumentInfo, FileInfo, FileWrite, ListRequest, NewDocument, NewFile,
-    Replacement, RevisionInfo, SearchHit, SearchRequest, Sort, Store, Update, WriteFiles,
+    self, Actor, Changed, DocumentInfo, FileInfo, FileWrite, NewDocument, NewFile, Replacement,
+    RevisionInfo, SearchHit, SearchRequest, Sort, Store, Update, WriteFiles,
 };
 
 /// A tool's result. Tool signatures spell this out, because rmcp's macro
@@ -132,8 +132,9 @@ fn three() -> u32 {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListDocumentsParams {
-    /// Project name, from `list_projects`.
-    pub project: String,
+    /// Project name from `list_projects`; several, as a list or names
+    /// joined by commas; or "*" for every project this key can read.
+    pub project: ProjectsParam,
     /// Document type, or "all".
     #[serde(rename = "type", default = "all")]
     pub doc_type: String,
@@ -149,6 +150,59 @@ pub struct ListDocumentsParams {
     /// Order of the items.
     #[serde(default)]
     pub sort: SortParam,
+}
+
+/// One project name, several (a list, or names joined by commas), or
+/// "*" for every project the key can read.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ProjectsParam {
+    /// One name, names joined by commas, or "*".
+    One(String),
+    /// Several names.
+    Many(Vec<String>),
+}
+
+impl ProjectsParam {
+    /// The names given, trimmed, each once, in order. `None` for "*".
+    ///
+    /// # Errors
+    ///
+    /// No name at all, or "*" with names, is `invalid_argument` on
+    /// `project`.
+    fn names(&self) -> Result<Option<Vec<String>>, store::Error> {
+        let given: Vec<&str> = match self {
+            Self::One(text) => text.split(',').collect(),
+            Self::Many(names) => names.iter().flat_map(|n| n.split(',')).collect(),
+        };
+        let mut names: Vec<String> = Vec::new();
+        for name in given.into_iter().map(str::trim).filter(|n| !n.is_empty()) {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_owned());
+            }
+        }
+        match names.as_slice() {
+            [] => Err(store::Error::invalid("project", "names no project")),
+            [only] if only == "*" => Ok(None),
+            _ if names.iter().any(|n| n == "*") => Err(store::Error::invalid(
+                "project",
+                "\"*\" (every project you can read) stands alone",
+            )),
+            _ => Ok(Some(names)),
+        }
+    }
+}
+
+/// The projects `caller` can read: what "*" means in `list_documents` and
+/// `search_documents`.
+fn readable_projects(caller: &Caller) -> Vec<String> {
+    let mut projects: Vec<String> = Vec::new();
+    for grant in &caller.grants {
+        if !projects.contains(&grant.project) {
+            projects.push(grant.project.clone());
+        }
+    }
+    projects
 }
 
 /// Arguments of `search_documents`.
@@ -1068,7 +1122,7 @@ impl JoeDocsServer {
     }
 
     #[tool(
-        description = "List a project's documents (metadata only, no content), optionally filtered by type and status, one page at a time.",
+        description = "List documents (metadata only, no content) of a project, of several projects (a list, or names joined by commas), or of every project you can read (\"*\"), optionally filtered by type and status, one page at a time.",
         annotations(read_only_hint = true)
     )]
     async fn list_documents(
@@ -1077,15 +1131,35 @@ impl JoeDocsServer {
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<ListDocumentsOut>, CallToolResult> {
         self.read(&ctx, move |store, caller| {
-            require_project(caller, &params.project, Permission::Read)?;
-            let listing = store.list(&ListRequest {
-                project: params.project,
-                doc_type: Some(params.doc_type),
-                status: params.status,
-                sort: params.sort.into(),
-                start: params.start,
-                limit: params.limit,
-            })?;
+            let projects = match params.project.names()? {
+                Some(names) => {
+                    for name in &names {
+                        require_project(caller, name, Permission::Read)?;
+                    }
+                    names
+                }
+                None => readable_projects(caller),
+            };
+            let listing = if projects.is_empty() {
+                // "*" for a key with no grant.
+                store::Listing {
+                    items: Vec::new(),
+                    total: 0,
+                    next_start: None,
+                }
+            } else {
+                store.list_across(&store::ListAcross {
+                    projects,
+                    doc_types: Some(params.doc_type)
+                        .filter(|t| t != "all")
+                        .into_iter()
+                        .collect(),
+                    statuses: params.status.into_iter().collect(),
+                    sort: params.sort.into(),
+                    start: params.start,
+                    limit: params.limit,
+                })?
+            };
             Ok(ListDocumentsOut {
                 items: listing.items.into_iter().map(DocumentOut::from).collect(),
                 total: listing.total,
@@ -1109,7 +1183,7 @@ impl JoeDocsServer {
                 require_document(store, caller, id, Permission::Read)?;
             }
             let projects = if params.project == "*" {
-                caller.grants.iter().map(|g| g.project.clone()).collect()
+                readable_projects(caller)
             } else {
                 require_project(caller, &params.project, Permission::Read)?;
                 vec![params.project]
